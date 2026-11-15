@@ -815,6 +815,20 @@ class HouseJobsApi(Case):
         self.assertEqual(calls, [("POST", "/chores/9/execute")])
         self.assertEqual(self.s.GUARD["house_tasks_displays"]["kitchen"], [])
         self.assertEqual([i["id"] for i in self.s.GUARD["house_tasks"]], [7])
+        r = json.loads(urllib.request.urlopen(self.app.base + "/api/house_jobs?display=all").read())
+        self.assertEqual([i["id"] for i in r["items"]], [7])                     # 'all' = every due job, unranked
+
+    def test_a_grown_up_adds_a_one_off_job(self):
+        self.s.GUARD["house_tasks"] = []
+        self.s.GROCY = {"url": "x"}
+        sent = []
+        self.s.gcall = lambda m, p, b=None: sent.append((m, p, b)) or {"created_object_id": "41"}
+        self.assertEqual(self.app.post("/api/house_add", {"name": "  Fix   the gate ", "by": "max"})[0], 400)
+        code, r = self.app.post("/api/house_add", {"name": "  Fix   the gate ", "by": "jordan", "note": "from a list"})
+        self.assertEqual((code, r["id"]), (200, 41))
+        self.assertEqual(sent[0][:2], ("POST", "/objects/tasks"))
+        self.assertEqual(sent[0][2]["name"], "Fix the gate")
+        self.assertEqual(self.s.GUARD["house_tasks"][0]["name"], "Fix the gate")
 
 # ---------------------------------------------------------------- pages
 class Pages(unittest.TestCase):

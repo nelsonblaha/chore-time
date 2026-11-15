@@ -1282,7 +1282,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/house_jobs":   # the grown-ups' house jobs (Grocy), ranked for one screen or overall
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             disp = (q.get("display") or [(HOUSE.get("house_tasks") or {}).get("board_display", "")])[0]
-            shown = GUARD.get("house_tasks_displays", {}).get(disp) if disp else None
+            shown = GUARD.get("house_tasks_displays", {}).get(disp) if disp and disp != "all" else None
             meta = GUARD.get("house_tasks_meta", {})
             return self.send(200, {"items": shown if shown is not None else (GUARD.get("house_tasks") or [])[:20],
                                    "private": meta.get("private", []), "to_review": meta.get("to_review", 0),
@@ -1736,6 +1736,21 @@ class H(BaseHTTPRequestHandler):
             GUARD["house_tasks_displays"] = {d: [i for i in v if gone(i)] for d, v in (GUARD.get("house_tasks_displays") or {}).items()}
             ilog({"src": "house", "action": "done", "kind": kind, "id": iid, "by": b["by"]})
             return self.send(200, {"ok": True})
+        elif p == "/api/house_add":   # a grown-up adds a one-off house job (e.g. typed or spoken into a synced list)
+            if b.get("by") not in insp:
+                return self.send(400, {"error": "grown-ups only"})
+            name = " ".join(str(b.get("name") or "").split())[:200]
+            if not GROCY or not name:
+                return self.send(400, {"error": "bad job"})
+            try:
+                r = gcall("POST", "/objects/tasks", {"name": name, "description": str(b.get("note") or "")[:500]})
+            except Exception as ex:  # noqa: BLE001
+                return self.send(502, {"error": "Grocy: " + str(ex)[:80]})
+            tid = int((r or {}).get("created_object_id") or 0)
+            item = {"kind": "task", "id": tid, "name": name, "due": None, "overdue": False, "rooms": [], "visible": True}
+            GUARD["house_tasks"] = (GUARD.get("house_tasks") or []) + [item]
+            ilog({"src": "house", "action": "added", "id": tid, "name": name, "by": b["by"]})
+            return self.send(200, {"ok": True, "id": tid})
         elif p == "/api/bedtime":
             if b.get("by") not in insp:
                 return self.send(400, {"error": "grown-ups only"})
