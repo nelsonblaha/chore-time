@@ -3368,6 +3368,8 @@ def start_modules():
             go("robot-locator", locator.run, globals())   # which room each robot is in, even off-cleaning
     if GROCY.get("url"):
         go("grocy-chores", watch_grocy_chores)
+        import house_tasks
+        go("house-tasks", house_tasks.run, globals())   # the grown-ups' side: due chores, tasks, batteries, context
     go("bedtime", watch_bedtime)                 # core: jobs in progress go on hold at bedtime
     return on
 
