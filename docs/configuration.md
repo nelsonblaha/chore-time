@@ -72,6 +72,7 @@ Every section is optional. A missing section means that feature is off. `example
 | `casting` | `catt` path, `hub_volume` |
 | `lights` | `chore_rooms`: job → `{modes: [input_select…], covers: [cover…]}`. `signal_bulbs`: room → `{bulbs, pick, pool, ref}` for the kid-colour bulbs |
 | `vacuum` | the robot's entities, `segments` (robot room → `chore`/`chores`, `mop`), person `sensors` per segment, `entry_sensors`, `entry_doors`, `voice_volume`, night hours, `night_carpet_boost_off` (sends the robot's own `set_carpet_mode`; not an official integration entity). Goals: `schedule` (segment → `{"nightly_after": "19:00", "needs_dinner": true}`), `every_h` (default 72), `dinner` (`sensor`, `from`, `until`, `min_block_min`, `merge_gap_s`: dinner = one continuous stretch with at least `min_block_min` inside the window; people passing through look like short blips) |
+| `robot_locator` | per robot vacuum: `room_sensor` (the integration's current-room sensor) and `publish` (a sensor to create). Learns room outlines from the robot's position while it cleans, then reports its room any time, including while it heads home or is lost, when the integration's own sensor is frozen |
 | `grocy` | `url`, `key_file`, `freezer_location`, `requesters`: Grocy as the master chore list |
 | `dashboard_mirror` | keep a grown-up's own HA dashboard in step with chosen views |
 

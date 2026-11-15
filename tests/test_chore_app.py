@@ -619,6 +619,35 @@ class Vacuum(unittest.TestCase):
         self.assertNotIn("Living Room", self.p.D["visits"])
 
 
+# ---------------------------------------------------------------- robot locator
+class RobotLocator(unittest.TestCase):
+    """HA's 'current room' freezes off-cleaning (it read 'Hall' while the robot wandered the family room, heading home)."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO))
+        import locator
+        self.L = locator.Locator.__new__(locator.Locator)
+        self.L.M, self.L.cfg = {}, {}
+
+    def test_learns_while_cleaning_and_locates_later(self):
+        L, v = self.L, "vacuum.robot"
+        for x in range(20000, 23000, 100):
+            L.learn(v, x, 25000, "Kitchen")
+        for x in range(23000, 26000, 100):
+            L.learn(v, x, 25000, "Family Room")
+        self.assertEqual(L.classify(v, 21000, 25050)[0], "Kitchen")
+        self.assertEqual(L.classify(v, 25500, 24900)[0], "Family Room")
+        self.assertEqual(L.classify(v, 22990, 25600)[0], "Kitchen")             # a few cells off the learned path
+        self.assertIsNone(L.classify(v, 40000, 40000)[0])                       # never been there: unknown, no guess
+
+    def test_majority_wins_at_a_doorway(self):
+        L, v = self.L, "vacuum.robot"
+        for _ in range(5):
+            L.learn(v, 24000, 25000, "Corridor")
+        L.learn(v, 24010, 25010, "Kitchen")                                      # map refresh lag near a boundary
+        self.assertEqual(L.classify(v, 24005, 25005)[0], "Corridor")
+
+
 # ---------------------------------------------------------------- pages
 class Pages(unittest.TestCase):
     def test_no_unwrapped_string_plus_or(self):

@@ -243,8 +243,31 @@
       "until": "20:30",
       "min_block_min": 45,
       "merge_gap_s": 180
+    },
+    "segment_lights": {
+      "Kitchen": [
+        "input_select.kitchen_lights_mode"
+      ],
+      "Living Room": [
+        "input_select.living_room_lights_mode"
+      ],
+      "Family Room": [
+        "input_select.family_room_lights_mode"
+      ],
+      "Entry": [
+        "input_select.front_hall_lights_mode"
+      ]
     }
   },
   "grocy": null,
-  "dashboard_mirror": null
+  "dashboard_mirror": null,
+  "robot_locator": {
+    "robots": {
+      "vacuum.downstairs_robot": {
+        "name": "Downstairs robot",
+        "room_sensor": "sensor.downstairs_robot_current_room",
+        "publish": "sensor.downstairs_robot_room_live"
+      }
+    }
+  }
 }

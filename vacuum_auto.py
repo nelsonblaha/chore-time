@@ -37,7 +37,8 @@ def configure(v):
     SENSORS = dict(v.get("sensors") or {})
     global VOICE, NIGHT
     VOICE = v.get("voice_volume")
-    global NIGHT_CARPET_OFF
+    global NIGHT_CARPET_OFF, SEG_LIGHTS
+    SEG_LIGHTS = dict(v.get("segment_lights") or {})
     NIGHT_CARPET_OFF = bool(v.get("night_carpet_boost_off"))
     global ENTRY_SENSORS, ENTRY_DOORS
     ENTRY_SENSORS, ENTRY_DOORS = set(v.get("entry_sensors") or []), set(v.get("entry_doors") or [])
@@ -62,6 +63,7 @@ PARK_DOCK_S = 10 * 60        # Q5
 DWELL_S = 120                # a room counts as robot-cleaned after this long in it while cleaning
 PREV_GRACE_S = 90            # sensors of the room it just left still belong to the robot
 RETRY_S = 30 * 60
+SEG_LIGHTS = {}   # segment -> room light-mode selects, lit white while the robot finds its way home
 NIGHT_CARPET_OFF = False   # turn the robot's Carpet Boost off at night (vacuum.night_carpet_boost_off)
 VOICE = None          # optional robot voice-volume number: 0 at night, daytime level restored in the morning
 NIGHT = (20, 7)       # night hours: quietest suction, robot voice off
@@ -372,6 +374,41 @@ class Pilot:
         self.D.update(phase="idle", groups=[], gi=0, paused_at=0)
         self.log("finish", why=why)
 
+    def return_lights(self, vs, now):
+        """Robot heading home for a while (its room reading goes stale off-cleaning): light every room on this
+        floor that nobody was in when the return began, so its camera can find the way; back to auto once docked."""
+        if not SEG_LIGHTS:
+            return
+        D = self.D
+        if vs == "returning":
+            if not D.get("ret_since"):
+                D["ret_since"] = now
+                busy = set()
+                for e, seg in SENSORS.items():   # rooms with a person in the last 10 min stay as they are
+                    st_ = self.get(e)
+                    if st_.get("state") == "on" or now - epoch(st_) < 600:
+                        busy.add(seg)
+                D["ret_busy"] = sorted(busy)
+            if now - D["ret_since"] < 30:
+                return
+            lit = D.setdefault("ret_lit", [])
+            for seg, modes in SEG_LIGHTS.items():
+                if seg in D.get("ret_busy", []):
+                    continue
+                for m in modes:
+                    if m not in lit and self.get(m).get("state") == "auto":
+                        self.call("input_select.select_option", {"entity_id": m, "option": "white"})
+                        lit.append(m)
+                        self.log("return_light", mode=m)
+            return
+        if D.get("ret_since") and vs in ("docked", "idle", "charging", "cleaning", "paused", "error"):
+            for m in D.get("ret_lit", []):
+                if self.get(m).get("state") == "white":
+                    self.call("input_select.select_option", {"entity_id": m, "option": "auto"})
+            if D.get("ret_lit"):
+                self.log("return_lights_off", modes=D["ret_lit"])
+            D["ret_since"], D["ret_lit"], D["ret_busy"] = 0, [], []
+
     def night_carpet(self):
         """Carpet Boost (full suction on rugs) off at night, back on by day. Not an official integration entity:
         sent as the robot's own set_carpet_mode command, once per change (vacuum.night_carpet_boost_off)."""
@@ -415,6 +452,7 @@ class Pilot:
         room = self.get(ROOM_SENSOR).get("state")
         incl = self.get(IN_CLEAN).get("state")
         self.track(vs, room, now)
+        self.return_lights(vs, now)
         ph = D["phase"]
         info = {}
         if ph == "idle":

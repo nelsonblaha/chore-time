@@ -3361,6 +3361,9 @@ def start_modules():
             go("vacuum", vacuum_auto.run, globals())
         if GROCY.get("url"):
             go("grocy-summary", watch_grocy)
+        if (HOUSE.get("robot_locator") or {}).get("robots"):
+            import locator
+            go("robot-locator", locator.run, globals())   # which room each robot is in, even off-cleaning
     if GROCY.get("url"):
         go("grocy-chores", watch_grocy_chores)
     go("bedtime", watch_bedtime)                 # core: jobs in progress go on hold at bedtime
