@@ -1169,5 +1169,22 @@ class Envelopes(Case):
         self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "nobody"})[0], 409)
         self.assertEqual(self.cmds, [])
 
+
+    def test_status_follows_the_job_and_names_a_jam(self):
+        self.e.CFG["printer_uri"] = "ipp://printer/ipp/print"
+        answers = {"job": "processing", "reasons": "media-jam-error"}
+
+        def run(cmd, **kw):
+            out = ("job-state (enum) = %s" % answers["job"]) if "ipp://localhost/printers/Office" in cmd else \
+                  ("printer-state-reasons (keyword) = %s" % answers["reasons"])
+            return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+        self.assertEqual(self.e.status("Office-9", run), {"state": "gone", "problem": None})   # not ours
+        self.e.JOBS.add("Office-9")
+        self.assertEqual(self.e.status("Office-9", run), {"state": "printing", "problem": "jam"})
+        answers.update(job="canceled", reasons="none")
+        self.assertEqual(self.e.status("Office-9", run)["state"], "stopped")
+        answers["job"] = "completed"
+        self.assertEqual(self.e.status("Office-9", run), {"state": "done", "problem": None})
+
 if __name__ == "__main__":
     unittest.main()

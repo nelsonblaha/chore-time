@@ -601,6 +601,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});
      bd.part_paid?'<div class="q" style="font-size:22px;opacity:.8">'+E("1f9e9")+' Someone already did part of it. This is the rest.</div>':'')+
     '<div class="q" style="font-size:30px;color:#777">'+(A&&A.chore===cid?E("23f1")+' You are doing it now':E("2b1c")+' Not done yet')+'</div>'+
     (T?'<div class="q" style="font-size:22px;opacity:.7">'+E("23f1")+' usually about '+Math.max(1,Math.round(T.minutes))+' min</div>':'')+
+    (S.envelope&&S.envelope.chores.indexOf(cid)>=0&&(bd.pending_by||[]).indexOf(kid)>=0?'<div class="faces"><div class="btn" id="envre" style="font-size:30px;font-weight:900;padding:10px 24px;background:#e3f2fd;border:5px solid #64b5f6">'+E("1f5a8")+' Print the envelope again</div></div>':'')+
     (c.slot?slotBtns(c,bd):(
     '<div class="faces" style="flex-wrap:wrap;gap:14px">'+(A&&A.chore===cid?'':(c.together?'':'<div class="btn" id="go" style="font-size:36px;font-weight:900;padding:12px 24px;background:#fff3c4;border:5px solid #f5b400">'+E("25b6")+' Start</div>')+
       (c.points!==0&&cid!=="toy_swap"?'<div class="btn" id="together" style="font-size:36px;font-weight:900;padding:12px 24px;background:#e3f2fd;border:5px solid #64b5f6">'+E("1f465")+' Together</div>':''))+
@@ -610,6 +611,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});
     modal('<div class="big">'+E(r.ok?"1f64b":"274c")+'</div><div class="q">'+(r.ok?"It's yours! "+slotWhen(bd.slot):"Someone else has it")+'</div>');addOk()})};
   if($("unclaim"))$("unclaim").onclick=function(){L("unclaim",{chore:cid});api("/api/claim",{kid:kid,chore:cid,release:true}).then(function(r){if(r.ok){S=r.state;renderKid()}closeModal()})};
   if($("some"))$("some").onclick=function(){partialFlow(c)};
+  if($("envre"))$("envre").onclick=function(){L("env_reprint",{chore:cid});envFlow(c,function(){closeModal()})};
   if($("together"))$("together").onclick=function(){L("together_open",{chore:cid});pickHelpers("Who is doing "+c.name+" with you?",function(ps){teamUp(cid,ps)})};
   if($("go"))$("go").onclick=function(){L("chore_start",{chore:cid});api("/api/start",{kid:kid,chore:cid}).then(function(r){if(r.ok){S=r.state;renderKid()}
     modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+E("25b6")+' Go! '+c.name+'</div><div class="q" style="font-size:24px;opacity:.75">Tap I\'m done! when you finish.</div>');chime([523,659]);addOk()})};
@@ -664,12 +666,40 @@ function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){retu
     $("envprint").onclick=function(){if(busy)return;busy=true;L("env_print",{from:st.from,to:st.to});
       modal('<div class="big">'+E("1f5a8")+'</div><div class="q">Printing&hellip;</div>');
       api("/api/envelope",{kid:kid,from:st.from,to:st.to}).then(function(res){busy=false;
-        if(res.ok){chime([523,659,784]);modal('<div class="big">'+E("2709")+E("2728")+'</div><div class="q">Your envelope is printing!</div><div class="q" style="font-size:24px;opacity:.85">Take it from the printer, put your letter in, and ask a grown-up for a stamp.</div>'+
-            '<div class="faces"><div class="btn yes" id="envok" style="'+big+'">OK</div></div>');$("envok").onclick=function(){done()}}
+        if(res.ok){st.job=res.job;watch(Date.now())}
         else{modal('<div class="big">'+E("1f615")+'</div><div class="q">The printer didn\'t take it.</div><div class="q" style="font-size:22px;opacity:.8">'+(res.error||"")+'</div>'+
             '<div class="faces"><div class="btn yes" id="envretry" style="'+big+'">Try again</div><div class="btn" id="envskip" style="font-size:22px;padding:6px 18px">Skip the envelope</div></div>');
           $("envretry").onclick=function(){load()};$("envskip").onclick=function(){L("env_skip",{});done()}}
       }).catch(function(){busy=false;modal('<div class="q">The printer didn\'t answer.</div><div class="faces"><div class="btn yes" id="envretry" style="'+big+'">Try again</div></div>');$("envretry").onclick=function(){load()}})}}
+  // follow the print job: done -> check it; a jam or an empty slot -> walk them through it
+  function watch(t0){modal('<div class="big">'+E("1f5a8")+'</div><div class="q">Printing&hellip; watch the printer!</div><div class="q" style="font-size:22px;opacity:.75">Listen: three beeps means it got stuck.</div>');
+    var stopped=false;$("mx").addEventListener("click",function(){stopped=true});
+    (function poll(){if(stopped)return;api("/api/envelope_status?job="+encodeURIComponent(st.job||"")).then(function(r){if(stopped)return;
+      if(r.problem&&r.problem!=="toner"&&r.problem!=="offline"){L("env_problem",{problem:r.problem});return fix(r.problem,t0)}
+      if(r.state==="done"){chime([523,659,784]);return check()}
+      if(r.state==="stopped"||r.state==="gone"){L("env_stopped",{state:r.state});return fix("stopped",t0)}
+      if(Date.now()-t0>90000)return slow(t0);
+      setTimeout(poll,2500)}).catch(function(){setTimeout(poll,4000)})})()}
+  function steps(list){return '<ol style="text-align:left;font-size:24px;line-height:1.35;margin:6px auto;max-width:90%">'+list.map(function(x){return '<li>'+x+'</li>'}).join("")+'</ol>'}
+  function fix(why,t0){var head={jam:"The envelope got stuck!",empty:"The printer can't find the envelope.",open:"A printer door is open.",stopped:"The printer stopped."}[why]||"The printer needs help.";
+    var how=why==="open"?["Close the printer's doors.","Then tap Keep going."]:
+      ["Gently pull the envelope straight out of the front slot.","Stuck inside? Get a grown-up to open the back of the printer.","Check it's the right way, like the picture, and push it in until the printer grabs it."];
+    modal('<div class="q">'+E("1f6d1")+' '+head+'</div>'+steps(how)+(EV.photo&&why!=="open"?'<img src="/api/envelope_photo" alt="" style="max-height:26vh;max-width:70%;border-radius:12px;display:block;margin:4px auto">':'')+
+      '<div class="faces" style="flex-wrap:wrap">'+(why==="stopped"?'':'<div class="btn yes" id="envgo" style="'+big+'">'+E("25b6")+' Keep going</div>')+
+      '<div class="btn'+(why==="stopped"?' yes':'')+'" id="envagain" style="'+big+'">'+E("1f501")+' Print it again</div><div class="btn" id="envhelp" style="font-size:22px;padding:6px 18px">'+E("1f64b")+' Get a grown-up</div></div>');
+    if($("envgo"))$("envgo").onclick=function(){L("env_fix_go",{why:why});watch(Date.now())};
+    $("envagain").onclick=function(){L("env_again",{why:why});api("/api/envelope_cancel",{kid:kid,job:st.job}).then(function(){load()})};
+    $("envhelp").onclick=function(){L("env_help",{why:why});modal('<div class="big">'+E("1f64b")+'</div><div class="q">Go get a grown-up to help with the printer.</div><div class="q" style="font-size:22px;opacity:.75">Then come back and tap OK.</div><div class="faces"><div class="btn yes" id="envhok" style="'+big+'">OK</div></div>');$("envhok").onclick=function(){fix(why,t0)}}}
+  function slow(t0){modal('<div class="q">'+E("1f914")+' Did the envelope come out?</div><div class="faces"><div class="btn yes" id="envy" style="'+big+'">'+E("2705")+' Yes</div><div class="btn no" id="envn" style="'+big+'">'+E("274c")+' No</div></div>');
+    $("envy").onclick=function(){check()};$("envn").onclick=function(){fix("jam",t0)}}
+  function check(){modal('<div class="big">'+E("2709")+E("1f50d")+'</div><div class="q">Look at your envelope!</div><div class="q" style="font-size:26px">Is the address on the FRONT (not the flap side), the right way up?</div>'+
+      '<div class="faces"><div class="btn yes" id="envgood" style="'+big+'">'+E("2705")+' Looks right</div><div class="btn no" id="envbad" style="'+big+'">'+E("274c")+' It\'s wrong</div></div>');
+    $("envgood").onclick=function(){L("env_good",{});modal('<div class="big">'+E("2709")+E("2728")+'</div><div class="q">Your envelope is ready!</div><div class="q" style="font-size:24px;opacity:.85">Put your letter in, and ask a grown-up for a stamp.</div>'+
+        '<div class="faces"><div class="btn yes" id="envok" style="'+big+'">OK</div></div>');$("envok").onclick=function(){done()}};
+    $("envbad").onclick=function(){L("env_bad",{});modal('<div class="q">'+E("1f504")+' Let\'s fix it with a new envelope.</div>'+
+        steps(["Printed on the flap side? Turn the next envelope over.","Upside down? Turn it around so the other end goes in first.","Match the picture, then push it in until the printer grabs it."])+
+        '<div class="faces"><div class="btn yes" id="envnew" style="'+big+'">'+E("1f501")+' Print a new one</div><div class="btn" id="envkeep" style="font-size:22px;padding:6px 18px">Keep this one</div></div>');
+      $("envnew").onclick=function(){load()};$("envkeep").onclick=function(){done()}}}
   from()}
 function doReport(c,feel,node,note,ask){L("report",{chore:c.id,feeling:feel,note:note||null,ask:ask==null?null:ask});
   if(busy)return;busy=true;

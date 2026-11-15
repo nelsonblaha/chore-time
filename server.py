@@ -1401,6 +1401,12 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, (HERE / "static/now.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/inspect":
             return self.send(200, (HERE / "static/inspect.html").read_bytes(), "text/html; charset=utf-8")
+        if p == "/api/envelope_status":   # the kids' screen follows its print job (and sees a jam)
+            job = (urllib.parse.parse_qs(self.path.partition("?")[2]).get("job") or [""])[0]
+            try:
+                return self.send(200, envelopes.status(job))
+            except Exception as ex:  # noqa: BLE001
+                return self.send(200, {"state": "unknown", "problem": None, "error": str(ex)[:120]})
         if p == "/api/envelope_photo":   # how to put an envelope in the printer (a photo in the data folder)
             f = DATA / str(envelopes.CFG.get("load_photo") or "-")
             if not envelopes.CFG.get("load_photo") or not f.is_file() or f.resolve().parent != DATA.resolve():
@@ -1462,6 +1468,10 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})
+        if p == "/api/envelope_cancel":   # "start over" after a jam: drop the stuck job so it can't print twice
+            envelopes.cancel(str(b.get("job") or ""))
+            ilog({"src": "envelope", "kid": b.get("kid"), "cancel": b.get("job")})
+            return self.send(200, {"ok": True})
         if p == "/api/envelope":   # a kid prints the envelope for their letter (not a ledger event)
             if b.get("kid") not in kids or not envelopes.enabled():
                 return self.send(400, {"error": "no envelopes here"})

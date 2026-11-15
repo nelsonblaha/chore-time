@@ -10,14 +10,17 @@ house.json "envelopes" (all optional except the addresses):
   recipients     [{"id", "label" (on the button), "name" (printed), "icon", "address": [lines] (optional)}]
   to_address     lines under the recipient's name when a recipient has no address of its own
   load_photo     an image in the data folder showing how to put the envelope in the printer
+  printer_uri    the printer's own IPP address (e.g. ipp://192.168.0.20/ipp/print): lets the kids' screen see a jam
 A one-page PDF is written with the built-in Helvetica font (no extra libraries) and sent to lp.
 """
+import re
 import subprocess
 import tempfile
 import time
 
 CFG = {}
 LAST = {"ts": 0.0}
+JOBS = set()     # print jobs this app sent (only these can be checked or cancelled)
 MIN_GAP_S = 20   # a double tap must not print two envelopes
 
 
@@ -103,4 +106,68 @@ def print_envelope(sender, recipient, run=subprocess.run):
     if r.returncode != 0:
         raise ValueError((r.stderr or "print failed").strip()[:200])
     LAST["ts"] = time.time()
-    return (r.stdout or "").strip()
+    m = re.search(r"request id is (\S+)", r.stdout or "")
+    if m:
+        JOBS.add(m.group(1))
+    return m.group(1) if m else (r.stdout or "").strip()
+
+
+# printer-state-reasons -> what the kids' screen says
+PROBLEMS = (("jam", "jam"), ("media-empty", "empty"), ("media-needed", "empty"), ("input-tray-missing", "empty"),
+            ("door-open", "open"), ("cover-open", "open"), ("toner-empty", "toner"), ("offline", "offline"))
+
+
+def printer_problem(run=subprocess.run):
+    uri = CFG.get("printer_uri")
+    if not uri:
+        return None
+    try:
+        r = run(["ipptool", "-tv", uri, "get-printer-attributes.test"], capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001
+        return None
+    reasons = " ".join(l.split("=", 1)[1] for l in (r.stdout or "").splitlines() if "printer-state-reasons" in l and "=" in l)
+    return next((p for k, p in PROBLEMS if k in reasons), None)
+
+
+JOB_TEST = """{
+OPERATION Get-Job-Attributes
+GROUP operation-attributes-tag
+ATTR charset attributes-charset utf-8
+ATTR naturalLanguage attributes-natural-language en
+ATTR uri printer-uri $uri
+ATTR integer job-id $job
+ATTR name requesting-user-name $user
+ATTR keyword requested-attributes job-state,job-state-reasons
+}
+"""
+
+
+def job_state(job, run=subprocess.run):
+    """CUPS job-state: pending, processing, processing-stopped, canceled, aborted, completed (or None)"""
+    import getpass
+    num = job.rsplit("-", 1)[-1]
+    with tempfile.NamedTemporaryFile("w", suffix=".test") as f:
+        f.write(JOB_TEST)
+        f.flush()
+        r = run(["ipptool", "-tv", "-d", "job=" + num, "-d", "user=" + getpass.getuser(),
+                 "ipp://localhost/printers/" + CFG.get("printer", ""), f.name], capture_output=True, text=True, timeout=10)
+    m = re.search(r"job-state \(enum\) = (\S+)", r.stdout or "")
+    return m.group(1) if m else None
+
+
+def status(job, run=subprocess.run):
+    """{"state": printing|done|stopped|gone, "problem": jam|empty|open|toner|offline|None} for a job this app sent"""
+    if job not in JOBS:
+        return {"state": "gone", "problem": None}
+    st = job_state(job, run)
+    if st in ("pending", "pending-held", "processing", "processing-stopped"):
+        return {"state": "printing", "problem": printer_problem(run)}
+    if st == "completed":
+        return {"state": "done", "problem": None}
+    return {"state": "stopped" if st in ("canceled", "aborted") else "gone", "problem": printer_problem(run)}
+
+
+def cancel(job, run=subprocess.run):
+    if job in JOBS:
+        run(["cancel", job], capture_output=True, text=True, timeout=10)
+        LAST["ts"] = 0.0   # starting over may print again right away
