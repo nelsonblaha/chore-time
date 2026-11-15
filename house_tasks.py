@@ -13,6 +13,7 @@ sensors of the device, comma separated, the newest reading counts; ha_low: the l
 "Replace the battery" items while the Home Assistant level is at or below ha_low, and are tracked as replaced in
 Grocy when the level comes back up. Everything is published as sensor.house_tasks for the boards. Tasks in the
 house.json grocy "review_category" (an inbox, e.g. tasks imported from elsewhere) are only counted (to_review).
+If Grocy offers /tasks/private-summary (encrypted private tasks), each owner's open/due/overdue counts are included.
 """
 import json
 import re
@@ -105,6 +106,14 @@ class HouseTasks:
             out.append({"kind": "chore", "id": o.get("id") or c.get("chore_id"), "name": o.get("name") or c.get("chore_name"),
                         "due": due, "overdue": bool(due and due < now), "assigned": users.get(c.get("next_execution_assigned_to_user_id")),
                         "last": ts(c.get("last_tracked_time")), "uf": uf})
+        # Private tasks (a Grocy that encrypts them, e.g. the grocy-private fork): never names, only counts per owner.
+        try:
+            summary = self.gc("GET", "/tasks/private-summary") or []
+        except Exception:  # noqa: BLE001  (a stock Grocy has no such endpoint)
+            summary = []
+        self.private = [{"owner": users.get(r.get("owner_user_id"), "?"), "open": r.get("open", 0),
+                         "due_today": r.get("due_today", 0), "overdue": r.get("overdue", 0)}
+                        for r in summary if isinstance(r, dict)]
         inbox = str((self.g["HOUSE"].get("grocy") or {}).get("review_category") or "").strip().lower()
         inbox_ids = {c["id"] for c in (self.gc("GET", "/objects/task_categories") or []) if inbox and c["name"].lower() == inbox}
         self.to_review = 0
@@ -158,7 +167,8 @@ class HouseTasks:
         shown.sort(key=lambda i: (not i["overdue"], i["due"] or 9e12, i["name"]))
         due = [i for i in shown if i["visible"] and (i["kind"] != "chore" or (i["due"] and i["due"] <= now + 86400))]
         attrs = {"friendly_name": "House tasks", "icon": "mdi:clipboard-check-outline", "items": due[:40],
-                 "all": len(shown), "to_review": getattr(self, "to_review", 0), "updated": now}
+                 "all": len(shown), "to_review": getattr(self, "to_review", 0),
+                 "private": getattr(self, "private", []), "updated": now}
         sig = json.dumps(due, sort_keys=True, default=str)
         if sig != self.last_sig or now - self.D.get("pub", 0) > 600:
             self.g["ha_post_state"]("sensor.house_tasks", str(len(due)), attrs, self.tok)

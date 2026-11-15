@@ -737,6 +737,25 @@ class HouseTasks(unittest.TestCase):
         a = self.ha["sensor.house_tasks"]["attributes"]
         self.assertEqual(([i["name"] for i in a["items"]], a["to_review"]), (["Fix the gate"], 30))
 
+    def test_private_tasks_are_counts_never_names(self):
+        self.grocy["/users"] = [{"id": 2, "display_name": "Jordan"}]
+        self.grocy["/tasks/private-summary"] = [{"owner_user_id": 2, "open": 3, "due_today": 1, "overdue": 1}]
+        self.H.HouseTasks(self.g).tick()
+        a = self.ha["sensor.house_tasks"]["attributes"]
+        self.assertEqual(a["private"], [{"owner": "Jordan", "open": 3, "due_today": 1, "overdue": 1}])
+        self.assertEqual(a["items"], [])
+
+    def test_a_stock_grocy_without_private_tasks_still_works(self):
+        gcall = self.g["gcall"]
+
+        def stock(method, path, body=None):
+            if path == "/tasks/private-summary":
+                raise urllib.error.HTTPError(path, 400, "Bad Request", {}, None)
+            return gcall(method, path, body)
+        self.g["gcall"] = stock
+        self.H.HouseTasks(self.g).tick()
+        self.assertEqual(self.ha["sensor.house_tasks"]["attributes"]["private"], [])
+
     def test_done_by_itself_once(self):
         self.grocy["/objects/tasks"] = [{"id": 3, "name": "Move the wash to the dryer", "done": 0,
                                          "userfields": {"ctx_done_when": "sensor.dryer = running"}}]
