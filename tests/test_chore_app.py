@@ -515,6 +515,16 @@ class Vacuum(unittest.TestCase):
         self.at(23)
         self.assertFalse(self.status()["Kitchen"]["eligible"])         # done tonight (a manual button run counts too)
 
+    def test_dinner_is_one_long_sit_after_five_not_walk_throughs(self):
+        # calibrated on real evenings: sitting at the table = one long stretch; passing through = short blips
+        va, d = self.va, datetime(2026, 11, 12)
+        T = lambda h, m: d.replace(hour=h, minute=m).timestamp()
+        rows = lambda *iv: [r for a, b in iv for r in ({"state": "on", "last_changed": iso(a)}, {"state": "off", "last_changed": iso(b)})]
+        args = (T(15, 0), T(21, 30), T(17, 0), T(20, 30), 180, 45 * 60)
+        self.assertTrue(va.dinner_from_rows(rows((T(16, 36), T(18, 10))), *args))                     # 70 min after 5
+        self.assertFalse(va.dinner_from_rows(rows((T(16, 1), T(16, 51))), *args))                     # too early
+        self.assertFalse(va.dinner_from_rows(rows(*[(T(17, m), T(17, m + 4)) for m in range(0, 60, 10)]), *args))  # blips
+
     def test_a_passed_tidy_still_triggers_a_clean(self):
         self.p.D["visits"]["Family Room"] = self.now[0] - 3600
         self.board["family_room"] = {"clean_until": 1, "last_clean": self.now[0] - 60}

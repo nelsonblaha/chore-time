@@ -71,6 +71,27 @@ def epoch(s):
         return 0
 
 
+def dinner_from_rows(rows, q0, q1, w0, w1, gap, need):
+    """rows = HA history of a motion sensor. True if one merged 'on' stretch spends >= need seconds inside [w0, w1]."""
+    iv, since = [], None
+    for r in rows:
+        t = max(epoch(r), q0)
+        if r.get("state") == "on" and since is None:
+            since = t
+        elif r.get("state") != "on" and since is not None:
+            iv.append([since, t])
+            since = None
+    if since is not None:
+        iv.append([since, q1])
+    merged = []
+    for a, b in iv:
+        if merged and a - merged[-1][1] < gap:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    return any(min(b, w1) - max(a, w0) >= need for a, b in merged)   # the part of one stretch inside the window
+
+
 class Pilot:
     def __init__(self, g):
         self.g = g
@@ -261,43 +282,34 @@ class Pilot:
         return not sch.get("needs_dinner") or self.dinner_eaten(ref)
 
     def dinner_eaten(self, ref):
-        """Dinner happened in this room tonight: its motion sensor was on >= min_on_min in the dinner window."""
+        """Dinner happened in this room tonight: its motion sensor shows one continuous stretch (gaps under
+        merge_gap_s joined) with at least min_block_min of it inside the dinner window. Sitting at a table looks like
+        one long stretch; people walking through look like many short ones (calibrated on real evenings)."""
         if not DINNER.get("sensor"):
             return False
         key = ref.strftime("%Y-%m-%d")
         cache = self.D.setdefault("dinner", {})
         if key in cache and (cache[key] or time.time() - self.D.get("dinner_ts", 0) < 600):
             return cache[key]
-        f_, u_ = DINNER.get("from", "16:30"), DINNER.get("until", "20:30")
-        t0 = ref.replace(hour=int(f_[:2]), minute=int(f_[3:]))
-        t1 = ref.replace(hour=int(u_[:2]), minute=int(u_[3:]))
-        on = 0.0
+        hm = lambda t: ref.replace(hour=int(t[:2]), minute=int(t[3:]), second=0, microsecond=0)
+        w0, w1 = hm(DINNER.get("from", "17:30")), hm(DINNER.get("until", "19:30"))
+        q0, q1 = w0 - timedelta(hours=2), w1 + timedelta(hours=1)   # look around the window to see whole stretches
+        gap, need = float(DINNER.get("merge_gap_s", 180)), float(DINNER.get("min_block_min", 20)) * 60
         try:
             import urllib.request
-            url = (f"{self.g['HA_URL']}/api/history/period/{urllib.parse.quote(t0.astimezone().isoformat())}"
-                   f"?end_time={urllib.parse.quote(t1.astimezone().isoformat())}&filter_entity_id={DINNER['sensor']}"
+            url = (f"{self.g['HA_URL']}/api/history/period/{urllib.parse.quote(q0.astimezone().isoformat())}"
+                   f"?end_time={urllib.parse.quote(q1.astimezone().isoformat())}&filter_entity_id={DINNER['sensor']}"
                    "&minimal_response&no_attributes")
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.tok}"})
             rows = (json.loads(urllib.request.urlopen(req, timeout=20).read()) or [[]])[0]
-            since = None
-            for r in rows:
-                t = max(epoch(r), t0.timestamp())
-                if r.get("state") == "on" and since is None:
-                    since = t
-                elif r.get("state") != "on" and since is not None:
-                    on += t - since
-                    since = None
-            if since is not None:
-                on += min(time.time(), t1.timestamp()) - since
         except Exception as ex:  # noqa: BLE001
             self.g["ilog"]({"src": "vac", "action": "dinner_check_failed", "error": repr(ex)})
             return False
-        ate = on >= float(DINNER.get("min_on_min", 15)) * 60
+        ate = dinner_from_rows(rows, q0.timestamp(), min(time.time(), q1.timestamp()), w0.timestamp(), w1.timestamp(), gap, need)
         cache[key] = ate
         self.D["dinner_ts"] = time.time()
-        if len(cache) > 10:
-            for k in sorted(cache)[:-10]:
-                cache.pop(k)
+        for k in sorted(cache)[:-10]:
+            cache.pop(k)
         return ate
 
     # --- robot room tracking (always on, manual runs count too) -------------------------------

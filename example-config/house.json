@@ -239,9 +239,10 @@
     "every_h": 72,
     "dinner": {
       "sensor": "binary_sensor.kitchen_motion",
-      "from": "16:30",
+      "from": "17:00",
       "until": "20:30",
-      "min_on_min": 30
+      "min_block_min": 45,
+      "merge_gap_s": 180
     }
   },
   "grocy": null,
