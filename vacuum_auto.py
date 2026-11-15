@@ -37,6 +37,8 @@ def configure(v):
     SENSORS = dict(v.get("sensors") or {})
     global VOICE, NIGHT
     VOICE = v.get("voice_volume")
+    global NIGHT_CARPET_OFF
+    NIGHT_CARPET_OFF = bool(v.get("night_carpet_boost_off"))
     global ENTRY_SENSORS, ENTRY_DOORS
     ENTRY_SENSORS, ENTRY_DOORS = set(v.get("entry_sensors") or []), set(v.get("entry_doors") or [])
     NIGHT = (int(v.get("night_from_h", 20)), int(v.get("night_until_h", 7)))
@@ -60,6 +62,7 @@ PARK_DOCK_S = 10 * 60        # Q5
 DWELL_S = 120                # a room counts as robot-cleaned after this long in it while cleaning
 PREV_GRACE_S = 90            # sensors of the room it just left still belong to the robot
 RETRY_S = 30 * 60
+NIGHT_CARPET_OFF = False   # turn the robot's Carpet Boost off at night (vacuum.night_carpet_boost_off)
 VOICE = None          # optional robot voice-volume number: 0 at night, daytime level restored in the morning
 NIGHT = (20, 7)       # night hours: quietest suction, robot voice off
 
@@ -369,7 +372,23 @@ class Pilot:
         self.D.update(phase="idle", groups=[], gi=0, paused_at=0)
         self.log("finish", why=why)
 
+    def night_carpet(self):
+        """Carpet Boost (full suction on rugs) off at night, back on by day. Not an official integration entity:
+        sent as the robot's own set_carpet_mode command, once per change (vacuum.night_carpet_boost_off)."""
+        if not NIGHT_CARPET_OFF:
+            return
+        h = datetime.fromtimestamp(time.time()).hour
+        want = "off" if (h >= NIGHT[0] or h < NIGHT[1]) else "on"
+        if self.D.get("carpet") == want:
+            return
+        self.call("vacuum.send_command", {"entity_id": VAC, "command": "set_carpet_mode",
+                                          "params": [{"enable": 0 if want == "off" else 1, "current_high": 500,
+                                                      "current_integral": 450, "current_low": 400, "stall_time": 10}]})
+        self.D["carpet"] = want
+        self.log("carpet_boost", to=want)
+
     def night_voice(self):
+        self.night_carpet()
         if not VOICE:
             return
         h = datetime.fromtimestamp(time.time()).hour
