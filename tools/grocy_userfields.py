@@ -32,7 +32,10 @@ FIELDS = [
     ("kid_extra", "Chore app extras (JSON: shared, daylight, slot, each_daily, ...)", "text-multi-line", None, 9),
 ]
 # the grown-ups' side (house_tasks.py): context on chores and tasks, and a Home Assistant link for batteries
+HOUSE_ROOMS = "\n".join(r for rooms in ((json.loads((DATA / "house.json").read_text()).get("house_tasks") or {}).get("floors") or {}).values()
+                        for r in rooms) if (DATA / "house.json").exists() else ""
 CONTEXT = [
+    ("ctx_rooms", "Rooms (where it's done)", "preset-checklist" if HOUSE_ROOMS else "text-single-line", HOUSE_ROOMS or None, 19),
     ("ctx_show_on", "Show on (displays, comma separated; empty = everywhere)", "text-single-line", None, 20),
     ("ctx_show_when", "Show only when (HA condition or now.hour / now.weekday, e.g. person.jordan = home)", "text-single-line", None, 21),
     ("ctx_done_when", "Done by itself when (HA condition)", "text-single-line", None, 22),

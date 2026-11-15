@@ -6,6 +6,9 @@ and batteries that need replacing. Each item can carry context (Grocy userfields
   ctx_show_on    displays it belongs on, comma list (empty = everywhere)
   ctx_show_when  only show while this Home Assistant condition holds, e.g.  person.ben = home
   ctx_done_when  done by itself when this holds, e.g.  binary_sensor.washer_running = off and sensor.x > 50
+  ctx_rooms      where it's done, comma list of rooms. Each screen in house.json "house_tasks": {"displays":
+                 {"kitchen": "Kitchen"}, "floors": {"Downstairs": ["Kitchen", …]}} gets its own ranking: overdue, then
+                 due today, then undated; a job in the screen's room ranks up a lot, one on the same floor a little.
 
 Conditions: "<entity> <op> <value>" joined by "and"; op is one of = != > < >= <=. Besides Home Assistant entities,
 now.hour, now.weekday (0 = Monday), now.month and now.day test the clock, e.g. "now.hour >= 17" or "now.weekday >= 5". A due item whose ctx_done_when
@@ -47,6 +50,27 @@ def check(cond, get):
         if not ok:
             return False
     return True
+
+
+def score(item, room, floor_of, now):
+    """How much a job belongs on a screen in `room` right now: how due it is first, then how near it is."""
+    due = item.get("due")
+    if item.get("overdue"):
+        s = 100 + min(30, (now - due) / 86400 if due else 0)
+    elif due is not None and due <= now + 86400:
+        s = 70
+    else:
+        s = 30                                                        # an open one-off with no date
+    rooms = item.get("rooms") or []
+    if room in rooms:
+        s += 40
+    elif floor_of.get(room) and floor_of.get(room) in {floor_of.get(r) for r in rooms}:
+        s += 15
+    return s
+
+
+def rank(items, room, floor_of, now):
+    return sorted(items, key=lambda i: (-score(i, room, floor_of, now), i.get("due") or 9e12, i.get("name") or ""))
 
 
 def now_value(ent, when=None):
@@ -160,6 +184,7 @@ class HouseTasks:
         for it in self.items():
             uf = it.pop("uf")
             it["show_on"] = [x.strip() for x in str(uf.get("ctx_show_on") or "").split(",") if x.strip()]
+            it["rooms"] = [x.strip() for x in str(uf.get("ctx_rooms") or "").split(",") if x.strip()]
             sw = check(uf.get("ctx_show_when"), self.get)
             it["visible"] = sw is not False
             dw = uf.get("ctx_done_when")
@@ -175,14 +200,19 @@ class HouseTasks:
             shown.append(it)
         shown.sort(key=lambda i: (not i["overdue"], i["due"] or 9e12, i["name"]))
         due = [i for i in shown if i["visible"] and (i["kind"] != "chore" or (i["due"] and i["due"] <= now + 86400))]
+        cfg = self.g["HOUSE"].get("house_tasks") or {}
+        floor_of = {room: floor for floor, rooms in (cfg.get("floors") or {}).items() for room in rooms}
+        by_display = {d: [dict(i, here=bool(room in i["rooms"])) for i in rank(due, room, floor_of, now)[:int(cfg.get("per_display", 6))]]
+                      for d, room in (cfg.get("displays") or {}).items()}
         attrs = {"friendly_name": "House tasks", "icon": "mdi:clipboard-check-outline", "items": due[:40],
                  "all": len(shown), "to_review": getattr(self, "to_review", 0),
-                 "private": getattr(self, "private", []), "updated": now}
+                 "private": getattr(self, "private", []), "displays": by_display, "updated": now}
         sig = json.dumps(due, sort_keys=True, default=str)
         if sig != self.last_sig or now - self.D.get("pub", 0) > 600:
             self.g["ha_post_state"]("sensor.house_tasks", str(len(due)), attrs, self.tok)
             self.last_sig, self.D["pub"] = sig, now
         self.g["GUARD"]["house_tasks"] = due
+        self.g["GUARD"]["house_tasks_displays"] = by_display
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.D))
         tmp.replace(self.path)

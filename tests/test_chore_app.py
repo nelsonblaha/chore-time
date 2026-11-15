@@ -765,6 +765,20 @@ class HouseTasks(unittest.TestCase):
         self.H.HouseTasks(self.g).tick()
         self.assertEqual(self.ha["sensor.house_tasks"]["attributes"]["private"], [])
 
+    def test_each_screen_ranks_its_own_room_first(self):
+        """The kitchen screen leads with the kitchen job; the upstairs screen with the upstairs one; overdue still wins."""
+        self.g["HOUSE"]["house_tasks"] = {"floors": {"Down": ["Kitchen", "Hall"], "Up": ["Bath", "Bedroom"]},
+                                          "displays": {"kitchen": "Kitchen", "bedroom": "Bedroom"}}
+        self.grocy["/objects/tasks"] = [
+            {"id": 1, "name": "Descale kettle", "done": 0, "userfields": {"ctx_rooms": "Kitchen"}},
+            {"id": 2, "name": "Fix bath fan", "done": 0, "userfields": {"ctx_rooms": "Bath"}},
+            {"id": 3, "name": "Pay the plumber", "done": 0, "due_date": "2000-01-01", "userfields": {}}]
+        self.H.HouseTasks(self.g).tick()
+        d = self.ha["sensor.house_tasks"]["attributes"]["displays"]
+        self.assertEqual([i["name"] for i in d["kitchen"]], ["Pay the plumber", "Descale kettle", "Fix bath fan"])
+        self.assertEqual([i["name"] for i in d["bedroom"]], ["Pay the plumber", "Fix bath fan", "Descale kettle"])
+        self.assertTrue(d["kitchen"][1]["here"])
+
     def test_done_by_itself_once(self):
         self.grocy["/objects/tasks"] = [{"id": 3, "name": "Move the wash to the dryer", "done": 0,
                                          "userfields": {"ctx_done_when": "sensor.dryer = running"}}]
