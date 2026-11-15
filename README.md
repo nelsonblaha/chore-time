@@ -131,7 +131,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 - **Tested against real life:** every test in [`tests/`](tests) comes from something that went wrong in a real family. For example: a personal job vanished because a sibling's report was waiting for inspection, a console on HDMI never locked because the lock page kept running in the background, and a bedtime rule paused a kid mid-toothbrush.
 
 ```bash
-python3 -m unittest discover -s tests      # ~40 tests, ~15 s, no network
+python3 -m unittest discover -s tests      # ~55 tests, ~15 s, no network
 node tools/smoke.js                        # renders every page against a running server
 ```
 

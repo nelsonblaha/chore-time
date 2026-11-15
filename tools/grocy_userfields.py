@@ -1,4 +1,4 @@
-"""Create the userfields Chore Time reads on Grocy's 'chores' entity (idempotent). Never prints the API key.
+"""Create the userfields Chore Time reads in Grocy: chores, tasks and batteries (idempotent). Never prints the API key.
 Kids' names for the "Only for" checklist come from your chores.json."""
 import json
 import sys
@@ -31,12 +31,23 @@ FIELDS = [
     ("kid_key", "Chore app key (don't change)", "text-single-line", None, 8),
     ("kid_extra", "Chore app extras (JSON: shared, daylight, slot, each_daily, ...)", "text-multi-line", None, 9),
 ]
+# the grown-ups' side (house_tasks.py): context on chores and tasks, and a Home Assistant link for batteries
+CONTEXT = [
+    ("ctx_show_on", "Show on (displays, comma separated; empty = everywhere)", "text-single-line", None, 20),
+    ("ctx_show_when", "Show only when (HA condition, e.g. person.jordan = home)", "text-single-line", None, 21),
+    ("ctx_done_when", "Done by itself when (HA condition)", "text-single-line", None, 22),
+]
+BATTERIES = [
+    ("ha_entity", "Home Assistant battery sensor(s), comma separated", "text-single-line", None, 1),
+    ("ha_low", "Replace at or below (%)", "number-integral", None, 2),
+]
 have = {(u["entity"], u["name"]) for u in call("GET", "/objects/userfields")}
-for name, cap, typ, conf, sort in FIELDS:
-    if ("chores", name) in have:
-        print("exists", name)
+for entity, name, cap, typ, conf, sort in ([("chores",) + f for f in FIELDS + CONTEXT] + [("tasks",) + f for f in CONTEXT]
+                                           + [("batteries",) + f for f in BATTERIES]):
+    if (entity, name) in have:
+        print("exists", entity, name)
         continue
-    body = {"entity": "chores", "name": name, "caption": cap, "type": typ, "sort_number": sort, "input_required": 0,
+    body = {"entity": entity, "name": name, "caption": cap, "type": typ, "sort_number": sort, "input_required": 0,
             "show_as_column_in_tables": 1 if name in ("kids", "kid_points") else 0}
     if conf:
         body["config"] = conf

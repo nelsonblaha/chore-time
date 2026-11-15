@@ -8,7 +8,8 @@ and batteries that need replacing. Each item can carry context (Grocy userfields
   ctx_done_when  done by itself when this holds, e.g.  binary_sensor.washer_running = off and sensor.x > 50
 
 Conditions: "<entity> <op> <value>" joined by "and"; op is one of = != > < >= <=. A due item whose ctx_done_when
-comes true is completed in Grocy (once). Batteries (Grocy batteries with userfields ha_entity, ha_low) become
+comes true is completed in Grocy (once). Batteries (Grocy batteries with userfields ha_entity: one or more battery
+sensors of the device, comma separated, the newest reading counts; ha_low: the level that means replace) become
 "Replace the battery" items while the Home Assistant level is at or below ha_low, and are tracked as replaced in
 Grocy when the level comes back up. Everything is published as sensor.house_tasks for the boards.
 """
@@ -43,6 +44,20 @@ def check(cond, get):
         if not ok:
             return False
     return True
+
+
+def battery_level(states):
+    """The level from the newest reading among a device's battery entities (a 4-button remote often has 4, some stale)."""
+    best = None
+    for st in states:
+        try:
+            v = float(st.get("state"))
+        except (TypeError, ValueError):
+            continue
+        t = ts(st.get("last_reported") or st.get("last_updated")) or 0
+        if best is None or t > best[0]:
+            best = (t, v)
+    return best[1] if best else None
 
 
 def ts(s):
@@ -98,13 +113,9 @@ class HouseTasks:
                         "uf": t.get("userfields") or {}})
         for b in self.gc("GET", "/objects/batteries") or []:
             uf = b.get("userfields") or {}
-            ent, low = (uf.get("ha_entity") or "").strip(), uf.get("ha_low")
-            if not ent:
-                continue
-            lvl = self.get(ent).get("state")
-            try:
-                lvl = float(lvl)
-            except (TypeError, ValueError):
+            ents, low = [e.strip() for e in str(uf.get("ha_entity") or "").split(",") if e.strip()], uf.get("ha_low")
+            lvl = battery_level([self.get(e) for e in ents])
+            if lvl is None:
                 continue
             key = "battery:%s" % b["id"]
             lowv = float(low or 15)

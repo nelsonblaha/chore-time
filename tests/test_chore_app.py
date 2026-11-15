@@ -672,6 +672,72 @@ class RobotLocator(unittest.TestCase):
         self.assertEqual(L.classify(v, 24005, 25005)[0], "Corridor")
 
 
+class HouseTasks(unittest.TestCase):
+    """The grown-ups' side: Grocy chores/tasks/batteries with Home Assistant context, faked."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO))
+        import house_tasks
+        self.H = house_tasks
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.ha, self.calls, self.grocy = {}, [], {"/objects/chores": [], "/users": [], "/chores": [],
+                                                  "/objects/tasks": [], "/objects/batteries": []}
+
+        def gcall(method, path, body=None):
+            self.calls.append((method, path))
+            return self.grocy.get(path) if method == "GET" else {}
+        self.g = {"ha_token": lambda: "t", "DATA": self.tmp, "gcall": gcall, "ilog": lambda e: None, "GUARD": {},
+                  "ha_get": lambda e, tok: self.ha.get(e, {"state": "unavailable"}),
+                  "ha_post_state": lambda ent, state, attrs, tok: self.ha.__setitem__(ent, {"state": state, "attributes": attrs})}
+
+    def test_conditions(self):
+        self.ha.update({"person.jordan": {"state": "home"}, "sensor.washer": {"state": "3.5"}})
+        get = lambda e: self.ha.get(e, {"state": "unavailable"})
+        self.assertTrue(self.H.check("person.jordan = home", get))
+        self.assertTrue(self.H.check("person.jordan = Home and sensor.washer < 5", get))
+        self.assertFalse(self.H.check("sensor.washer >= 10", get))
+        self.assertIsNone(self.H.check("sensor.nothing = on", get))             # unknown: neither show nor auto-complete
+        self.assertIsNone(self.H.check("person.jordan > home", get))            # no ordering on words
+
+    def test_a_four_button_remote_reads_its_newest_battery_entity(self):
+        """A quad remote showed 4 battery entities with different levels: the stale ones lag behind."""
+        lvl = self.H.battery_level([{"state": "95", "last_reported": "2026-01-01T10:00:00+00:00"},
+                                    {"state": "100", "last_reported": "2026-01-02T10:00:00+00:00"},
+                                    {"state": "unknown"}])
+        self.assertEqual(lvl, 100.0)
+        self.assertIsNone(self.H.battery_level([{"state": "unavailable"}]))
+
+    def test_low_battery_becomes_an_item_then_is_tracked_as_replaced(self):
+        self.grocy["/objects/batteries"] = [{"id": 7, "name": "Hall sensor",
+                                             "userfields": {"ha_entity": "sensor.a_battery,sensor.b_battery", "ha_low": 20}}]
+        self.ha["sensor.a_battery"] = {"state": "12", "last_reported": "2026-01-02T10:00:00+00:00"}
+        h = self.H.HouseTasks(self.g)
+        h.tick()
+        items = self.ha["sensor.house_tasks"]["attributes"]["items"]
+        self.assertEqual([i["name"] for i in items], ["Replace the battery: Hall sensor"])
+        self.ha["sensor.a_battery"] = {"state": "100", "last_reported": "2026-01-03T10:00:00+00:00"}
+        h.tick()
+        self.assertIn(("POST", "/batteries/7/charge"), self.calls)
+        self.assertEqual(self.ha["sensor.house_tasks"]["state"], "0")
+
+    def test_never_watched_with_a_negative_threshold(self):
+        """Sensors on USB power read 0% forever: a negative threshold keeps them registered but quiet."""
+        self.grocy["/objects/batteries"] = [{"id": 8, "name": "USB sensor", "userfields": {"ha_entity": "sensor.u", "ha_low": -1}}]
+        self.ha["sensor.u"] = {"state": "0"}
+        self.H.HouseTasks(self.g).tick()
+        self.assertEqual(self.ha["sensor.house_tasks"]["state"], "0")
+
+    def test_done_by_itself_once(self):
+        self.grocy["/objects/tasks"] = [{"id": 3, "name": "Move the wash to the dryer", "done": 0,
+                                         "userfields": {"ctx_done_when": "sensor.dryer = running"}}]
+        self.ha["sensor.dryer"] = {"state": "running"}
+        h = self.H.HouseTasks(self.g)
+        h.tick()
+        h.tick()
+        self.assertEqual(self.calls.count(("POST", "/tasks/3/complete")), 1)
+
+
 # ---------------------------------------------------------------- pages
 class Pages(unittest.TestCase):
     def test_no_unwrapped_string_plus_or(self):
