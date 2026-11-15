@@ -71,7 +71,7 @@ Every section is optional. A missing section means that feature is off. `example
 | `launchers` | an HA `input_button` → `{ip, path}`: an on-demand "chore board" button |
 | `casting` | `catt` path, `hub_volume` |
 | `lights` | `chore_rooms`: job → `{modes: [input_select…], covers: [cover…]}`. `signal_bulbs`: room → `{bulbs, pick, pool, ref}` for the kid-colour bulbs |
-| `vacuum` | the robot's entities, `segments` (robot room → `chore`/`chores`, `mop`), person `sensors` per segment, `entry_sensors`, `entry_doors`, `voice_volume`, night hours |
+| `vacuum` | the robot's entities, `segments` (robot room → `chore`/`chores`, `mop`), person `sensors` per segment, `entry_sensors`, `entry_doors`, `voice_volume`, night hours. Goals: `schedule` (segment → `{"nightly_after": "19:00", "needs_dinner": true}`), `every_h` (default 72), `dinner` (`sensor`, `from`, `until`, `min_on_min`) |
 | `grocy` | `url`, `key_file`, `freezer_location`, `requesters`: Grocy as the master chore list |
 | `dashboard_mirror` | keep a grown-up's own HA dashboard in step with chosen views |
 

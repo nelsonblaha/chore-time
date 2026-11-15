@@ -102,7 +102,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 **The house plays along** *(Home Assistant)*
 - Bright white light and open shades in the room being cleaned. Selected colour bulbs show the working kid's colour (one kid asked for their colour plus a "family purple" pair, so that's a setting).
 - A room waiting for inspection glows in the inspecting grown-up's colour.
-- **Vacuum autopilot:** after a room's tidy passes, the robot vacuums it once, when the floor has been empty for 20 minutes. Quiet suction and a muted robot voice at night. It pauses for a *person* coming onto the floor (a door opening, the stairs, or walking through rooms), not for the robot setting off its own sensors. It docks if the person stays.
+- **Vacuum autopilot** with goals: the kitchen every night, the dining room on nights dinner was eaten there (judged from its motion sensor), every other room at least every 3 days, and any room right after its tidy passes (the floor is clear). Any robot run, even one started by a room's button, resets that room's clock. It only goes once the floor has been empty for 20 minutes. Quiet suction and a muted robot voice at night. It pauses for a *person* coming onto the floor (a door opening, the stairs, or walking through rooms), not for the robot setting off its own sensors. It docks if the person stays.
 - An optional **Grocy** integration uses Grocy as the master chore list, with chore completions written back.
 
 ## Install for your house

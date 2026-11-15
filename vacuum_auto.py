@@ -9,11 +9,12 @@ No phone notices. Everything is logged (src "vac") and published as sensor.vacuu
 import json
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Filled from house.json "vacuum" by configure(); see example-config/house.json.
 VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = ACTIVE = UPSTAIRS = CLEAN_SCRIPT = None
 MAP_FLAG = 0
+SEGMENTS = []
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
 MOP = set()      # segments that get vacuum + mop; the rest vacuum only
 SENSORS = {}     # person-evidence sensor -> the segment it sits in (the robot trips its own room's sensors)
@@ -30,6 +31,8 @@ def configure(v):
     CLEAN_SCRIPT, MAP_FLAG = v.get("clean_script", "script.vacuum_clean_rooms"), v.get("map_flag", 0)
     # a segment may span several jobs ("chores": [...]): it goes only when ALL are presumed clean
     SEG_CHORE = {seg: (x.get("chores") or [x["chore"]]) for seg, x in (v.get("segments") or {}).items() if x.get("chore") or x.get("chores")}
+    global SEGMENTS
+    SEGMENTS = list(v.get("segments") or {})   # every robot room gets the every_h goal
     MOP = {seg for seg, x in (v.get("segments") or {}).items() if x.get("mop")}
     SENSORS = dict(v.get("sensors") or {})
     global VOICE, NIGHT
@@ -37,8 +40,9 @@ def configure(v):
     global ENTRY_SENSORS, ENTRY_DOORS
     ENTRY_SENSORS, ENTRY_DOORS = set(v.get("entry_sensors") or []), set(v.get("entry_doors") or [])
     NIGHT = (int(v.get("night_from_h", 20)), int(v.get("night_until_h", 7)))
-    global RESUME_QUIET_S
+    global RESUME_QUIET_S, SCHEDULE, EVERY_H, DINNER
     RESUME_QUIET_S = int(v.get("resume_quiet_s", 20))
+    SCHEDULE, EVERY_H, DINNER = dict(v.get("schedule") or {}), float(v.get("every_h", 72)), dict(v.get("dinner") or {})
 
 
 # A PERSON coming onto this floor vs the robot tripping sensors: the robot sets off random sensors one at a time;
@@ -47,6 +51,9 @@ ENTRY_SENSORS = set()   # motion at the ways onto this floor (house.json vacuum.
 ENTRY_DOORS = set()     # door contacts: opened = a person, always (vacuum.entry_doors)
 PATH_WINDOW_S = 90      # 2+ different non-robot rooms tripping within this = someone walking through
 START_QUIET_S = 20 * 60      # Q6
+SCHEDULE = {}   # segment -> {"nightly_after": "19:00", "needs_dinner": bool, "every_h": N}
+EVERY_H = 72    # every other segment: at least this often
+DINNER = {}     # {"sensor": dining motion, "from": "16:30", "until": "20:30", "min_on_min": 15}
 RESUME_QUIET_S = 20         # motion sensors only go "off" after ~4 min without movement, so "all off" already IS quiet;
                             # this is just a debounce (house.json vacuum.resume_quiet_s)
 PARK_DOCK_S = 10 * 60        # Q5
@@ -196,33 +203,102 @@ class Pilot:
         return [seg for seg, d in self.segment_status().items() if d["eligible"]]
 
     def segment_status(self):
-        """Per robot segment: the autopilot's real decision and why (for dashboards)."""
+        """Per robot segment: the autopilot's real decision and why (for dashboards).
+        Goals (house.json vacuum.schedule): some rooms nightly (after a time; optionally only if dinner was eaten
+        there, per a motion sensor), everything else every `every_h` hours (default 72). A freshly passed tidy also
+        counts (the floor is clear). ANY robot visit resets the clock, including a manual run (e.g. a room's clean
+        button). Never while a kid's job there is in progress or waiting for a check."""
         st = self.g["derive"]()
         b = st["board"]
         chs = {c["id"]: c for c in st.get("config", {}).get("chores", [])}
         busy = {a.get("chore") for a in st["active"].values()} | {z.get("chore") for z in st["paused"].values()}
+        now = time.time()
         out = {}
-        for seg in list(SEG_CHORE) + [x for x in set(SENSORS.values()) if x not in SEG_CHORE]:
-            cids = SEG_CHORE.get(seg)
-            cids = [] if cids is None else [cids] if isinstance(cids, str) else list(cids)
+        for seg in list(dict.fromkeys(SEGMENTS + list(SEG_CHORE) + list(SCHEDULE))):
+            cids = list(SEG_CHORE.get(seg) or [])
             rooms = sorted({r for c in cids for r in (chs.get(c, {}).get("map_rooms") or [])})
             last = self.D["visits"].get(seg, 0)
+            sch = SCHEDULE.get(seg) or {}
             d = {"chores": cids, "rooms": rooms, "last_robot": last, "mop": seg in MOP, "eligible": False}
             xs = [b.get(c) or {} for c in cids]
-            names = [chs.get(c, {}).get("name", c) for c in cids]
-            if not cids:
-                d["why"] = "never automatic (no kids' job here)"
-            elif any(c in busy for c in cids) or any(x.get("pending_by") for x in xs):
-                d["why"] = "a job here is in progress or waiting for a check"
-            elif any(not x.get("clean_until") for x in xs):
-                d["why"] = "waiting for a passed tidy: " + ", ".join(n for n, x in zip(names, xs) if not x.get("clean_until"))
-            elif max((x.get("last_clean") or 0) for x in xs) <= last:
-                d["why"] = "already vacuumed since the last tidy"
+            tidied = max([x.get("last_clean") or 0 for x in xs] or [0])
+            d["tidied"] = tidied
+            every = float(sch.get("every_h", EVERY_H)) * 3600
+            d["next_due"] = last + every if last else now
+            if any(c in busy for c in cids) or any(x.get("pending_by") for x in xs):
+                d["why"] = "a kid's job here is in progress or waiting for a check"
+            elif sch.get("nightly_after") and self.nightly_due(sch, last):
+                d["eligible"], d["why"] = True, "nightly" + (" (dinner was eaten here)" if sch.get("needs_dinner") else "")
+            elif not last or now - last >= every:
+                d["eligible"], d["why"] = True, "due: every %g days" % (every / 86400)
+            elif cids and all(x.get("clean_until") for x in xs) and tidied > last:
+                d["eligible"], d["why"] = True, "a tidy just passed (floor clear)"
             else:
-                d["eligible"], d["why"] = True, "goes next time downstairs is empty 20 min"
-            d["tidied"] = max([x.get("last_clean") or 0 for x in xs] or [0])
+                left = every - (now - last)
+                d["why"] = "next due in %s" % (("%dh" % (left // 3600)) if left >= 3600 else ("%dm" % (left // 60)))
+                if sch.get("nightly_after"):
+                    d["why"] += "; nightly after " + sch["nightly_after"] + (" if dinner was eaten here" if sch.get("needs_dinner") else "")
+            if d["eligible"]:
+                d["why"] += " · goes next time the floor is empty 20 min"
             out[seg] = d
         return out
+
+    def nightly_ref(self, after):
+        """The evening this night belongs to: today's `after` time, or yesterday's before the morning end."""
+        n = datetime.fromtimestamp(time.time())
+        hh, mm = (int(x) for x in after.split(":"))
+        ref = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if n < ref:
+            if n.hour >= NIGHT[1]:
+                return None            # daytime: not night yet
+            ref -= timedelta(days=1)   # after midnight: still last night
+        return ref
+
+    def nightly_due(self, sch, last):
+        ref = self.nightly_ref(sch["nightly_after"])
+        if not ref or last >= ref.timestamp():
+            return False
+        return not sch.get("needs_dinner") or self.dinner_eaten(ref)
+
+    def dinner_eaten(self, ref):
+        """Dinner happened in this room tonight: its motion sensor was on >= min_on_min in the dinner window."""
+        if not DINNER.get("sensor"):
+            return False
+        key = ref.strftime("%Y-%m-%d")
+        cache = self.D.setdefault("dinner", {})
+        if key in cache and (cache[key] or time.time() - self.D.get("dinner_ts", 0) < 600):
+            return cache[key]
+        f_, u_ = DINNER.get("from", "16:30"), DINNER.get("until", "20:30")
+        t0 = ref.replace(hour=int(f_[:2]), minute=int(f_[3:]))
+        t1 = ref.replace(hour=int(u_[:2]), minute=int(u_[3:]))
+        on = 0.0
+        try:
+            import urllib.request
+            url = (f"{self.g['HA_URL']}/api/history/period/{urllib.parse.quote(t0.astimezone().isoformat())}"
+                   f"?end_time={urllib.parse.quote(t1.astimezone().isoformat())}&filter_entity_id={DINNER['sensor']}"
+                   "&minimal_response&no_attributes")
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.tok}"})
+            rows = (json.loads(urllib.request.urlopen(req, timeout=20).read()) or [[]])[0]
+            since = None
+            for r in rows:
+                t = max(epoch(r), t0.timestamp())
+                if r.get("state") == "on" and since is None:
+                    since = t
+                elif r.get("state") != "on" and since is not None:
+                    on += t - since
+                    since = None
+            if since is not None:
+                on += min(time.time(), t1.timestamp()) - since
+        except Exception as ex:  # noqa: BLE001
+            self.g["ilog"]({"src": "vac", "action": "dinner_check_failed", "error": repr(ex)})
+            return False
+        ate = on >= float(DINNER.get("min_on_min", 15)) * 60
+        cache[key] = ate
+        self.D["dinner_ts"] = time.time()
+        if len(cache) > 10:
+            for k in sorted(cache)[:-10]:
+                cache.pop(k)
+        return ate
 
     # --- robot room tracking (always on, manual runs count too) -------------------------------
     def track(self, vs, room, now):

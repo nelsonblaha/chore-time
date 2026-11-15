@@ -230,7 +230,19 @@
     "entry_doors": [
       "binary_sensor.front_door",
       "binary_sensor.back_door"
-    ]
+    ],
+    "schedule": {
+      "Kitchen": {
+        "nightly_after": "19:00"
+      }
+    },
+    "every_h": 72,
+    "dinner": {
+      "sensor": "binary_sensor.kitchen_motion",
+      "from": "16:30",
+      "until": "20:30",
+      "min_on_min": 30
+    }
   },
   "grocy": null,
   "dashboard_mirror": null

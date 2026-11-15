@@ -490,9 +490,39 @@ class Vacuum(unittest.TestCase):
         self.p.tick()
         return [c[0] for c in self.calls]
 
-    def test_only_rooms_tidied_since_the_robot_last_came(self):
-        self.board["kitchen"]["last_clean"] = self.now[0] - 9000   # robot already came after this tidy
-        self.assertEqual(self.p.eligible(), ["Family Room"])
+    def at(self, h, m=0, day=15):
+        self.now[0] = datetime(2026, 11, day, h, m).timestamp()
+
+    def status(self):
+        return self.p.segment_status()
+
+    def test_every_room_at_least_every_three_days(self):
+        self.p.D["visits"].update({"Living Room": self.now[0] - 4 * 86400, "Family Room": self.now[0] - 86400})
+        self.board["family_room"]["last_clean"] = self.now[0] - 2 * 86400   # tidied before the robot came
+        st = self.status()
+        self.assertTrue(st["Living Room"]["eligible"])                 # 4 days
+        self.assertFalse(st["Family Room"]["eligible"])                # 1 day, no fresh tidy
+        self.assertTrue(st["Hall"]["eligible"])                        # never cleaned: due (no kids' job needed)
+
+    def test_kitchen_every_night_after_seven(self):
+        self.p.D["visits"]["Kitchen"] = datetime(2026, 11, 15, 9, 0).timestamp()
+        self.board["kitchen"]["last_clean"] = 0                        # no tidy trigger
+        self.at(14)
+        self.assertFalse(self.status()["Kitchen"]["eligible"])         # daytime: not yet
+        self.at(21)
+        self.assertTrue(self.status()["Kitchen"]["eligible"])          # tonight
+        self.p.D["visits"]["Kitchen"] = datetime(2026, 11, 15, 21, 30).timestamp()
+        self.at(23)
+        self.assertFalse(self.status()["Kitchen"]["eligible"])         # done tonight (a manual button run counts too)
+
+    def test_a_passed_tidy_still_triggers_a_clean(self):
+        self.p.D["visits"]["Family Room"] = self.now[0] - 3600
+        self.board["family_room"] = {"clean_until": 1, "last_clean": self.now[0] - 60}
+        self.assertTrue(self.status()["Family Room"]["eligible"])
+
+    def test_a_job_in_progress_blocks_its_room(self):
+        self.board["living_room"]["pending_by"] = ["max"]
+        self.assertFalse(self.status()["Living Room"]["eligible"])
 
     def test_waits_for_twenty_quiet_minutes(self):
         self.S("binary_sensor.kitchen_motion", "off", 600)
@@ -502,8 +532,9 @@ class Vacuum(unittest.TestCase):
 
     def test_vacuum_rooms_before_mop_rooms_and_suction_by_who_is_home(self):
         self.tick()
-        self.assertEqual(self.p.D["groups"][0], {"mode": "vacuum", "rooms": ["Family Room"]})
-        self.assertEqual(self.p.D["groups"][1], {"mode": "vac_and_mop", "rooms": ["Kitchen"]})
+        g = self.p.D["groups"]
+        self.assertEqual([x["mode"] for x in g], ["vacuum", "vac_and_mop"])        # vacuum-only rooms first, then mop rooms
+        self.assertTrue(set(g[1]["rooms"]) <= self.va.MOP and not set(g[0]["rooms"]) & self.va.MOP)
         self.assertEqual(self.p.D["fan"], "turbo")                     # people upstairs, daytime
         self.now[0] = datetime(2026, 11, 15, 21, 0).timestamp()
         self.assertEqual(self.p.tier(), "quiet")                      # 8 PM - 7 AM
