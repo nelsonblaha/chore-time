@@ -56,7 +56,16 @@ h1{font-size:5.5vh;margin:0}
 .tvnews{position:absolute;left:3vw;right:3vw;bottom:6vh;display:flex;align-items:center;gap:1.5vw;background:rgba(255,255,255,.12);border-radius:3vh;padding:1.2vh 2vw;font-size:3.6vh;font-weight:800;min-height:8vh}
 .tvnews .ni{font-size:6vh}.tvnews .nl{font-size:2.4vh;opacity:.7;text-transform:uppercase;letter-spacing:.2vw}
 .foot{position:absolute;bottom:2.5vh;font-size:3vh;opacity:.6}
+#dress{position:fixed;inset:0;z-index:50;display:none;flex-direction:column;align-items:center;justify-content:center;gap:3vh;text-align:center;
+  background:radial-gradient(circle at 50% 35%,#e53935,#7f0000 75%)}
+#dress.on{display:flex}#dress .big{font-size:9vh;font-weight:900;animation:dpulse 1s infinite}
+@keyframes dpulse{50%{transform:scale(1.06)}}
+#dress .clk{font-size:16vh;font-weight:900;font-variant-numeric:tabular-nums;line-height:1}
+#dress .row{display:flex;gap:4vw;font-size:5vh;font-weight:800}#dress .row div{text-align:center}
+#dress .who{display:flex;gap:3vw;font-size:5vh;font-weight:900}#dress .who div{background:rgba(255,255,255,.15);border-radius:3vh;padding:1.5vh 2.5vw}
+#dress .rec{font-size:3.4vh;font-weight:800;opacity:.9}
 </style></head><body>
+<div id="dress"></div>
 <div class="wrap">
   <div class="top">
     <section class="jobs"><div class="hdr" id="jobshd"></div><div class="grid" id="jobs"></div></section>
@@ -114,8 +123,21 @@ function goalOf(S,k){var b=S.balance[k],rs=S.config.rewards.slice().sort(functio
   var r=ch&&rs.find(function(x){return x.id===ch});if(r)return r;var fav=(S.favorite||{})[k];r=fav&&rs.find(function(x){return x.id===fav});if(r)return r;
   return rs.find(function(x){return x.cost>b})||rs[rs.length-1]}
 var VER0=null;
+// "Put on clothes!": the whole screen, a race clock from when the grown-up flipped the switch
+var DRS=null;
+function drawDress(S){var D=S.dress||{},el=document.getElementById("dress");DRS=D.on?D.since:null;
+  if(!D.on){el.className="";return}
+  var K=function(id){return S.config.kids.find(function(k){return k.id===id})||{name:id,icon:"1f642"}},R=(S.records||{}).get_dressed;
+  el.innerHTML='<div class="big">'+E("1f455")+' Put on your clothes NOW!</div><div class="clk" id="dclk"></div>'+
+    '<div class="row"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
+    '<div class="who">'+Object.keys(D.kids||{}).map(function(k){var v=D.kids[k];return '<div>'+E(K(k).icon)+' '+K(k).name+' '+(v==="ready"?E("2705"):v==="waiting"?E("1f50d"):E("23f3"))+'</div>'}).join("")+'</div>'+
+    (R?'<div class="rec">'+E("1f947")+' Record: '+K(R.kid).name+' '+Math.floor(R.sec/60)+':'+("0"+R.sec%60).slice(-2)+'</div>':'<div class="rec">'+E("1f3c3")+' Fastest dresser gets the record!</div>');
+  el.className="on";tickDress()}
+function tickDress(){var c=document.getElementById("dclk");if(!c||!DRS)return;var t=Math.max(0,Math.round(Date.now()/1000-DRS));c.textContent=Math.floor(t/60)+":"+("0"+t%60).slice(-2)}
+setInterval(tickDress,1000);
 function load(){fetch("/api/state").then(function(r){return r.json()}).then(function(S){
   if(S.ver_tv){if(VER0===null)VER0=S.ver_tv;else if(S.ver_tv!==VER0){location.replace(location.pathname+"?v="+Date.now());return}}
+  drawDress(S);
   var h="",ear=S.earned||{},top=Math.max.apply(null,S.config.kids.map(function(k){return S.balance[k.id]})),tope=Math.max.apply(null,S.config.kids.map(function(k){return ear[k.id]||0}));
   S.config.kids.forEach(function(k){var b=S.balance[k.id],p=(S.pending_points||{})[k.id]||0,G=goalOf(S,k.id),gc=G.cost;
     var tro=(top>0&&b===top?E("1f3c6"):"")+(tope>0&&(ear[k.id]||0)===tope?'<span style="filter:grayscale(1) brightness(1.35)">'+E("1f3c6")+'</span>':"");

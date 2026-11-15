@@ -1256,6 +1256,10 @@ class PutOnClothes(Case):
         self.assertTrue(self.app.state()["dress"]["on"])
         self.app.post("/api/inspect", {"ref": ids["max"], "by": "jordan", "ok": True, "points": 0})
         self.assertFalse(self.app.state()["dress"]["on"])                                          # all ready: off
+        st = self.app.state()
+        rep = next(h for h in st["history"] if h.get("id") == ids["ava"])
+        self.assertTrue(rep.get("started"), rep)                               # always a timed race
+        self.assertTrue(any(a["id"].startswith("trophy:get_dressed") and a["sub"].startswith("in ") for a in st["awards"]["ava"]), st["awards"]["ava"])
 
     def test_laundry_toggles_closed_again(self):
         c = self.s.cfg(); c["chores"].append({"id": "wash", "name": "Laundry", "icon": "1f455", "points": 3, "on_demand": True})

@@ -217,8 +217,9 @@ def compute_awards(c, reports, evs, earned, typical):
         add(k, "first:" + cid, ch.get("icon", "1f31f"), "First " + ch.get("name", cid) + "!", "Your first time", ts)
         if ch.get("trophy"):   # a job that pays in trophies, every time (e.g. fixing something that got unplugged)
             t_ = ch["trophy"] if isinstance(ch["trophy"], dict) else {}
+            took_ = r["ts"] - r["started"] if r.get("started") and 0 <= r["ts"] - r["started"] < 4 * 3600 else None
             add(k, "trophy:%s:%d" % (cid, int(ts)), t_.get("icon", "1f3c6"), t_.get("title", ch.get("name", cid) + "!"),
-                t_.get("sub", datetime.fromtimestamp(ts).strftime("%b %-d")), ts)
+                t_.get("sub") or ("in " + fmt_s(took_) if took_ is not None else datetime.fromtimestamp(ts).strftime("%b %-d")), ts)
         if ch.get("bundle"):
             add(k, "bundle:" + cid, "1f3e0", ch.get("name", cid) + "!", "The big job", ts)
         if r.get("started") and r.get("_team"):   # team records: per chore AND team size
@@ -299,7 +300,8 @@ def compute_awards(c, reports, evs, earned, typical):
 
 
 GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "points": 0, "cooldown_h": 0, "shared": True,
-               "hidden": True, "desc": "Clothes, socks and shoes on. Then show a grown-up."}   # the "Put on clothes!" job
+               "hidden": True, "desc": "Clothes, socks and shoes on. Then show a grown-up.",
+               "trophy": {"icon": "1f3c3", "title": "Dressed!"}}   # the "Put on clothes!" job: a timed race, a trophy each time
 
 
 def cfg():
@@ -568,13 +570,37 @@ def watch_hub_motion():
         time.sleep(3)
 
 
+def dress_displays(on, started):
+    """the Hubs show it big: kids' Hubs get their screen back, other displays (dress.displays) get the clothes screen"""
+    for h in HUBS.values():
+        if on and not hub_showing_chores(h["ip"]):
+            ilog({"src": "dress", "action": "cast_hub", "ip": h["ip"]})
+            cast(h["ip"], "/")
+    for d in DRESS.get("displays") or []:
+        if on and d["ip"] not in started:
+            ilog({"src": "dress", "action": "cast_display", "ip": d["ip"]})
+            cast(d["ip"], d.get("path", "/tv"))
+            started.add(d["ip"])
+        elif not on and d["ip"] in started:
+            ilog({"src": "dress", "action": "stop_display", "ip": d["ip"]})
+            subprocess.run([CATT, "-d", d["ip"], "stop"], timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            started.discard(d["ip"])
+
+
 def watch_dress():
+    n, was, started = 0, False, set()
     while True:
-        time.sleep(int(DRESS.get("every_s", 30)))
+        time.sleep(5)
+        n += 1
         try:
-            dress_announce()
+            on = bool((derive().get("dress") or {}).get("on"))
+            if on != was or (on and n % 12 == 0):   # on/off, and once a minute while on (someone may have stopped it)
+                dress_displays(on, started)
+            was = on
+            if on and n % max(1, int(DRESS.get("every_s", 30)) // 5) == 0:
+                dress_announce()
         except Exception as ex:  # noqa: BLE001
-            print("dress announce error", ex, flush=True)
+            print("dress error", ex, flush=True)
 
 
 def chore_closed(ch, board):
@@ -1139,7 +1165,7 @@ def push_state_sensor(state=None, last_result=None):
     state = state or derive()
     keep = ("id", "ts", "type", "kid", "chore", "chore_name", "chore_icon", "status", "points", "awarded",
             "feeling", "inspected_by", "inspect_id", "reason", "by", "reward", "reward_name", "reward_icon", "cost", "tv",
-            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask")
+            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered")
     hist = [{k: h[k] for k in keep if k in h} for h in state["history"][:40]]
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
@@ -1152,7 +1178,8 @@ def push_state_sensor(state=None, last_result=None):
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
              "awards": state.get("awards"), "goals": state.get("goals"), "favorite": state.get("favorite"),
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "version": state.get("version"),
-             "households": state.get("households"), "kid_where": state.get("kid_where")}
+             "households": state.get("households"), "kid_where": state.get("kid_where"),
+             "dress": state.get("dress"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
     if last_result is not None:
         attrs["last_result"] = last_result
     elif GLOBAL_LAST.get("r"):
@@ -1796,6 +1823,8 @@ class H(BaseHTTPRequestHandler):
                     extra["team"] = [b["kid"]] + [m for m in act["team"] if m != b["kid"]]
                     if act.get("split"):
                         extra["split"] = act["split"]
+            if b["chore"] == "get_dressed" and (st.get("dress") or {}).get("on"):
+                extra["started"] = st["dress"]["since"]   # the race clock starts when the grown-up flips the switch (always timed)
             if ch_.get("together") and not set(ch_.get("only") or []) <= set(extra.get("team") or [b["kid"]]):
                 return self.send(409, {"error": "do it together: team up first"})
             ev = append({"type": "report", "kid": b["kid"], "chore": b["chore"],
@@ -2812,8 +2841,13 @@ def watch_tvs():
             GUARD["mode"] = {"on": on, "auto": auto_on, "override": bool(ov), "by": (ov or {}).get("by"), "next_change": nxt.timestamp(),
                              "chill": chill, "recent_jobs": len(recent), **ainfo}
             end = (aend if (on and auto_on) else nxt.timestamp()) if on else None
+            dress_on = bool((st_.get("dress") or {}).get("on"))   # "Put on clothes!" takes every TV in use, no grace
+            if dress_on and not end:
+                end = time.time() + 60
+            if dress_on:
+                GUARD["grace"], GUARD["finish"] = {}, {}
             GUARD["lock_until"] = end or 0
-            want = "on" if on else "off"   # HA's chore_time switch mirrors the effective state
+            want = "on" if on else "off"   # HA's chore_time switch mirrors the effective state (not the dressing race)
             if ha_get(CT_SWITCH, tok).get("state") != want:
                 ha_call("input_boolean.turn_" + want, {"entity_id": CT_SWITCH}, tok)
             if not end:
@@ -2844,7 +2878,7 @@ def watch_tvs():
                 was_on = False
                 time.sleep(3)
                 continue
-            if not was_on:  # just switched on: let anything already playing finish its episode
+            if not was_on and not dress_on:  # just switched on: let anything already playing finish its episode
                 GUARD["grace"] = {}
                 for tid, t in TVS.items():
                     what, _ = tv_status(t, tok)
@@ -2882,6 +2916,8 @@ def watch_tvs():
             for tid, t in TVS.items():
                 what, dur = tv_status(t, tok)
                 allowed = False
+                if dress_on:   # no TV time for anyone until they're dressed: straight to the clothes screen
+                    unl = {}
                 # separate purchases on one TV run back to back; a "together" group shares one clock
                 running = [v for v in unl.get(tid, []) if not v.get("armed") and v["what"] != "vr" and v["until"] > time.time()]
                 if running:
