@@ -215,6 +215,10 @@ def compute_awards(c, reports, evs, earned, typical):
         if len(days[k]) in DAY_MILESTONES:
             add(k, "days:%d" % len(days[k]), "1f4c5", "Busy %d days!" % len(days[k]), "Jobs on %d different days" % len(days[k]), ts)
         add(k, "first:" + cid, ch.get("icon", "1f31f"), "First " + ch.get("name", cid) + "!", "Your first time", ts)
+        if ch.get("trophy"):   # a job that pays in trophies, every time (e.g. fixing something that got unplugged)
+            t_ = ch["trophy"] if isinstance(ch["trophy"], dict) else {}
+            add(k, "trophy:%s:%d" % (cid, int(ts)), t_.get("icon", "1f3c6"), t_.get("title", ch.get("name", cid) + "!"),
+                t_.get("sub", datetime.fromtimestamp(ts).strftime("%b %-d")), ts)
         if ch.get("bundle"):
             add(k, "bundle:" + cid, "1f3e0", ch.get("name", cid) + "!", "The big job", ts)
         if r.get("started") and r.get("_team"):   # team records: per chore AND team size
@@ -452,11 +456,58 @@ def grocy_chore_userfields(gid, x, more, new=False):
     return uf
 
 
+# A "fix it" job that only exists while a device is down: chores[].when_down = [HA entities] shows the job once any of
+# them has been unavailable for down_min minutes (default 10), e.g. "plug the sensor back in". watch_when_down keeps DOWN.
+DOWN = {}   # entity -> when it went unavailable
+
+
+def device_down(ch, now=None):
+    now = now or time.time()
+    return any(now - DOWN[e] >= float(ch.get("down_min", 10)) * 60 for e in ch.get("when_down") or [] if e in DOWN)
+
+
+def next_step(ch, team, act):
+    """what a kid still has to do for a job in progress (chores[].remind: shown each time they open their screen)"""
+    if ch.get("id") in ((envelopes.public() or {}).get("chores") or []):
+        printed = max([envelopes.PRINTED.get(m, 0) for m in team] or [0]) >= act.get("ts", 0) - 60
+        return envelopes.public()["handoff"] + " Then tap " + envelopes.public()["handoff_done"] if printed else \
+            "Finish writing, then tap I'm done on the Google screen to print the envelope."
+    return ch.get("remind_text") or "Finish it, then tap I'm done."
+
+
+def watch_when_down():
+    while True:
+        try:
+            tok, changed = ha_token(), False
+            ents = {e for ch in cfg()["chores"] for e in ch.get("when_down") or []}
+            for e in ents:
+                st_ = (ha_get(e, tok) or {}).get("state")
+                if st_ in (None, "unavailable", "unknown"):
+                    if e not in DOWN:
+                        DOWN[e] = time.time()
+                        ilog({"src": "when_down", "entity": e, "state": "down"})
+                    changed = changed or any(time.time() - DOWN[e] >= float(ch.get("down_min", 10)) * 60 - 60
+                                             for ch in cfg()["chores"] if e in (ch.get("when_down") or []))
+                elif e in DOWN:
+                    DOWN.pop(e)
+                    ilog({"src": "when_down", "entity": e, "state": "back"})
+                    changed = True
+            for e in [x for x in DOWN if x not in ents]:
+                DOWN.pop(e)
+            if changed:
+                after_change()
+        except Exception as ex:  # noqa: BLE001
+            print("when_down error", ex, flush=True)
+        time.sleep(60)
+
+
 def chore_closed(ch, board):
     """why a chore is unavailable right now (None = open): daylight-only after dark, one-time already done,
     outside its from/until dates (e.g. cleaning the car only in daylight; a one-time job)"""
     from datetime import date
     today = date.today().isoformat()
+    if ch.get("when_down") and not device_down(ch):
+        return "fine"   # nothing unplugged: no job
     if ch.get("daylight") and not (GUARD.get("sun_up", True) if "GUARD" in globals() else True):
         return "dark"
     if ch.get("once") and (board.get(ch["id"]) or {}).get("last_clean"):
@@ -936,7 +987,9 @@ def derive():
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public()}
+            "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
+            "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
+                          if (chores.get(a["chore"]) or {}).get("remind") for m in (a.get("team") or [k])}}
 
 
 def push_ha(state):
@@ -1409,6 +1462,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, envelopes.status(job))
             except Exception as ex:  # noqa: BLE001
                 return self.send(200, {"state": "unknown", "problem": None, "error": str(ex)[:120]})
+        if p.startswith("/api/chore_photo/"):   # a photo that shows the kids where a job is (chores[].photo, in data/photos)
+            ch_ = next((x for x in cfg()["chores"] if x["id"] == p.rsplit("/", 1)[1]), None)
+            f = (DATA / "photos" / str((ch_ or {}).get("photo") or "-"))
+            if not ch_ or not ch_.get("photo") or not f.is_file() or f.resolve().parent != (DATA / "photos").resolve():
+                return self.send(404, {"error": "no photo"})
+            return self.send(200, f.read_bytes(), "image/jpeg")
         if p == "/api/envelope_photo":   # how to put an envelope in the printer (a photo in the data folder)
             f = DATA / str(envelopes.CFG.get("load_photo") or "-")
             if not envelopes.CFG.get("load_photo") or not f.is_file() or f.resolve().parent != DATA.resolve():
@@ -1642,6 +1701,8 @@ class H(BaseHTTPRequestHandler):
                                           any(z["chore"] == b["chore"] and b["kid"] not in z["team"] for z in st["paused"].values())):
                 return self.send(409, {"error": "someone else is doing it"})
             act = st["active"].get(b["kid"])
+            if not act or act["chore"] != b["chore"]:   # moved on to another job but still on this one's team (a shared letter)
+                act = next((a for a in st["active"].values() if a["chore"] == b["chore"] and b["kid"] in (a.get("team") or [])), act)
             if act and act["chore"] == b["chore"]:
                 if act.get("round"):
                     extra["round"] = act["round"]
@@ -3632,6 +3693,7 @@ def start_modules():
         go("home-days", watch_home_days)          # streaks skip days a kid was away
         if any(k.get("where") for k in cfg()["kids"]):
             go("kid-where", watch_kid_where)      # which household each kid is at (two-household families)
+            go("when-down", watch_when_down)      # "plug it back in" jobs appear while a device is unavailable
         if TVS or HUBS:
             go("tv-guard", watch_tvs)             # chore time, TV locks, Hub keeper, bedtime holds
         if LAUNCHERS:

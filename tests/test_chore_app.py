@@ -1201,5 +1201,39 @@ class Envelopes(Case):
         self.assertTrue(r2["event"]["delivered"])                    # handed over before reporting
         self.assertIn("handoff_done", self.app.state()["envelope"])
 
+
+class FixItJobs(Case):
+    """'Plug it back in': a job that exists only while a device is down, pays a trophy; reminders show the next step."""
+
+    def setUp(self):
+        super().setUp()
+        c = self.s.cfg()
+        c["chores"] += [{"id": "plug", "name": "Plug the sensor in", "icon": "1f50c", "points": 0, "cooldown_h": 0,
+                         "when_down": ["binary_sensor.sensor"], "down_min": 10, "trophy": {"title": "Fixer!"}},
+                        {"id": "letter", "name": "Letter", "icon": "1f48c", "points": None, "shared": True, "remind": True}]
+        self.s.save_cfg(c)
+        self.addCleanup(self.s.DOWN.clear)
+
+    def visible(self):
+        return {x["id"] for x in self.app.state()["config"]["chores"] if not x.get("hidden")}
+
+    def test_only_while_the_device_has_been_down_ten_minutes(self):
+        self.assertNotIn("plug", self.visible())
+        self.s.DOWN["binary_sensor.sensor"] = time.time() - 60
+        self.assertNotIn("plug", self.visible())                       # a blip
+        self.s.DOWN["binary_sensor.sensor"] = time.time() - 700
+        self.assertIn("plug", self.visible())
+
+    def test_every_fix_earns_a_trophy(self):
+        self.s.DOWN["binary_sensor.sensor"] = time.time() - 700
+        for _ in range(2):
+            self.app.pass_report("max", "plug", points=0)
+        mine = [a for a in self.app.state()["awards"]["max"] if a["id"].startswith("trophy:plug")]
+        self.assertEqual((len(mine) >= 1, mine[0]["title"]), (True, "Fixer!"))
+
+    def test_a_remind_job_in_progress_shows_its_next_step(self):
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "letter"})[0], 200)
+        self.assertIn("I'm done", self.app.state()["next_step"]["max"])
+
 if __name__ == "__main__":
     unittest.main()
