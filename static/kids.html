@@ -222,7 +222,7 @@ canvas#fx{position:absolute;inset:0;pointer-events:none;z-index:30}
   .kidcard .face{font-size:96px}#pick .row{flex-direction:column}
   .chores{grid-template-columns:repeat(3,1fr)}
 }
-html.locked #exit,html.locked #home{display:none!important}
+html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{display:none!important}
 </style></head>
 <body>
 <div id="bed" style="display:none;position:fixed;inset:0;z-index:60;background:radial-gradient(circle at 50% 30%,#1b2a5e,#070b1f);color:#fff;text-align:center;flex-direction:column;align-items:center;justify-content:center;gap:2vh"></div>
@@ -311,7 +311,8 @@ function api(path,body){return fetch(path,{method:body?"POST":"GET",headers:{"Co
 /* Inside Home Assistant (served from /local/, e.g. a child's own tab at their other home): state comes from
    sensor.chore_state and actions go through the input_text relay, signed by the viewer's HA login; the server only
    lets that login act for the children it is allowed (home_assistant.user_kids). ?kid=<id> locks the screen to one child. */
-var HA_MODE=location.pathname.indexOf("/local/")===0,LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search);
+var HA_MODE=location.pathname.indexOf("/local/")===0,LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search),
+    LOCK_KID=LOCKED?(location.search.match(/[?&]kid=([a-z]+)/)||[])[1]:null;
 if(HA_MODE){
   var hass=function(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}};
   var haState=function(){var h=hass(),st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));
@@ -383,7 +384,7 @@ function drawBed(){var B=S.bedtime||{},el=$("bed");if(!B.on){if(el.style.display
   if(el.style.display==="none"){L("bed_on");if(kid)goHome("bedtime");else closeModal()}
   var bt=S.config.chores.find(function(c){return c.bedtime_ok}),done=bt?((S.board[bt.id]||{}).done_today||[]):[],pend=bt?((S.board[bt.id]||{}).pending_by||[]):[];
   var h='<div style="font-size:22vh;line-height:1">'+E("1f319")+'</div><div style="font-size:7vh;font-weight:900">Bedtime!</div><div style="font-size:4vh;opacity:.85">Time to go to bed. Good night '+E("1f634")+'</div>';
-  if(bt){h+='<div style="display:flex;gap:2vw;margin-top:2vh">'+S.config.kids.map(function(k){var d=done.indexOf(k.id)>=0;
+  if(bt){h+='<div style="display:flex;gap:2vw;margin-top:2vh">'+S.config.kids.filter(function(k){return !LOCKED||k.id===LOCK_KID}).map(function(k){var d=done.indexOf(k.id)>=0;
       var w=pend.indexOf(k.id)>=0;   // reported, waiting for a grown-up to check; passed -> off to bed
       return '<div class="bedk" data-bk="'+k.id+'" style="background:'+k.color+';border-radius:3vh;padding:1.5vh 2vw;font-size:3.4vh;font-weight:900">'+E(k.icon)+' '+k.name+'<br>'+
         (w?E("1f50d")+' waiting for a grown-up':d?E("1f6cf")+' Go to bed!':E(bt.icon)+' '+bt.name)+'</div>'}).join("")+'</div>'}
