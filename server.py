@@ -369,6 +369,8 @@ def chore_closed(ch, board):
         return "done"
     if ch.get("slot") and (board.get(ch["id"]) or {}).get("claim_done"):
         return "done"
+    if ch.get("on_demand") and not (board.get(ch["id"]) or {}).get("opened") and not (board.get(ch["id"]) or {}).get("pending_by"):
+        return "on_demand"   # e.g. laundry: only after a grown-up opens it (machines ran), gone again once it's done
     if (ch.get("until") and today > ch["until"]) or (ch.get("from") and today < ch["from"]):
         return "dates"
     if ch.get("after") or ch.get("before"):   # brush teeth from 7:30 PM; shower 7:30-8:30 PM
@@ -653,7 +655,7 @@ def derive():
                       "part_paid": part_paid, "rest_note": rest_note, "is_rest": is_rest, "note": note_, "note_by": note_by,
                       "tour_seen": max([e["ts"] for e in evs if e["type"] in ("tour_seen", "price", "note", "reopen", "mark_clean") and e.get("chore") == cid] or [0]),
                       "clean_until": clean_until if clean_until > time.time() else 0,
-                      "last_clean": last_ok, "pending_by": pend_by}
+                      "last_clean": last_ok, "pending_by": pend_by, "opened": reopened}
     # once per day per kid (e.g. brush teeth): who has already done it today (pending or passed)
     from datetime import datetime as _dt
     midnight = _dt.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()

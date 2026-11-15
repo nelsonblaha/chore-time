@@ -46,6 +46,7 @@ The reward ids `show`, `movie` and `games` unlock TVs: streaming/casting, stream
 | `daily`, `weekly` | done for the day / week (`weekly: {"open_dow": 0, "due_dow": 4}`) |
 | `daylight` | closed after sunset (needs Home Assistant's `sun`) |
 | `once` | disappears after it passes once |
+| `on_demand` | hidden until a grown-up opens it (a button on the parents' page), e.g. laundry after running the machines; hidden again once it passes |
 | `from`, `until` | ISO dates when it's available |
 | `price_dates` | `{"2026-12-24": 8}`: a different price on one day |
 | `slot` | `{"dow": 5, "time": "10:00"}`: one kid claims each week's slot ahead of time |

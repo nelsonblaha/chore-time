@@ -55,6 +55,7 @@ def base_config():
              "each_daily": True, "after": "00:00", "bedtime_ok": True, "desc_for": {"ava": "Brush your teeth and clean your earring holes."}},
             {"id": "shower", "name": "Shower", "icon": "1f6bf", "points": 2, "cooldown_h": 0, "shared": True,
              "each_daily": True, "each_days": 2, "after": "00:00", "before": "23:59"},
+            {"id": "laundry", "name": "Put away laundry", "icon": "1f455", "points": 3, "room": True, "cooldown_h": 72, "on_demand": True},
             {"id": "piano", "name": "Practice piano", "icon": "1f4d6", "points": 3, "cooldown_h": 0,
              "slot": {"dow": 6, "time": "11:00"}, "price_dates": {}},
         ],
@@ -201,6 +202,15 @@ class Availability(Case):
         self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "car"})[0], 409)
         self.s.GUARD["sun_up"] = True
         self.assertIsNone(self.closed("car"))
+
+    def test_on_demand_job_only_after_a_grownup_opens_it(self):
+        # laundry: there's only laundry when the machines ran; a grown-up opens it from the parents page
+        self.assertEqual(self.closed("laundry"), "on_demand")
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "laundry"})[0], 409)
+        self.assertEqual(self.app.post("/api/reopen", {"chore": "laundry", "by": "jordan"})[0], 200)
+        self.assertIsNone(self.closed("laundry"))
+        self.app.pass_report("max", "laundry", points=3)
+        self.assertEqual(self.closed("laundry"), "on_demand")                       # done: gone until next time
 
     def test_one_time_chore_closes_after_it_passes(self):
         self.assertIsNone(self.closed("book_pick"))

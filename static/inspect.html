@@ -402,10 +402,15 @@ function render(){
     (choreOn?tvRows.join(""):'')+
     (grants.length?'<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null;return '<div style="opacity:.9;font-size:14px">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</div>'}).join("")+'</div>':'')+
     (choreOn&&open?'<div class="row" style="margin-top:8px"><button data-ta="*:five">⏱️ 5-min countdown</button><button data-ta="*:minus">−10</button><button data-ta="*:plus">+10</button><button class="no" style="background:#fff" data-ta="*:lock">🔒 Lock now</button></div>':'')+'</div>';
+  // on-demand jobs (e.g. laundry after running the machines): a grown-up opens them; hidden from kids otherwise
+  var OD=S.config.chores.filter(function(c){return c.on_demand});
+  if(OD.length)tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap">'+OD.map(function(c){var b=S.board[c.id]||{},open=b.opened||(b.pending_by||[]).length;
+    return '<button class="'+(open?'':'ok')+'" data-od="'+c.id+'" '+(open?'disabled':'')+'>'+E(c.icon)+' '+(open?esc(c.name)+' is open for the kids':'Open '+esc(c.name)+' for the kids')+'</button>'}).join("")+'</div>';
   var BT=S.bedtime||{};
   tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
   tb+='<div class="mute" style="margin-top:6px">Only enforced while Chore time is on. The speaker warns 5 minutes before a TV locks. A TV that reports the episode\'s end lets a show finish (never past an hour into one title; a new episode, pause or app switch locks it). Others lock on the timer.</div>';
   $("tvbox").innerHTML=tb;
+  document.querySelectorAll("[data-od]").forEach(function(b){b.onclick=function(){post("/api/reopen",{chore:b.dataset.od},"Open: the kids can do it now")}});
   if($("bedbtn"))$("bedbtn").onclick=function(){post("/api/bedtime",{on:!(S.bedtime||{}).on},(S.bedtime||{}).on?"Bedtime ended":"Bedtime! Screens are sending them to bed")};
   document.querySelectorAll("[data-ta]").forEach(function(b){b.onclick=function(){var a=b.dataset.ta.split(":");
     post("/api/tv/adjust",{tv:a[0],action:a[1]},{five:"5-minute countdown started",plus:"+10 min",minus:"−10 min",lock:"Locked"}[a[1]])}});
