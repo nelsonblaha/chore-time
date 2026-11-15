@@ -179,8 +179,11 @@ class Pilot:
                 continue
             if e in ENTRY_DOORS:
                 return e
-            if e in ENTRY_SENSORS and seg not in robot:
-                return e
+            # an entry sensor (stairs) alone is NOT enough: it also sees people moving around the floor above.
+            # It counts once another sensor on THIS floor, away from the robot, follows within a minute.
+            if e in ENTRY_SENSORS and seg not in robot and any(
+                    e2 != e and e2 not in ENTRY_DOORS and s2 not in robot and 0 <= t2 - t0 <= 60 for t2, e2, s2 in trig):
+                return e + " then " + next(e2 for t2, e2, s2 in trig if e2 != e and e2 not in ENTRY_DOORS and s2 not in robot and 0 <= t2 - t0 <= 60)
         segs = {seg for t0, e, seg in trig if now - t0 <= PATH_WINDOW_S and seg not in robot and seg != "door"}
         if len(segs) >= 2:
             return "walked through " + ", ".join(sorted(segs))

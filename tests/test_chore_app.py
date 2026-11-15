@@ -524,10 +524,19 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.living_room_motion", "on")
         self.assertNotIn("vacuum.pause", self.tick())
 
+    def test_stairs_alone_is_someone_upstairs_not_a_person_coming_down(self):
+        # the stairs sensor fired with the upstairs hall's: someone on the landing, nobody came down
+        self.run_into_living_room()
+        self.S("binary_sensor.stairs_motion", "on")
+        self.assertNotIn("vacuum.pause", self.tick())
+
     def test_person_pauses_resumes_after_three_quiet_minutes(self):
         self.run_into_living_room()
         self.S("binary_sensor.stairs_motion", "on")
+        self.tick()
+        self.S("binary_sensor.kitchen_motion", "on")      # ...and then shows up downstairs
         self.assertIn("vacuum.pause", self.tick())
+        self.S("binary_sensor.kitchen_motion", "off", 0)
         self.S(self.va.VAC, "paused")
         self.S("binary_sensor.stairs_motion", "off", 0)
         self.assertNotIn("vacuum.send_command", self.tick(60))
@@ -553,9 +562,10 @@ class Vacuum(unittest.TestCase):
 
     def test_person_who_stays_ten_minutes_sends_it_home(self):
         self.run_into_living_room()
-        self.S("binary_sensor.entry_motion", "on")
+        self.S("binary_sensor.front_door", "on")   # came in the front door
         self.tick()
         self.S(self.va.VAC, "paused")
+        self.S("binary_sensor.entry_motion", "on")  # ...and stays in the entry hall
         self.assertIn("vacuum.return_to_base", self.tick(610))
 
     def test_paused_time_does_not_count_as_cleaning_a_room(self):
