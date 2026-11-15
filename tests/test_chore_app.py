@@ -390,6 +390,20 @@ class SonyInputs(Case):
             self.app.set('sensor.explicit_display','active',lease_until=until)
             self.assertFalse(self.s.external_display_active(self.t,players,'x'))
 
+    def test_rendered_display_uses_direct_receiver_proof_before_ha_metadata_catches_up(self):
+        self.t.update(external_display_entity='sensor.explicit_display',external_display_app_id='custom-display')
+        self.app.set(self.t['remote'],'on',current_activity='com.google.android.apps.mediashell')
+        players=[{'state':'off','attributes':{}}, {'state':'idle','attributes':{'app_id':self.s.DASHCAST_APP_ID}}]
+        attrs=dict(lease_until=time.time()+40,receiver_connected=True,receiver_app='custom-display')
+        self.app.set('sensor.explicit_display','active',**attrs)
+        self.assertTrue(self.s.external_display_active(self.t,players,'x'))
+        for patch in ({'receiver_connected':False},{'receiver_app':self.s.DASHCAST_APP_ID},{'lease_until':time.time()-1}):
+            self.app.set('sensor.explicit_display','active',**{**attrs,**patch})
+            self.assertFalse(self.s.external_display_active(self.t,players,'x'))
+        self.app.set('sensor.explicit_display','active',**attrs)
+        self.app.set(self.t['remote'],'on',current_activity='com.netflix.ninja')
+        self.assertFalse(self.s.external_display_active(self.t,players,'x'))
+
 
 class FinishTheShow(Case):
     def test_netflix_reports_no_end_so_no_finishing(self):

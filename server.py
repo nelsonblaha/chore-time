@@ -2746,6 +2746,13 @@ def external_display_active(t, players, tok):
     # handoff; the display controller withdraws it after its 75-second deadline.
     if st.get("state")=="loading":
         return True
+    # Render confirmation can reach HA before its Cast integration catches up.
+    # The explicit controller reads the receiver directly; its fresh lease and
+    # matching live receiver are sufficient even while players still say Off
+    # or DashCast. Native input and lease-expiry gates above still take priority.
+    attrs=st.get("attributes",{})
+    if attrs.get("receiver_connected") is True and attrs.get("receiver_app")==t["external_display_app_id"]:
+        return True
     return any(p.get("attributes",{}).get("app_id")==t["external_display_app_id"] for p in players)
 
 
