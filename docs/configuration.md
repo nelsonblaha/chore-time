@@ -25,6 +25,7 @@ The data folder also holds `ledger.jsonl` (every event, append-only) and some sm
     {"id": "vr", "name": "VR", "icon": "1f97d", "cost": 2, "minutes": 5, "break_min": 30}
   ],
   "bedtime": "20:30",                                 // or "off"
+  "households": [{"id": "dad", "name": "Dad's house"}, {"id": "mom", "name": "Mom's house"}],   // optional, see below
   "chores": [ ... ]
 }
 ```
@@ -55,7 +56,22 @@ The reward ids `show`, `movie` and `games` unlock TVs: streaming/casting, stream
 | `propose`, `propose_max` | the kid suggests their own price |
 | `surface` | a table or desk: never makes its room show dirty on a map |
 | `map_rooms`, `floor`, `where`, `desc`, `desc_for` | where it is, and a description (`desc_for` = per kid) |
+| `household` | for two-home families: the household id it belongs to, or `"any"` (homework, brush teeth). Default: the first household |
 | `hidden` | resting, not shown |
+
+### Two households
+
+A child who lives in two homes can use Chore Time in both. Add `households` (the first is the default home of every job
+and reward), give jobs and rewards a `household` (or `"any"`), and tell Chore Time where the child is:
+
+```jsonc
+"kids": [{"id": "zoe", ..., "where": {"entity": "input_boolean.casey_home", "on": "dad", "off": "mom"}}]
+```
+
+The child's board then shows that home's jobs and rewards plus the `"any"` ones, and the server refuses the others. Stars
+are one balance across both homes. The other parent can sign in through Home Assistant: give their HA login a view with
+the kids' screen locked to their child (`/local/<kids page>?kid=zoe`, served from Home Assistant's `www` folder) and limit
+what that login may do with `home_assistant.user_kids` in house.json (`{"<HA user id>": ["zoe"]}`).
 
 ## house.json
 
