@@ -581,6 +581,9 @@ def derive():
             reports[e["ref"]]["inspecting"] = {"by": e["by"], "ts": e["ts"]}
         if e["type"] == "split" and e.get("ref") in reports:
             reports[e["ref"]]["split"] = dict(e["split"])
+        if e["type"] == "reteam" and e.get("ref") in reports:   # a grown-up corrected who did it
+            reports[e["ref"]]["team"] = list(e["team"])
+            reports[e["ref"]]["kid"] = e["team"][0]
         if e["type"] == "priority" and e["ref"] in reports:
             reports[e["ref"]]["priority"] = e["ts"]
         if e["type"] == "refeel" and e["ref"] in reports:
@@ -1574,6 +1577,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "presumed clean"})
             if bd["pending_by"] and chores[b["chore"]].get("room"):
                 return self.send(409, {"error": "already waiting for inspection"})
+            if b["chore"] != "other" and b["kid"] in (bd.get("pending_by") or []):   # the same kid twice (a second tap on a waiting tile)
+                return self.send(409, {"error": "already waiting for inspection"})
             extra = {}
             if b["chore"] == "toy_swap":
                 kc = next(k for k in c["kids"] if k["id"] == b["kid"])
@@ -1646,6 +1651,13 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "already inspected"})
             ok = bool(b.get("ok", True))
             pts = b.get("points", r.get("points"))
+            if ok and isinstance(b.get("award"), dict):   # a grown-up decides who did it and what each kid gets
+                award = {k: max(0, min(50, int(v or 0))) for k, v in b["award"].items() if k in kids}
+                order = [r["kid"]] + [k["id"] for k in c["kids"] if k["id"] != r["kid"]]   # the reporter first
+                team = [k for k in order if award.get(k)] or [r["kid"]]
+                append({"type": "reteam", "ref": r["id"], "team": team, "by": b["by"]})
+                append({"type": "split", "ref": r["id"], "split": {k: award.get(k, 0) for k in team}, "by": b["by"]})
+                pts = sum(award.get(k, 0) for k in team)
             if ok and (pts is None or int(pts) < 0 or int(pts) > 50):
                 return self.send(400, {"error": "points required"})
             extra = {}

@@ -1022,6 +1022,33 @@ class Pages(unittest.TestCase):
 
 
 
+class FixAJob(Case):
+    """A grown-up corrects a waiting job: who did it and what each kid gets; a duplicate report is thrown out."""
+
+    def test_award_each_kid_and_drop_the_duplicate(self):
+        code, r1 = self.app.post("/api/report", {"kid": "max", "chore": "kitchen", "feeling": "ok"})
+        code, r2 = self.app.post("/api/report", {"kid": "ava", "chore": "living_room", "feeling": "ok"})
+        self.assertEqual(code, 200, r2)
+        before = self.app.state()["balance"]
+        self.assertEqual(self.app.post("/api/undo", {"ref": r2["event"]["id"], "by": "jordan"})[0], 200)
+        code, r = self.app.post("/api/inspect", {"ref": r1["event"]["id"], "by": "jordan", "ok": True, "points": 0,
+                                                 "award": {"ava": 3, "max": 1, "nobody": 9}})
+        self.assertEqual(code, 200, r)
+        st = self.app.state()
+        self.assertEqual(st["balance"]["ava"] - before["ava"], 3)
+        self.assertEqual(st["balance"]["max"] - before["max"], 1)
+        rep = next(h for h in st["history"] if h.get("id") == r1["event"]["id"])
+        self.assertEqual((rep["team"], rep["awarded"]), (["max", "ava"], 4))
+        self.assertFalse(any(h.get("id") == r2["event"]["id"] and h.get("status") == "pending" for h in st["history"]))
+
+
+    def test_the_same_kid_cannot_report_a_waiting_job_twice(self):
+        c = self.s.cfg(); c["chores"].append({"id": "letter", "name": "Letter", "icon": "1f48c", "points": None, "shared": True, "propose": True})
+        self.s.save_cfg(c)
+        self.assertEqual(self.app.post("/api/report", {"kid": "max", "chore": "letter", "feeling": "ok", "ask": 2})[0], 200)
+        self.assertEqual(self.app.post("/api/report", {"kid": "max", "chore": "letter", "feeling": "ok", "ask": 2})[0], 409)
+        self.assertEqual(self.app.post("/api/report", {"kid": "ava", "chore": "letter", "feeling": "ok", "ask": 2})[0], 200)   # her own
+
 class ChoreForm(Case):
     """The parents' full chore form: subtitle, one-time, a room (floor + robot-map id), who, which house, times."""
     config = two_houses()

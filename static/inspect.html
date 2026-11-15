@@ -281,6 +281,29 @@ function renderChoreForm(){if($("cfname"))return;var c=CHFORM.id?choreOf(CHFORM.
     if($("cfhouse"))ch.household=$("cfhouse").value;
     post("/api/chore",{chore:ch},(ed?"Saved ":"Added ")+nm).then(closePM)};
   setTimeout(function(){if(!ed)$("cfname").focus()},50)}
+// Fix a waiting job: who really did it and what each kid gets (any split), or throw out a duplicate report.
+var FIXJOB=null;
+function renderFixJob(){var r=S.history.find(function(h){return h.id===FIXJOB});if(!r||r.status!=="pending"){closePM();return}
+  if($("fxgo"))return;
+  var team=r.team||[r.kid],tot=r.points!=null?r.points:(r.ask!=null?r.ask:0),sh={};
+  team.forEach(function(m,i){sh[m]=(r.split&&r.split[m]!=null)?+r.split[m]:Math.floor(tot/team.length)+(i<tot%team.length?1:0)});
+  var dups=S.history.filter(function(h){return h.type==="report"&&h.status==="pending"&&h.id!==r.id&&h.chore===r.chore});
+  $("pmbody").innerHTML='<h2 class="h2b">'+E(r.chore_icon)+' Fix: '+esc(r.chore_name)+'</h2>'+
+    '<div class="mute">'+esc(kidOf(r.kid).name)+' reported it '+ago(r.ts)+(r.ask!=null?' · asked '+r.ask+' ⭐':'')+(r.note?' · “'+esc(r.note)+'”':'')+'</div>'+
+    (dups.length?'<div class="card" style="margin-top:8px">⚠️ '+dups.length+' more waiting report'+(dups.length>1?'s':'')+' for this job ('+dups.map(function(d){return esc(kidOf(d.kid).name)+' '+ago(d.ts)}).join(", ")+'). If they\'re the same job, remove the extra one.</div>':'')+
+    '<label class="cfl">Stars for each kid <span class="mute">0 = didn\'t do it</span></label>'+
+    S.config.kids.map(function(k){var v=sh[k.id]||0;return '<div class="cfrow fxrow" style="align-items:center;margin:6px 0"><span style="flex:1">'+E(k.icon)+' '+esc(k.name)+'</span>'+
+      '<button data-fd="'+k.id+'" data-d="-1">−</button><input class="cfi fxv" data-k="'+k.id+'" type="number" min="0" max="50" value="'+v+'" style="width:5em;text-align:center"><button data-fd="'+k.id+'" data-d="1">＋</button></div>'}).join("")+
+    '<div class="mute" id="fxsum"></div>'+
+    '<label class="cfl">Note <span class="mute">optional, kids see it</span></label><input id="fxlbl" class="cfi" maxlength="60" placeholder="e.g. one wrote it, the other drew the picture">'+
+    '<div class="cfrow" style="margin-top:14px"><button class="ok tvgo" id="fxgo">Pass with these stars</button><button class="no" id="fxdel">Remove this report</button></div>';
+  var sum=function(){var t=0;document.querySelectorAll(".fxv").forEach(function(x){t+=Math.max(0,+x.value||0)});$("fxsum").textContent="Total "+t+" ⭐";return t};sum();
+  document.querySelectorAll(".fxv").forEach(function(x){x.oninput=sum});
+  document.querySelectorAll("[data-fd]").forEach(function(b){b.onclick=function(){var x=document.querySelector('.fxv[data-k="'+b.dataset.fd+'"]');x.value=Math.max(0,Math.min(50,(+x.value||0)+(+b.dataset.d)));sum()}});
+  $("fxdel").onclick=function(){var b=this;if(!b.dataset.sure){b.dataset.sure=1;b.textContent="Tap again to remove it (no stars)";return}
+    post("/api/undo",{ref:r.id},"Report removed").then(closePM)};
+  $("fxgo").onclick=function(){var aw={};document.querySelectorAll(".fxv").forEach(function(x){var v=Math.max(0,+x.value||0);if(v)aw[x.dataset.k]=v});
+    post("/api/inspect",{ref:r.id,ok:true,award:aw,points:0,label:$("fxlbl").value.trim()},"Passed: "+(Object.keys(aw).map(function(k){return kidOf(k).name+" "+aw[k]}).join(", ")||"no stars")).then(closePM)}}
 function renderMostly(){var r=S.history.find(function(h){return h.id===MOSTLY});if(!r){closePM();return}var k=kidOf(r.kid);
   if($("mnow"))return;  // keep what the parent is typing
   $("pmbody").innerHTML='<h2 class="h2b">🧩 Mostly done</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><span class="mute">full job '+r.points+' ⭐</span></div>'+
@@ -382,9 +405,10 @@ function render(){
       '<div class="chips">'+[0,1,2,3,4,5,6,8,10].map(function(n){var on=(fixed&&n===r.points)||(r.ask!=null&&n===r.ask);return'<button class="'+(on?"ok":"")+'" data-p="'+n+'">'+(on?"✓ ":"")+n+'</button>'}).join("")+
       '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>'+
       (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
-      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button>'+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
+      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
   $("pcount").textContent=pend.length;$("pendwrap").style.display=pend.length?"":"none";
   $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
+  document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
   document.querySelectorAll("[data-split]").forEach(function(a){a.onclick=function(e){e.preventDefault();var r=S.history.find(function(h){return h.id===a.dataset.split});if(!r)return;
     var sp={};(r.team||[]).forEach(function(m){var v=prompt("Points for "+kidOf(m).name+" (blank = share the rest)",r.split&&r.split[m]!=null?r.split[m]:"");if(v!==null&&v!=="")sp[m]=+v});
     post("/api/split",{ref:r.id,split:sp},"Split saved")}});
@@ -432,6 +456,7 @@ function render(){
   if(PM==="mostly")renderMostly();
   if(PM==="noteform")renderNoteForm();
   if(PM==="chform")renderChoreForm();
+  if(PM==="fixjob")renderFixJob();
   if(PM==="notyet")renderNotYet();
   if(PM==="tour"&&!(document.activeElement&&document.activeElement.id==="tsl")&&!$("tsl"))renderTour();
   if(PM==="ct"){var hrs=[1,1.5,2,3,4];
