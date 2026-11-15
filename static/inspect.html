@@ -30,7 +30,7 @@ input[type=number]{width:80px}
 .chore{display:flex;align-items:center;gap:8px;padding:8px 10px}
 .chore .nm{flex:1}
 .tag{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--line)}
-.tag.bonus{background:#ffedd5;color:#9a3412}.tag.clean{background:#dcfce7;color:#166534}.tag.pend{background:#dbeafe;color:#1e40af}
+.tag.warn{background:#ffebee;color:#c62828}.tag.bonus{background:#ffedd5;color:#9a3412}.tag.clean{background:#dcfce7;color:#166534}.tag.pend{background:#dbeafe;color:#1e40af}
 .big2{font-size:22px;padding:10px 16px}
 input[type=range]{width:100%;height:36px}
 .tvgo{width:100%;font-size:22px;font-weight:800;padding:14px;margin-top:10px}
@@ -57,9 +57,61 @@ details.cgrp{margin:6px 0;padding:4px 10px}
 .empty{color:var(--mute);text-align:center;padding:16px}
 #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:12px;opacity:0;transition:opacity .2s}
 #toast.on{opacity:.92}
+/* "house" skin: inside Home Assistant this page matches the adjacent house tabs (Home / Household / Care), not the
+   kids' screens. Calm paper-and-ink look; follows HA's dark mode. Turned on in HA, or with ?skin=house to preview. */
+body.house{--bg:#f4f3eb;--card:#fffef8;--ink:#243d40;--mute:#667b78;--line:#dce3db;--ok:#326f69;--no:#a16a30;--acc:#326f69;--soft:#e5ebe2;--pill:#e9f1e6;--pillink:#43645e;
+  font:13px/1.5 Roboto,Arial,sans-serif;max-width:1160px;padding:30px clamp(16px,4vw,56px) 60px;background:var(--bg);color:var(--ink)}
+body.house.dark{--bg:#111c22;--card:#1b2a30;--ink:#dce7e4;--mute:#a2b5b0;--line:#35484c;--ok:#457b6f;--no:#efbf7f;--acc:#457b6f;--soft:#263a3e;--pill:#30433b;--pillink:#c4d6c7;color-scheme:dark}
+html:has(body.house){background:#f4f3eb}html:has(body.house.dark){background:#111c22}
+body.house .tag.warn{background:#f4e5c7;color:#85601f}body.house.dark .tag.warn{background:#493b28;color:#edc986}
+body.house .tvcard{background:var(--card)!important;color:var(--ink)!important;border:1px solid var(--line);border-left:4px solid var(--tone);border-radius:18px!important;padding:16px 20px!important;margin:12px 0!important}
+body.house .tvcard.t-off{--tone:#9aa8a4}body.house .tvcard.t-locked{--tone:#a16a30}body.house .tvcard.t-soon{--tone:#c9893a}body.house .tvcard.t-open{--tone:#326f69}
+body.house .tvcard .tvh{font-size:17px!important;font-weight:500}body.house .tvcard .tvs{font-size:17px!important;font-weight:500!important;color:var(--tone)}
+body.house .tvcard .row{font-size:13px!important}body.house .tvcard .tvg{border-top-color:var(--line)!important}body.house .tvcard .tvg div{font-size:12px!important}
+body.house .tvcard button.no{background:transparent!important}
+body.house #bedbtn{font-size:12px!important}
+body.house .card.hrow{border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:10px 2px;background:transparent}body.house .card.hrow:last-of-type{border-bottom:0}
+body.house .hrow b{font-weight:500}
+body.house .card.chore{border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0;padding:10px 2px;background:transparent}
+body.house .bal .card{border-top-width:3px!important;border-radius:14px}
+body.house details.cgrp{border-radius:14px}
+.eyebrow{display:none}body.house .eyebrow{display:block;text-transform:uppercase;letter-spacing:.16em;font-size:10px;font-weight:600;color:#54756b;margin-bottom:6px}
+body.house.dark .eyebrow{color:#8eb7a6}
+body.house img.e{width:1.05em;height:1.05em;vertical-align:-.18em;filter:saturate(.55) contrast(.95)}
+body.house .topbar{gap:8px;margin:0 0 22px;align-items:center}
+body.house .ttl{font-size:clamp(25px,3vw,36px);font-weight:500;letter-spacing:-.7px}
+body.house #hicon{display:none}
+body.house h1,body.house h2,body.house .h2b{font-size:17px;font-weight:500;letter-spacing:-.3px;text-transform:none;color:var(--ink);margin:22px 0 10px}
+body.house button{font:inherit;font-size:12px;border:0;background:var(--soft);color:var(--ink);border-radius:16px;padding:7px 12px;min-height:32px;font-weight:400;box-shadow:none}
+body.house button:hover{filter:brightness(.97)}
+body.house button.on,body.house button.ok{background:var(--acc);color:#fff}
+body.house button.no{background:transparent;color:var(--no);border:1px solid currentColor}
+body.house .chip{font-weight:500}
+body.house .card,body.house details{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px 20px;margin:12px 0;box-shadow:none}
+body.house .card .card{border-radius:12px;padding:11px}
+body.house summary{font-size:17px;font-weight:500;letter-spacing:-.3px;padding:2px 0}
+body.house summary .mute{font-size:12px;font-weight:400;letter-spacing:0}
+body.house .mute{color:var(--mute);font-size:12px}
+body.house .big{font-size:20px}body.house .big2{font-size:14px;padding:8px 14px}
+body.house .tag,body.house .tag.bonus,body.house .tag.clean,body.house .tag.pend{background:var(--pill);color:var(--pillink);font-size:10px;letter-spacing:.04em;padding:2px 8px}
+body.house .bal .n{font-weight:500;font-size:26px}
+body.house .chore{border-bottom:1px solid var(--line);border-radius:0;padding:10px 2px}
+body.house input,body.house select{font-size:13px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+body.house .pbar{height:6px;background:var(--soft);border-radius:4px}
+body.house .pbar .pf{background:var(--acc);border-radius:4px}body.house .pbar.over .pf{background:#c9893a}
+body.house .pbar .pm span{color:var(--mute);font-weight:500}
+body.house .tvgo{font-size:14px;font-weight:500;padding:11px}
+body.house .pbox{background:var(--bg);border-radius:18px;border:1px solid var(--line)}
+body.house #toast{background:#243d40;border-radius:12px;font-size:13px}
 body.hub{max-width:none;font-size:20px}body.hub button{font-size:20px;padding:10px 14px}
 </style></head><body>
-<script>if(location.search.indexOf("hub=1")>=0)document.body.classList.add("hub")</script>
+<script>if(location.search.indexOf("hub=1")>=0)document.body.classList.add("hub");
+(function(){var inHA=location.pathname.indexOf("/local/")===0;if(!inHA&&!/[?&]skin=house/.test(location.search))return;
+  document.body.classList.add("house");
+  function dark(){var d;try{var h=window.parent.document.querySelector("home-assistant").hass;d=h&&h.themes&&h.themes.darkMode}catch(x){}
+    if(d===undefined)d=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches;document.body.classList.toggle("dark",!!d)}
+  dark();setInterval(dark,5000)})();</script>
+<span class="eyebrow" id="eyebrow">Household · Grown-ups</span>
 <div class="topbar"><span class="ttl" id="hicon"></span><b class="ttl">Chores</b>
   <button class="chip" id="ctchip"></button><button class="chip ok" id="tvbtn">📺 Give TV time</button><button class="chip" id="tourbtn">🚶 Price tour</button><div class="who" id="who"></div></div>
 
@@ -398,10 +450,11 @@ function render(){
       ((F||la||(T.waiting&&T.waiting.length))?'<button class="no" style="background:#fff;margin-left:8px;padding:4px 10px" data-ta="'+id+':lock">🔒 Lock</button>':'')+'</div>')});
   var open=grants.length>0||nexts.length>0,last=nexts.length?Math.min.apply(null,nexts):0,left=last?Math.round(last-S.now):(waiting?99999:0);
   var bg=!choreOn?"#374151":!open?"#7f1d1d":left<=300?"#8a6d00":"#1b5e20";
-  tb+='<div style="background:'+bg+';color:#fff;border-radius:14px;padding:10px 12px;margin:6px 0">'+
-    '<div class="row"><b style="font-size:18px">📺 TVs</b><span style="margin-left:auto;font-size:22px;font-weight:800">'+(!choreOn?"free (chore time off)":last?'<span class="cd" data-until="'+last+'"></span>':waiting?"🔓 waiting to start":"🔒 LOCKED")+'</span></div>'+
+  var tone=!choreOn?"off":!open?"locked":left<=300?"soon":"open";
+  tb+='<div class="tvcard t-'+tone+'" style="background:'+bg+';color:#fff;border-radius:14px;padding:10px 12px;margin:6px 0">'+
+    '<div class="row"><b class="tvh" style="font-size:18px">📺 TVs</b><span class="tvs" style="margin-left:auto;font-size:22px;font-weight:800">'+(!choreOn?"free (chore time off)":last?'<span class="cd" data-until="'+last+'"></span>':waiting?"🔓 waiting to start":"🔒 LOCKED")+'</span></div>'+
     (choreOn?tvRows.join(""):'')+
-    (grants.length?'<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null;return '<div style="opacity:.9;font-size:14px">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</div>'}).join("")+'</div>':'')+
+    (grants.length?'<div class="tvg" style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null;return '<div style="opacity:.9;font-size:14px">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</div>'}).join("")+'</div>':'')+
     (choreOn&&open?'<div class="row" style="margin-top:8px"><button data-ta="*:five">⏱️ 5-min countdown</button><button data-ta="*:minus">−10</button><button data-ta="*:plus">+10</button><button class="no" style="background:#fff" data-ta="*:lock">🔒 Lock now</button></div>':'')+'</div>';
   // on-demand jobs (e.g. laundry after running the machines): a grown-up opens them; hidden from kids otherwise
   var OD=S.config.chores.filter(function(c){return c.on_demand});
@@ -480,14 +533,14 @@ var HOUSE_DONE={};
 function houseData(){
   if(HA_MODE){var h=hass(),st=h&&h.states["sensor.house_tasks"];return Promise.resolve(st?{on:true,items:st.attributes.items||[],private:st.attributes.private||[],to_review:st.attributes.to_review||0}:{on:false})}
   return fetch("/api/house_jobs?display=").then(function(r){return r.json()}).catch(function(){return {on:false}})}
-function hwhen(i){if(i.overdue)return '<span class="tag" style="background:#ffebee;color:#c62828">overdue</span>';if(!i.due)return "";
+function hwhen(i){if(i.overdue)return '<span class="tag warn">overdue</span>';if(!i.due)return "";
   var d=new Date(i.due*1000);return '<span class="mute">'+(d.toDateString()===new Date().toDateString()?"today":d.toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"}))+'</span>'}
 function drawHouse(){houseData().then(function(h){var box=$("housebox");if(!h||!h.on){box.innerHTML="";return}
   var items=(h.items||[]).filter(function(i){return !HOUSE_DONE[i.kind+":"+i.id]});
   var priv=(h.private||[]).filter(function(p){return p.open});
   box.innerHTML='<details'+(items.some(function(i){return i.overdue})?' open':'')+'><summary>🏠 House jobs <span class="mute">'+items.length+' due'+
     (h.to_review?' · '+h.to_review+' to review in Grocy':'')+'</span></summary>'+
-    items.map(function(i){return '<div class="card row"><b style="flex:1">'+(i.kind==="battery"?"🔋 ":"")+esc(i.name)+'</b>'+hwhen(i)+
+    items.map(function(i){return '<div class="card row hrow"><b style="flex:1">'+(i.kind==="battery"?"🔋 ":"")+esc(i.name)+'</b>'+hwhen(i)+
       (i.rooms&&i.rooms.length?'<span class="mute">'+esc(i.rooms.slice(0,2).join(", "))+(i.rooms.length>2?"…":"")+'</span>':'')+
       '<button class="ok hdone" data-k="'+i.kind+'" data-i="'+i.id+'">✓</button></div>'}).join("")+
     priv.map(function(p){return '<div class="mute">🔒 '+esc(p.owner)+': '+p.open+' private'+(p.overdue?' ('+p.overdue+' overdue)':'')+'</div>'}).join("")+
