@@ -365,6 +365,20 @@ class SonyInputs(Case):
         self.assertEqual(self.act("com.netflix.ninja"), "stream")
 
 
+    def test_explicit_display_lease_expires_and_native_playback_wins(self):
+        self.t.update(external_display_entity='sensor.explicit_display',external_display_app_id='custom-display')
+        self.app.set('sensor.explicit_display','active',lease_until=time.time()+40)
+        self.app.set(self.t['remote'],'on',current_activity='com.google.android.apps.mediashell')
+        players=[{'state':'idle','attributes':{'app_id':'custom-display'}}]
+        self.assertTrue(self.s.external_display_active(self.t,players,'x'))
+        self.app.set(self.t['remote'],'on',current_activity='com.sony.dtv.tvx')
+        self.assertFalse(self.s.external_display_active(self.t,players,'x'))
+        self.app.set(self.t['remote'],'on',current_activity='com.google.android.apps.mediashell')
+        for until in (time.time()-1,time.time()+500,None):
+            self.app.set('sensor.explicit_display','active',lease_until=until)
+            self.assertFalse(self.s.external_display_active(self.t,players,'x'))
+
+
 class FinishTheShow(Case):
     def test_netflix_reports_no_end_so_no_finishing(self):
         t = self.s.TVS["livingroom"]

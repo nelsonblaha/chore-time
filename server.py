@@ -2345,9 +2345,35 @@ def ha_call(svc, data, tok):
         print("HA call failed", svc, ex, flush=True)
 
 
+def external_display_active(t, players, tok):
+    """Honor a bounded, renewable display claim only while its receiver is visible.
+
+    Optional per-TV config: external_display_entity and external_display_app_id.
+    Stale state, an overlong lease or a native app in front never exempts playback.
+    """
+    entity=t.get("external_display_entity")
+    if not entity or not t.get("external_display_app_id"):
+        return False
+    st=ha_get(entity,tok)
+    try:
+        valid=(st.get("state") in ("loading","active","restoring") and
+               0 < float(st.get("attributes",{}).get("lease_until",0))-time.time() <= 90)
+    except (TypeError,ValueError):
+        return False
+    if not valid:
+        return False
+    if t.get("kind")=="sony":
+        activity=(ha_get(t["remote"],tok).get("attributes") or {}).get("current_activity")
+        if activity != "com.google.android.apps.mediashell":
+            return False
+    return any(p.get("attributes",{}).get("app_id")==t["external_display_app_id"] for p in players)
+
+
 def tv_status(t, tok):
     """-> (what, longest_duration_s): what in off|idle|lock|stream|hdmi"""
     players = [ha_get(p, tok) for p in t["players"]]
+    if external_display_active(t,players,tok):
+        return "external_display",None
     if t["kind"] == "sony":   # the TV's own input wins over a lock page still loaded on its Chromecast
         act0 = (ha_get(t["remote"], tok).get("attributes") or {}).get("current_activity") or ""
         if any(x in act0.lower() for x in ("tvinput", "tv.input", ".inputs", "dtv")) and \
