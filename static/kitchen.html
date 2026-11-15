@@ -2,37 +2,61 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kitchen</title>
 <style>
-:root{--bg:#f4f5f7;--card:#fff;--ink:#1d2330;--mute:#6b7280;--line:#e5e7eb;--acc:#2e7d32}
-@media (prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1f27;--ink:#e8eaf0;--mute:#9aa3b2;--line:#2b313c}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif;padding:12px 16px 40px;max-width:760px;margin:auto}
-h2{font-size:18px;margin:16px 0 8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin:8px 0}
-.day{font-weight:800;margin-bottom:4px}.day.today{color:var(--acc)}
-.meal{display:flex;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}.meal:first-of-type{border-top:0}
-.sec{min-width:78px;color:var(--mute);font-size:14px}.who{margin-left:auto;color:var(--mute);font-size:13px;white-space:nowrap}
-.done{opacity:.45;text-decoration:line-through}
-details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 12px;margin:8px 0}
-summary{font-weight:800;cursor:pointer}
-ul{margin:6px 0;padding-left:20px}.mute{color:var(--mute);font-size:13px}
-.pill{display:inline-block;border-radius:999px;padding:1px 8px;font-size:13px;margin-left:6px}
-.over{background:#fdecea;color:#b71c1c}.soon{background:#fff3e0;color:#e65100}
-.ok{background:#e8f5e9;color:#1b5e20}.miss{background:#eceff1;color:#455a64}
-.items{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.it{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:4px 8px;font-size:15px;display:flex;gap:6px;align-items:center}
-.it button,.rq button{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:2px 6px;cursor:pointer}
-.rq{display:flex;gap:8px;margin-top:6px}.rq input{flex:1;font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
-.rq button{font-size:15px;padding:8px 12px;background:#2e7d32;color:#fff;border-color:#2e7d32}
-#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:12px;opacity:0;transition:opacity .2s}#toast.on{opacity:.92}
+/* House skin: a calm paper-and-ink look that matches the house's other Home Assistant tabs; follows HA's dark mode */
+:root{--ink:#243d40;--muted:#667b78;--line:#dce3db;--rowline:#e7e9df;--paper:#f4f3eb;--card:#fffef8;--accent:#326f69;--eyebrow:#54756b;--value:#43645e;--chip:#e5ebe2;--field:#f7f8f0;
+ --p-bg:#edf0e5;--p-ink:#6c7d63;--ok-bg:#e9f1e6;--ok-ink:#3f6b52;--warn-bg:#f4e5c7;--warn-ink:#85601f;--bad-bg:#f6e2d6;--bad-ink:#a14a30;--cold-bg:#e3ecef;--cold-ink:#3f6470;color-scheme:light}
+:root[data-theme=dark]{--ink:#dce7e4;--muted:#a2b5b0;--line:#35484c;--rowline:#354347;--paper:#111c22;--card:#1b2a30;--accent:#91c8b2;--eyebrow:#8eb7a6;--value:#b0cfc2;--chip:#263a3e;--field:#13242a;
+ --p-bg:#30433b;--p-ink:#c4d6c7;--ok-bg:#274238;--ok-ink:#b6dcc4;--warn-bg:#493b28;--warn-ink:#edc986;--bad-bg:#4a2f27;--bad-ink:#f0b49a;--cold-bg:#23363f;--cold-ink:#a9cbd6;color-scheme:dark}
+*{box-sizing:border-box}html,body{margin:0;background:var(--paper);color:var(--ink)}
+body{font:14px/1.45 Roboto,Arial,sans-serif;padding:30px clamp(16px,4vw,56px) 60px}
+button,input{font:inherit;color:inherit}button{cursor:pointer;border:0;background:none}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #5b9e99;outline-offset:3px}
+.page-head{max-width:1160px;margin:0 auto 26px}
+.eyebrow{display:block;text-transform:uppercase;letter-spacing:.16em;font-size:10px;font-weight:600;color:var(--eyebrow);margin-bottom:10px}
+h1{font-size:clamp(25px,3vw,36px);font-weight:500;letter-spacing:-.7px;margin:0}
+.page-head p{font-size:13px;color:var(--muted);margin:8px 0 0;line-height:1.5}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;max-width:1160px;margin:auto;align-items:start}
+.section{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;min-width:0}
+.section.wide{grid-column:span 2}.section.full{grid-column:1/-1}
+.section h2{font-size:17px;font-weight:500;letter-spacing:-.3px;margin:0 0 12px;display:flex;align-items:baseline;gap:8px}
+.section h2 .n{font-size:12px;color:var(--muted);font-weight:400;letter-spacing:0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;padding:9px 0;border-bottom:1px solid var(--rowline)}
+.row:last-child{border-bottom:0}
+.row .label{font-size:13px;line-height:1.35;min-width:0}
+.row small{display:block;font-size:11px;line-height:1.5;margin-top:2px;color:var(--muted)}
+.row .value{font-size:12px;text-align:right;color:var(--value);white-space:nowrap;display:flex;align-items:center;gap:8px}
+.pill{display:inline-block;font-size:10px;padding:4px 7px;border-radius:7px;background:var(--p-bg);color:var(--p-ink);white-space:nowrap}
+.pill.ok{background:var(--ok-bg);color:var(--ok-ink)}.pill.soon{background:var(--warn-bg);color:var(--warn-ink)}
+.pill.over{background:var(--bad-bg);color:var(--bad-ink)}.pill.thaw{background:var(--cold-bg);color:var(--cold-ink)}.pill.miss{background:var(--p-bg);color:var(--p-ink)}
+.chip{padding:5px 9px;border-radius:16px;background:var(--chip);font-size:11px;min-height:28px}
+.day{text-transform:uppercase;letter-spacing:.12em;font-size:10px;font-weight:600;color:var(--eyebrow);margin:16px 0 2px}.day:first-child{margin-top:0}.day.today{color:var(--accent)}
+.meal .label{display:flex;gap:10px}.meal .sec{min-width:68px;color:var(--muted);font-size:12px}.done{opacity:.45;text-decoration:line-through}
+details{border-bottom:1px solid var(--rowline)}details:last-child{border-bottom:0}
+summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;min-height:44px;font-size:13px}
+summary::-webkit-details-marker{display:none}summary:after{content:'+';color:var(--muted);font-size:16px}details[open] summary:after{content:'−'}
+details .row{padding-left:2px}
+.rq{display:flex;gap:8px;margin:2px 0 10px}
+.rq input{flex:1;min-width:0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--field)}
+.rq button{padding:9px 14px;border-radius:10px;background:var(--accent);color:#fff;font-size:13px}
+:root[data-theme=dark] .rq button{color:#10201c}
+.note{font-size:12px;line-height:1.6;color:var(--muted);margin:10px 0 0}
+.empty{font-size:12px;color:var(--muted);padding:6px 0}
+.footnote{max-width:1160px;margin:24px auto 0;font-size:11px;line-height:1.6;color:var(--muted)}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:12px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}#toast.on{opacity:.95}
+@media(max-width:1050px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){body{padding:20px 16px 40px}.grid{grid-template-columns:1fr}.section.wide{grid-column:auto}.section{padding:16px}}
 </style></head><body>
-<div id="app" class="mute">Loading kitchen…</div>
-<div id="toast"></div>
+<div id="app"><div class="page-head"><span class="eyebrow">Kitchen</span><h1>What's in the kitchen</h1><p>Loading…</p></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
 function hass(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}}
 function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");setTimeout(function(){e.classList.remove("on")},2200)}
 function fmtDay(iso,i){var d=new Date(iso+"T12:00:00");return i===0?"Today":i===1?"Tomorrow":d.toLocaleDateString([], {weekday:"long",month:"short",day:"numeric"})}
-var GROUPS=["Protein","Vegetable","Fruit","Grain","Dairy","Meal"],FOLD=["Ingredient","Drink"],ICON={Protein:"🍗",Vegetable:"🥦",Fruit:"🍎",Grain:"🍞",Dairy:"🧀",Meal:"🍲",Snack:"🍿",Treat:"🍫",Drink:"🥤",Ingredient:"🧂"};
-var OPEN={},last=null,typing=false;
+function fmtDate(iso){var d=new Date(String(iso).slice(0,10)+"T12:00:00");return isNaN(d)?esc(iso):d.toLocaleDateString([], {month:"short",day:"numeric"})}
+var GROUPS=["Protein","Vegetable","Fruit","Grain","Dairy","Meal"],FOLD=["Drink","Ingredient"];
+var OPEN={},last=null,typing=false,dark=null;
+function theme(){var h=hass(),d=!!(h&&h.themes&&h.themes.darkMode);if(d!==dark){dark=d;document.documentElement.setAttribute("data-theme",d?"dark":"light")}}
 function canRequest(){var h=hass();var n=((h&&h.user&&h.user.name)||"").toLowerCase();   // any configured grown-up may add requests
   var I=((h&&h.states["sensor.chore_state"]||{}).attributes||{}).config;I=(I&&I.inspectors)||[];
   return I.some(function(i){return n.indexOf(String(i.name).toLowerCase())>=0||n.indexOf(i.id)>=0})}
@@ -41,31 +65,40 @@ function request(text,pid,label){var h=hass();if(!h)return;var n=Math.random().t
     var t=0;(function w(){var a=hass().states["sensor.chore_state"]&&hass().states["sensor.chore_state"].attributes;
       if(a&&a.last_result&&a.last_result.n===n){toast(a.last_result.ok?"Requested: "+(label||text):(a.last_result.error||"Couldn't request"));last=null;return}
       if(++t<40)setTimeout(w,250)})()})}
-function itemRow(x,req){return '<span class="it">'+esc(x.name)+' <span class="mute">'+esc(x.amount)+' '+esc(x.unit)+'</span>'+(req?'<button data-out="'+x.id+'" data-nm="'+esc(x.name)+'">🛒 out</button>':'')+'</span>'}
-function render(){var h=hass(),st=h&&h.states["sensor.grocy_kitchen"];if(!st){document.getElementById("app").textContent="Kitchen data not available yet.";return}
-  if(typing)return;var a=st.attributes;if(last===st.last_updated)return;last=st.last_updated;var req=canRequest(),out="";
-  var use=(a.overdue||[]).concat(a.expired||[]).map(function(x){return '<li>'+esc(x.name)+'<span class="pill over">past '+esc(x.date)+'</span></li>'}).join("")+(a.due||[]).map(function(x){return '<li>'+esc(x.name)+'<span class="pill soon">by '+esc(x.date)+'</span></li>'}).join("");
-  if(use)out+='<h2>🥦 Use it up</h2><div class="card"><ul>'+use+'</ul></div>';
-  var rd=a.ready||[];if(rd.length){out+='<h2>🍳 Ready to make</h2><div class="card">'+rd.map(function(r){return '<div style="padding:3px 0">'+(r.ready?'<span class="pill ok">Ready now</span>':(r.thaw||[]).length?'<span class="pill thaw">🧊 Thaw first</span>':'<span class="pill miss">Missing '+r.missing_n+'</span>')+' <b>'+esc(r.name)+'</b>'+
-    (r.ready?'':(r.thaw||[]).length?' <span class="mute">— move '+esc(r.thaw.join(", "))+' to the fridge a few hours ahead</span>':' <span class="mute">— '+esc((r.missing||[]).join(", "))+'</span>')+'</div>'}).join("")+'</div>'}
+function itemRow(x,req){return '<div class="row"><span class="label">'+esc(x.name)+'</span><span class="value">'+esc(x.amount)+' '+esc(x.unit)+
+  (req?'<button class="chip" data-out="'+x.id+'" data-nm="'+esc(x.name)+'" aria-label="Request more '+esc(x.name)+'">We\'re out</button>':'')+'</span></div>'}
+function section(title,n,inner,cls){return '<section class="section'+(cls?' '+cls:'')+'"><h2>'+title+(n!=null?' <span class="n">'+n+'</span>':'')+'</h2>'+inner+'</section>'}
+function render(){theme();var h=hass(),st=h&&h.states["sensor.grocy_kitchen"];
+  if(!st){document.querySelector(".page-head p")&&(document.querySelector(".page-head p").textContent="Kitchen data not available yet.");return}
+  if(typing)return;var a=st.attributes,key=st.last_updated+"|"+dark;if(last===key)return;last=key;var req=canRequest(),g="";
+  var use=(a.overdue||[]).concat(a.expired||[]).map(function(x){return '<div class="row"><span class="label">'+esc(x.name)+'</span><span class="value"><span class="pill over">Past '+fmtDate(x.date)+'</span></span></div>'}).join("")+
+          (a.due||[]).map(function(x){return '<div class="row"><span class="label">'+esc(x.name)+'</span><span class="value"><span class="pill soon">By '+fmtDate(x.date)+'</span></span></div>'}).join("");
+  if(use)g+=section("Use it up",null,use);
+  var rd=a.ready||[];if(rd.length)g+=section("Ready to make",rd.filter(function(r){return r.ready}).length+" of "+rd.length+" ready",rd.map(function(r){
+    var th=(r.thaw||[]).length,pill=r.ready?'<span class="pill ok">Ready now</span>':th?'<span class="pill thaw">Thaw first</span>':'<span class="pill miss">Missing '+r.missing_n+'</span>';
+    var sub=r.ready?'':th?'Move '+esc(r.thaw.join(", "))+' to the fridge a few hours ahead':esc((r.missing||[]).join(", "));
+    return '<div class="row"><span class="label">'+esc(r.name)+(sub?'<small>'+sub+'</small>':'')+'</span><span class="value">'+pill+'</span></div>'}).join(""),use?"wide":"wide");
+  if(req)g+=section("Requests",(a.requests||[]).length?(a.requests.length+" open"):null,
+    '<div class="rq"><input id="rqt" placeholder="Request something, e.g. more yogurt" aria-label="Request something"><button id="rqb">Request</button></div>'+
+    ((a.requests||[]).length?a.requests.map(function(r){return '<div class="row"><span class="label">'+esc(r.name||r.note)+(r.name&&r.note?'<small>'+esc(r.note)+'</small>':'')+'</span><span class="value">'+esc(r.by||"?")+'</span></div>'}).join(""):'<div class="empty">No open requests</div>')+
+    '<p class="note">Reviewed with the next grocery order.</p>');
   var G=a.groups||{};
-  out+='<h2>🏠 In the house</h2>';
-  GROUPS.forEach(function(g){var xs=G[g]||[];if(!xs.length)return;out+='<div class="card"><b>'+ICON[g]+' '+g+'</b> <span class="mute">('+xs.length+')</span><div class="items">'+xs.map(function(x){return itemRow(x,req)}).join("")+'</div></div>'});
-  var sn=(G.Snack||[]).concat(G.Treat||[]);if(sn.length)out+='<h2>🍿 Snacks</h2><div class="card"><div class="items">'+sn.map(function(x){return itemRow(x,req)}).join("")+'</div></div>';
-  FOLD.forEach(function(g){var xs=G[g]||[];if(!xs.length)return;out+='<details data-k="'+g+'"'+(OPEN[g]?" open":"")+'><summary>'+ICON[g]+' '+g+' <span class="mute">('+xs.length+')</span></summary><div class="items">'+xs.map(function(x){return itemRow(x,req)}).join("")+'</div></details>'});
-  if(req){out+='<h2>🙋 Requests</h2><div class="card"><div class="rq"><input id="rqt" placeholder="Request something (e.g. more yogurt)"><button id="rqb">Request</button></div>'+
-    ((a.requests||[]).length?'<ul>'+a.requests.map(function(r){return '<li>'+esc(r.name||r.note)+(r.name&&r.note?' <span class="mute">— '+esc(r.note)+'</span>':'')+' <span class="mute">('+esc(r.by||"?")+')</span></li>'}).join("")+'</ul>':'<div class="mute" style="margin-top:6px">No open requests</div>')+
-    '<div class="mute">A grown-up reviews these with the grocery order.</div></div>'}
-  out+='<h2>🍽️ Meals</h2>';
-  (a.days||[]).forEach(function(d,i){var ms=(a.meals||{})[d]||[];if(!ms.length&&i>0)return;
-    out+='<div class="card"><div class="day'+(i===0?' today':'')+'">'+fmtDay(d,i)+'</div>'+(ms.length?ms.map(function(m){return '<div class="meal'+(m.done?' done':'')+'"><span class="sec">'+esc(m.section)+'</span><span>'+esc(m.what)+'</span>'+(m.who?'<span class="who">'+esc(m.who.replace(/,/g,", "))+'</span>':'')+'</div>'}).join(""):'<div class="mute">Nothing planned</div>')+'</div>'});
-  out+='<h2>🛒 Shopping lists</h2>';
-  Object.keys(a.shopping||{}).sort().forEach(function(l){var it=a.shopping[l];out+='<details data-k="sl_'+esc(l)+'"'+(OPEN["sl_"+l]?" open":"")+'><summary>'+esc(l)+' <span class="mute">('+it.length+')</span></summary><ul>'+it.map(function(x){return '<li>'+esc(x.name)+(x.amount&&x.amount!=1?' ×'+esc(x.amount):'')+(x.note?' <span class="mute">— '+esc(x.note)+'</span>':'')+'</li>'}).join("")+'</ul></details>'});
-  out+='<div class="mute" style="margin-top:14px">From Grocy · updated '+new Date(a.updated*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'</div>';
-  document.getElementById("app").innerHTML=out;
+  GROUPS.forEach(function(k){var xs=G[k]||[];if(xs.length)g+=section(k,xs.length,xs.map(function(x){return itemRow(x,req)}).join(""))});
+  var sn=(G.Snack||[]).concat(G.Treat||[]);if(sn.length)g+=section("Snacks",sn.length,sn.map(function(x){return itemRow(x,req)}).join(""));
+  var fold=FOLD.map(function(k){var xs=G[k]||[];if(!xs.length)return "";return '<details data-k="'+k+'"'+(OPEN[k]?" open":"")+'><summary><span>'+k+' <span class="n" style="color:var(--muted);font-size:12px">'+xs.length+'</span></span></summary>'+xs.map(function(x){return itemRow(x,req)}).join("")+'</details>'}).join("");
+  if(fold)g+=section("Drinks &amp; pantry basics",null,fold);
+  var meals="";(a.days||[]).forEach(function(d,i){var ms=(a.meals||{})[d]||[];if(!ms.length&&i>0)return;
+    meals+='<div class="day'+(i===0?' today':'')+'">'+fmtDay(d,i)+'</div>'+(ms.length?ms.map(function(m){return '<div class="row meal'+(m.done?' done':'')+'"><span class="label"><span class="sec">'+esc(m.section)+'</span><span>'+esc(m.what)+'</span></span>'+(m.who?'<span class="value">'+esc(m.who.replace(/,/g,", "))+'</span>':'')+'</div>'}).join(""):'<div class="empty">Nothing planned</div>')});
+  if(meals)g+=section("Meals",null,meals,"wide");
+  var sl=Object.keys(a.shopping||{}).sort().map(function(l){var it=a.shopping[l];return '<details data-k="sl_'+esc(l)+'"'+(OPEN["sl_"+l]?" open":"")+'><summary><span>'+esc(l)+' <span style="color:var(--muted);font-size:12px">'+it.length+'</span></span></summary>'+
+    it.map(function(x){return '<div class="row"><span class="label">'+esc(x.name)+(x.note?'<small>'+esc(x.note)+'</small>':'')+'</span>'+(x.amount&&x.amount!=1?'<span class="value">×'+esc(x.amount)+'</span>':'')+'</div>'}).join("")+'</details>'}).join("");
+  if(sl)g+=section("Shopping lists",null,sl);
+  var upd=new Date(a.updated*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+  document.getElementById("app").innerHTML='<div class="page-head"><span class="eyebrow">Kitchen</span><h1>What\'s in the kitchen</h1><p>Food on hand, what you can make, and the week\'s meals. From Grocy, updated '+upd+'.</p></div><div class="grid">'+g+'</div>';
   document.querySelectorAll("details[data-k]").forEach(function(d){d.ontoggle=function(){OPEN[d.dataset.k]=d.open}});
   document.querySelectorAll("[data-out]").forEach(function(b){b.onclick=function(){request("we're out",+b.dataset.out,b.dataset.nm)}});
   var t=document.getElementById("rqt");if(t){t.onfocus=function(){typing=true};t.onblur=function(){typing=false};
+    t.onkeydown=function(e){if(e.key==="Enter")document.getElementById("rqb").click()};
     document.getElementById("rqb").onclick=function(){var v=t.value.trim();if(!v)return;typing=false;request(v,null,v);t.value=""}}}
 render();setInterval(render,4000);
 </script></body></html>
