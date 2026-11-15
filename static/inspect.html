@@ -245,9 +245,9 @@ function renderNoteForm(){if($("nfnote"))return;var c=choreOf(NOTEFORM.chore),bd
 var CHFORM=null;
 function emojiCode(t){t=String(t||"").trim();if(!t)return "";if(/^[0-9a-f]{2,6}(-[0-9a-f]{2,6})*$/i.test(t))return t.toLowerCase();
   return Array.from(t).map(function(ch){return ch.codePointAt(0).toString(16)}).filter(function(h){return h!=="fe0f"}).join("-")}
-function repeatOf(c){return c.once?"once":c.each_daily?"daily":c.on_demand?"ondemand":+(c.cooldown_h==null?(c.room?72:0):c.cooldown_h)>0?"every":"anytime"}
+function repeatOf(c){return c.daily||c.weekly?"keep":c.once?"once":c.each_daily?"daily":c.on_demand?"ondemand":+(c.cooldown_h==null?(c.room?72:0):c.cooldown_h)>0?"every":"anytime"}
 function renderChoreForm(){if($("cfname"))return;var c=CHFORM.id?choreOf(CHFORM.id):{icon:"2b50",points:1},ed=!!CHFORM.id;
-  var rep=repeatOf(c),days=c.cooldown_h==null?(c.room?3:1):Math.max(0.5,Math.round(c.cooldown_h/24*2)/2)||1;
+  var rep=repeatOf(c),days=c.cooldown_h==null?(c.room?3:1):Math.max(1,Math.round(c.cooldown_h/24));
   var F=S.room_choices||{},rooms='<option value="">Anywhere</option>',seen={};
   Object.keys(F).forEach(function(f){rooms+='<optgroup label="'+esc(f)+'">'+F[f].map(function(r){seen[r]=1;return '<option'+(c.where===r?" selected":"")+'>'+esc(r)+'</option>'}).join("")+'</optgroup>'});
   if(c.where&&!seen[c.where]&&c.where!=="Anywhere")rooms+='<option selected>'+esc(c.where)+'</option>';
@@ -258,8 +258,8 @@ function renderChoreForm(){if($("cfname"))return;var c=CHFORM.id?choreOf(CHFORM.
     L("Subtitle","kids see this under the name")+'<input id="cfdesc" class="cfi" maxlength="200" value="'+esc(c.desc||"")+'" placeholder="e.g. Tablets, Switch and headphones on their chargers by the couch">'+
     '<div class="cfrow"><div>'+L("Icon","an emoji")+'<input id="cficon" class="cfi" style="width:5em" value="'+esc(c.icon&&!CUSTOM_ICONS[c.icon]?cp(c.icon):"")+'" placeholder="⭐"></div>'+
     '<div>'+L("Stars","blank = set at inspection")+'<input id="cfpts" class="cfi" style="width:6em" type="number" min="0" max="50" value="'+(c.points==null?"":c.points)+'"></div></div>'+
-    L("Repeats")+'<select id="cfrep" class="cfi">'+[["once","One time: gone once it's done"],["every","Comes back a set time after it's done"],["daily","Once a day for each kid"],["anytime","Any time, as often as it's needed"],["ondemand","Only when a grown-up opens it"]].map(function(o){return '<option value="'+o[0]+'"'+(rep===o[0]?" selected":"")+'>'+o[1]+'</option>'}).join("")+'</select>'+
-    '<div id="cfeveryw" class="cfrow"'+(rep==="every"?"":' style="display:none"')+'>'+L("Back after","days")+'<input id="cfdays" class="cfi" style="width:6em" type="number" min="0.5" step="0.5" value="'+days+'"></div>'+
+    L("Repeats")+'<select id="cfrep" class="cfi">'+(rep==="keep"?[["keep",c.daily?"Once a day (set in Grocy)":"Once a week (set in Grocy)"]]:[]).concat([["once","One time: gone once it's done"],["every","Comes back a set time after it's done"],["daily","Once a day for each kid"],["anytime","Any time, as often as it's needed"],["ondemand","Only when a grown-up opens it"]]).map(function(o){return '<option value="'+o[0]+'"'+(rep===o[0]?" selected":"")+'>'+o[1]+'</option>'}).join("")+'</select>'+
+    '<div id="cfeveryw" class="cfrow"'+(rep==="every"?"":' style="display:none"')+'>'+L("Back after","days")+'<input id="cfdays" class="cfi" style="width:6em" type="number" min="1" step="1" value="'+days+'"></div>'+
     L("Where")+'<select id="cfwhere" class="cfi">'+rooms+'</select>'+
     L("Who can do it")+'<div class="cfrow">'+kids.map(function(k){return '<label class="cfck"><input type="checkbox" class="cfkid" value="'+k.id+'"'+(!c.only||c.only.indexOf(k.id)>=0?" checked":"")+'> '+E(k.icon)+' '+esc(k.name)+'</label>'}).join("")+'</div>'+
     (H.length>1?L("Which house")+'<select id="cfhouse" class="cfi">'+H.map(function(h,i){var v=i?h.id:"";return '<option value="'+v+'"'+((c.household||"")===v?" selected":"")+'>'+esc(h.name)+'</option>'}).join("")+'<option value="any"'+(c.household==="any"?" selected":"")+'>Either house</option></select>':'')+
@@ -275,9 +275,9 @@ function renderChoreForm(){if($("cfname"))return;var c=CHFORM.id?choreOf(CHFORM.
     var r=$("cfrep").value,pts=$("cfpts").value,only=[].slice.call(document.querySelectorAll(".cfkid")).filter(function(x){return x.checked}).map(function(x){return x.value});
     if(!only.length){toast("Pick at least one kid");return}
     var ch={id:CHFORM.id||undefined,name:nm,points:pts===""?null:+pts,icon:emojiCode($("cficon").value)||c.icon||"2b50",desc:$("cfdesc").value.trim(),
-      once:r==="once",each_daily:r==="daily",on_demand:r==="ondemand",cooldown_h:r==="every"?Math.max(0.5,+$("cfdays").value||1)*24:0,
       where:$("cfwhere").value,only:only,from:$("cffrom").value,until:$("cfuntil").value,after:$("cfafter").value,before:$("cfbefore").value,
       daylight:$("cfday").checked,est_minutes:$("cfmin").value===""?null:+$("cfmin").value};
+    if(r!=="keep"){ch.once=r==="once";ch.each_daily=r==="daily";ch.on_demand=r==="ondemand";ch.cooldown_h=r==="every"?Math.max(1,Math.round(+$("cfdays").value||1))*24:0}
     if($("cfhouse"))ch.household=$("cfhouse").value;
     post("/api/chore",{chore:ch},(ed?"Saved ":"Added ")+nm).then(closePM)};
   setTimeout(function(){if(!ed)$("cfname").focus()},50)}

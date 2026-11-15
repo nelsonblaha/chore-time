@@ -4,6 +4,8 @@ The robot cleans the rooms the chores system recently declared clean (a passed t
 once per declaration, when downstairs has been empty 20 min. Vacuum-only rooms first, then the mop rooms.
 Suction: 20:00-07:00 quiet; nobody home max_plus; otherwise (people upstairs) turbo.
 A person downstairs mid-run => pause in place; 3 min quiet => resume; still there after 10 min => dock.
+The next group of rooms needs 5 quiet minutes. A robot that got stuck, or that a grown-up stopped or sent home,
+ends the run once it's docked; so does a run more than 3 hours old.
 No phone notices. Everything is logged (src "vac") and published as sensor.vacuum_autopilot.
 """
 import json
@@ -66,6 +68,8 @@ PARK_DOCK_S = 10 * 60        # Q5
 DWELL_S = 120                # a room counts as robot-cleaned after this long in it while cleaning
 PREV_GRACE_S = 90            # sensors of the room it just left still belong to the robot
 RETRY_S = 30 * 60
+BETWEEN_QUIET_S = 5 * 60     # the next group of rooms needs 5 quiet minutes, not the 20 s a paused room needs to resume
+MAX_RUN_S = 3 * 3600         # a run older than this never launches another group (a stuck robot freed hours later goes home)
 SEG_LIGHTS = {}   # segment -> room light-mode selects, lit white while the robot finds its way home
 NIGHT_CARPET_OFF = False   # turn the robot's Carpet Boost off at night (vacuum.night_carpet_boost_off)
 VOICE = None          # optional robot voice-volume number: 0 at night, daytime level restored in the morning
@@ -362,7 +366,7 @@ class Pilot:
         vac = [r for r in rooms if r not in MOP]
         mop = [r for r in rooms if r in MOP]
         groups = ([{"mode": "vacuum", "rooms": vac}] if vac else []) + ([{"mode": "vac_and_mop", "rooms": mop}] if mop else [])
-        self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[])
+        self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
         self.log("start", rooms=rooms, saved=self.D["saved"])
         self.launch(now)
@@ -376,7 +380,7 @@ class Pilot:
         self.call("input_boolean.turn_off", {"entity_id": ACTIVE})
         self.D["runs"] = (self.D["runs"] + [{"start": self.D.get("run_started"), "end": now, "why": why,
                                              "groups": self.D.get("groups"), "pauses": self.D.get("pauses")}])[-30:]
-        self.D.update(phase="idle", groups=[], gi=0, paused_at=0)
+        self.D.update(phase="idle", groups=[], gi=0, paused_at=0, trouble=None)
         self.log("finish", why=why)
 
     def return_lights(self, vs, now):
@@ -500,6 +504,10 @@ class Pilot:
                     D["last_attempt"] = now
                     self.start(rooms, now)
         elif ph == "running":
+            if vs in ("error", "idle", "paused"):   # stuck, or a grown-up stopped it: once it's home, the run is over
+                if not D.get("trouble"):
+                    D["trouble"] = vs
+                    self.log("trouble", state=vs, robot_in=D.get("cur"))
             if vs == "cleaning":
                 D["saw_clean"] = True
                 who = self.person_entered(now)
@@ -518,7 +526,11 @@ class Pilot:
             if done:
                 D["docked_since"] = D.get("docked_since") or now
                 if now - D["docked_since"] >= 60:
-                    if D["gi"] + 1 < len(D["groups"]):
+                    if D.get("trouble"):
+                        self.finish("home after the robot was %s (stuck or stopped by hand): no more rooms this run" % D["trouble"], now)
+                    elif now - D.get("run_started", now) > MAX_RUN_S:
+                        self.finish("run too old to continue", now)
+                    elif D["gi"] + 1 < len(D["groups"]):
                         D.update(phase="between", between_since=now)
                     else:
                         self.finish("done", now)
@@ -528,7 +540,9 @@ class Pilot:
                 self.finish("never started cleaning (state %s)" % vs, now)
         elif ph == "between":       # next group only if downstairs is still empty
             q, who = self.quiet_for()
-            if q >= RESUME_QUIET_S:
+            if now - D.get("run_started", now) > MAX_RUN_S:
+                self.finish("run too old to continue", now)
+            elif q >= BETWEEN_QUIET_S:
                 D["gi"] += 1
                 D["phase"] = "running"
                 self.launch(now)
@@ -539,6 +553,9 @@ class Pilot:
             if vs == "cleaning":                      # someone resumed it by hand
                 D["phase"] = "running"
                 self.log("resumed_elsewhere")
+            elif vs in ("returning", "docked"):       # someone sent it home by hand: the run is over
+                D["phase"] = "docking"
+                self.log("sent_home_elsewhere", robot_in=D.get("cur"))
             elif q >= RESUME_QUIET_S:
                 self.call("vacuum.send_command", {"entity_id": VAC, "command": "resume_segment_clean"})
                 D.update(phase="resuming", resume_at=now)

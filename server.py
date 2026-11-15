@@ -414,6 +414,42 @@ def apply_chore_fields(x, more):
     return x
 
 
+def grocy_period(x, more):
+    """the Grocy schedule for a chart chore the form changed: back after N days = dynamic-regular, else manually.
+    Daily/weekly chores keep the schedule Grocy already has."""
+    if "cooldown_h" not in more or x.get("daily") or x.get("weekly"):
+        return {}
+    days = int(round(float(x.get("cooldown_h") or 0) / 24))
+    return {"period_type": "dynamic-regular", "period_days": max(1, days)} if float(x.get("cooldown_h") or 0) > 0 else {"period_type": "manually"}
+
+
+GROCY_EXTRA_KEYS = ("once", "each_daily", "on_demand", "daylight", "household", "from", "until", "after", "before", "est_minutes")
+
+
+def grocy_chore_userfields(gid, x, more, new=False):
+    """Grocy is the master list, so the form's fields go to the chore's userfields (the next pull rebuilds from them)."""
+    uf = {}
+    if "where" in more:
+        uf.update({"kid_where": x.get("where", ""), "kid_floor": x.get("floor", ""), "kid_map": ",".join(x.get("map_rooms") or [])})
+    if "only" in more:
+        uf["kid_only"] = ",".join(x.get("only") or [])
+    if any(k in more for k in GROCY_EXTRA_KEYS) or "cooldown_h" in more:
+        try:
+            extra = {} if new else json.loads((gcall("GET", "/userfields/chores/%d" % gid) or {}).get("kid_extra") or "{}")
+        except ValueError:
+            extra = {}
+        for k in GROCY_EXTRA_KEYS:
+            if k in more:
+                if more[k] in ("", [], False, 0, None):
+                    extra.pop(k, None)
+                else:
+                    extra[k] = more[k]
+        if "cooldown_h" in more and not (x.get("daily") or x.get("weekly")):
+            extra["room"] = bool(x.get("room"))   # explicit: a Grocy "every N days" chore counts as a room unless told otherwise
+        uf["kid_extra"] = json.dumps(extra, sort_keys=True) if extra else ""
+    return uf
+
+
 def chore_closed(ch, board):
     """why a chore is unavailable right now (None = open): daylight-only after dark, one-time already done,
     outside its from/until dates (e.g. cleaning the car only in daylight; a one-time job)"""
@@ -1671,12 +1707,21 @@ class H(BaseHTTPRequestHandler):
                     if gid:
                         gcall("PUT", "/userfields/chores/%d" % gid, {"kids": "0"})
                 elif gid:
-                    gcall("PUT", "/objects/chores/%d" % gid, {"name": name, **({"description": cur_.get("desc", "")} if "desc" in more else {})})
-                    gcall("PUT", "/userfields/chores/%d" % gid, {"kid_points": "" if pts is None else str(pts), "kid_icon": cur_.get("icon", "")})
+                    gcall("PUT", "/objects/chores/%d" % gid, {"name": name, **({"description": cur_.get("desc", "")} if "desc" in more else {}),
+                                                              **grocy_period(cur_, more)})
+                    gcall("PUT", "/userfields/chores/%d" % gid, {"kid_points": "" if pts is None else str(pts), "kid_icon": cur_.get("icon", ""),
+                                                                 **grocy_chore_userfields(gid, cur_, more)})
                 elif cid not in SYSTEM_CHORES:
-                    gid = int(gcall("POST", "/objects/chores", {"name": name, "description": cur_.get("desc", ""), "period_type": "manually", "track_date_only": 0, "rollover": 0, "start_date": "2026-11-01 00:00:00"})["created_object_id"])
+                    gid = int(gcall("POST", "/objects/chores", {"name": name, "description": cur_.get("desc", ""), "period_type": "manually", "track_date_only": 0, "rollover": 0, "start_date": "2026-11-01 00:00:00",
+                                                                **grocy_period(cur_, more)})["created_object_id"])
                     gcall("PUT", "/userfields/chores/%d" % gid, {"kids": "1", "kid_key": cid, "kid_points": "" if pts is None else str(pts),
-                                                                  "kid_icon": cur_.get("icon", "2b50")})
+                                                                  "kid_icon": cur_.get("icon", "2b50"), **grocy_chore_userfields(gid, cur_, more, new=True)})
+                    with LOCK:   # remember the Grocy id now, so the next pull matches it instead of hiding the local copy
+                        c = cfg()
+                        for x in c["chores"]:
+                            if x["id"] == cid:
+                                x["grocy_id"] = gid
+                        save_cfg(c)
             except Exception as ex:  # noqa: BLE001
                 print("grocy chart push failed", ex, flush=True)
             ev = append({"type": "chart", "by": b["by"], "chore": cid, "name": name, "points": pts,

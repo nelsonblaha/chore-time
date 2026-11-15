@@ -633,6 +633,47 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.entry_motion", "on")  # ...and stays in the entry hall
         self.assertIn("vacuum.return_to_base", self.tick(610))
 
+    def finish_first_group(self):
+        self.run_into_living_room()
+        self.S(self.va.VAC, "docked")
+        self.S(self.va.IN_CLEAN, "off")
+        self.tick(30)
+        self.tick(70)
+
+    def test_stuck_then_sent_home_by_hand_ends_the_run(self):
+        # the robot got stuck mid-run; a grown-up freed it and sent it home hours later: no more rooms (kids are up)
+        self.run_into_living_room()
+        self.S(self.va.VAC, "error")
+        self.tick()
+        self.S(self.va.VAC, "returning")
+        self.tick(3 * 3600)
+        self.finish_first_group()
+        self.assertEqual(self.p.D["phase"], "idle")
+        self.S("binary_sensor.kitchen_motion", "off", 120)          # the kids are up: someone in the kitchen 2 min ago
+        self.assertNotIn(self.va.CLEAN_SCRIPT, self.tick(10))
+
+    def test_next_group_waits_five_quiet_minutes(self):
+        self.finish_first_group()
+        self.assertEqual(self.p.D["phase"], "between")
+        self.S("binary_sensor.kitchen_motion", "off", 60)          # someone was in the kitchen a minute ago
+        self.tick(10)
+        self.assertEqual(self.p.D["phase"], "between")
+        self.S("binary_sensor.kitchen_motion", "off", 400)
+        self.tick(10)
+        self.assertEqual((self.p.D["phase"], self.p.D["gi"]), ("running", 1))
+
+    def test_sent_home_by_hand_while_paused_never_resumes(self):
+        self.run_into_living_room()
+        self.S("binary_sensor.front_door", "on")
+        self.assertIn("vacuum.pause", self.tick())
+        self.S("binary_sensor.front_door", "off", 0)
+        self.S(self.va.VAC, "returning")                           # a grown-up: "go home"
+        self.assertNotIn("vacuum.send_command", self.tick(60))
+        self.S(self.va.VAC, "docked")
+        self.S(self.va.IN_CLEAN, "off")
+        self.tick(10)
+        self.assertEqual(self.p.D["phase"], "idle")
+
     def test_paused_time_does_not_count_as_cleaning_a_room(self):
         self.run_into_living_room()
         self.S(self.va.VAC, "paused")
@@ -1009,6 +1050,40 @@ class ChoreForm(Case):
         for gone in ("once", "only", "household", "desc"):
             self.assertNotIn(gone, ch)
         self.assertEqual(ch["where"], "Living Room")   # untouched fields stay
+
+    def test_form_fields_survive_the_grocy_pull(self):
+        """Grocy is the master list: what the form saves must come back from the next pull."""
+        G = {"chores": {}, "uf": {}}
+
+        def gcall(method, path, body=None):
+            parts = path.strip("/").split("/")
+            if method == "POST" and path == "/objects/chores":
+                gid = 100 + len(G["chores"]); G["chores"][gid] = dict(body, id=gid); return {"created_object_id": gid}
+            if method == "PUT" and parts[0] == "objects":
+                G["chores"][int(parts[2])].update(body); return None
+            if parts[0] == "userfields":
+                uf = G["uf"].setdefault(int(parts[2]), {})
+                if method == "PUT":
+                    uf.update(body); return None
+                return dict(uf)
+            if method == "GET" and path == "/objects/chores":
+                return [dict(g, userfields=G["uf"].get(i, {})) for i, g in G["chores"].items()]
+            raise AssertionError(path)
+        self.s.gcall = gcall
+        self.s.HOUSE.setdefault("house_tasks", {})["floors"] = {"Downstairs": ["Living Room"]}
+        code, r = self.app.post("/api/chore", {"by": "jordan", "chore": {
+            "name": "Plug things in", "points": 1, "desc": "At the outlet by the speaker", "once": True, "cooldown_h": 0,
+            "each_daily": False, "on_demand": False, "where": "Living Room", "only": ["ava"], "household": "any", "after": "07:30"}})
+        self.assertEqual(code, 200, r)
+        self.s.grocy_chores_pull()
+        ch = next(x for x in self.s.cfg()["chores"] if x["name"] == "Plug things in")
+        self.assertEqual((ch["desc"], ch.get("once"), ch.get("where"), ch.get("floor"), ch.get("only"), ch.get("household"), ch.get("after"), ch.get("hidden")),
+                         ("At the outlet by the speaker", True, "Living Room", "Downstairs", ["ava"], "any", "07:30", None))
+        # now every 3 days, not a room, and no longer one-time
+        self.app.post("/api/chore", {"by": "jordan", "chore": {"id": ch["id"], "name": "Plug things in", "points": 1, "once": False, "cooldown_h": 72}})
+        self.s.grocy_chores_pull()
+        ch = next(x for x in self.s.cfg()["chores"] if x["id"] == ch["id"])
+        self.assertEqual((ch.get("cooldown_h"), ch.get("room"), ch.get("once"), ch.get("where")), (72, None, None, "Living Room"))
 
 if __name__ == "__main__":
     unittest.main()
