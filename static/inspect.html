@@ -39,6 +39,10 @@ input[type=range]{width:100%;height:36px}
 .h2b{color:var(--ink);font-size:18px;text-transform:none;letter-spacing:0;margin:14px 0 6px}
 details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 12px;margin:8px 0}
 summary{font-weight:700;cursor:pointer;padding:4px 0}
+.tgl{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:14px;background:var(--card,#fff);border:1px solid var(--line,#ddd);cursor:pointer;min-width:240px;flex:1}
+.tgl .sw{width:46px;height:26px;border-radius:13px;background:#bbb;position:relative;flex:none;transition:background .2s}
+.tgl .sw span{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s}
+.tgl.on .sw{background:var(--acc,#43a047)}.tgl.on .sw span{left:23px}.tgl.on{border-color:var(--acc,#43a047)}
 .cfl{display:block;margin:10px 0 3px;font-weight:600}.cfl .mute{font-weight:400}
 .cfi{width:100%;box-sizing:border-box;padding:8px 10px;font-size:15px}
 .cfrow{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}.cfrow>div{flex:1;min-width:120px}
@@ -422,6 +426,8 @@ function render(){
   var ph="";pend.forEach(function(r){var k=kidOf(r.kid),fixed=r.points!=null,other=r.chore==="other";
     if(r.chore==="toy_out"){ph+='<div class="card" data-r="'+r.id+'"><div class="row"><span class="big">'+E(k.icon)+'🧸👋</span><div><b>'+esc(k.name)+'</b> wants to give away <b>'+esc(r.note||"a toy")+'</b> · asks <b>'+(r.ask||0)+' ⭐</b><div class="mute">'+ago(r.ts)+' · settle on what the choice is worth</div></div></div>'+
       '<div class="chips">'+[0,1,2,3,4,5,6].map(function(n){return '<button class="'+(n===r.ask?"ok":"")+'" data-p="'+n+'">'+(n===r.ask?"✓ ":"")+n+'</button>'}).join("")+'<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div></div>';return}
+    if(r.chore==="get_dressed"){ph+='<div class="card" data-r="'+r.id+'" data-dr="1" style="border:3px solid #f5b400"><div class="row"><span class="big">'+E(k.icon)+'👕🧦👟</span><div><b>'+esc(k.name)+'</b> says they\'re dressed<div class="mute">'+ago(r.ts)+' · clothes, socks and shoes?</div></div></div>'+
+      '<div class="chips"><button class="ok" data-drok="1">✅ Ready to go</button><button class="no" data-x="1">Not yet…</button></div></div>';return}
     if(r.chore==="toy_swap"){ph+='<div class="card" data-r="'+r.id+'" data-swap="1"><div class="row"><span class="big">'+E(k.icon)+'🧸➡️👋 🎁</span><div><b>'+esc(k.name)+'</b> is ready to swap: <b>'+esc(r.old_name||"an old toy (other)")+'</b> out, a present in<div class="mute">'+ago(r.ts)+' · '+((S.toys||{})[r.kid]||{left:[]}).left.length+' presents wrapped · approving draws a random present she may open; tick "old toy gone" / "opened" later below</div></div></div>'+
       '<div class="row" style="margin-top:8px"><input class="lbl" placeholder="Old toy (name it if \'other\')" value="'+esc(r.old_name||"")+'" style="flex:1"><button class="ok" data-sw="1">Approve swap</button><button class="no" data-x="1">Not yet</button></div></div>';return}
     var sec=r.started?r.ts-r.started:0,rec=(S.records||{})[r.chore];
@@ -455,7 +461,10 @@ function render(){
   document.querySelectorAll("[data-mostly]").forEach(function(b){b.onclick=function(){MOSTLY=b.dataset.mostly;openPM("mostly")}});
   document.querySelectorAll("[data-is]").forEach(function(b){b.onclick=function(){var c=b.closest(".card");if(c){c.scrollIntoView({behavior:"smooth",block:"start"});c.style.outline="3px solid #43a047";setTimeout(function(){c.style.outline=""},2500)}
     post("/api/inspect_start",{ref:b.dataset.is},"Inspecting — set the points or tap Not yet")}});
-  document.querySelectorAll('#pending .card:not([data-swap])').forEach(function(c){var id=c.dataset.r;
+  document.querySelectorAll('#pending .card[data-dr]').forEach(function(c){var id=c.dataset.r;
+    c.querySelector("[data-drok]").onclick=function(){post("/api/inspect",{ref:id,ok:true,points:0,label:"Dressed"},"Ready to go ✓")};
+    c.querySelector("[data-x]").onclick=function(){NOTYET=id;openPM("notyet")}});
+  document.querySelectorAll('#pending .card:not([data-swap]):not([data-dr])').forEach(function(c){var id=c.dataset.r;
     c.querySelectorAll("[data-p]").forEach(function(b){b.onclick=function(){var l=c.querySelector(".lbl");
       post("/api/inspect",{ref:id,ok:true,points:+b.dataset.p,label:l?l.value:""},"Inspected ✓ +"+b.dataset.p)}});
     c.querySelectorAll(".tsel [data-tp]").forEach(function(b){b.onclick=function(){var m=b.parentNode.dataset.m,sel=TSEL[id];sel[m]=+b.dataset.tp;
@@ -571,13 +580,18 @@ function render(){
     (choreOn&&open?'<div class="row" style="margin-top:8px"><button data-ta="*:five">⏱️ 5-min countdown</button><button data-ta="*:minus">−10</button><button data-ta="*:plus">+10</button><button class="no" style="background:#fff" data-ta="*:lock">🔒 Lock now</button></div>':'')+'</div>';
   // on-demand jobs (e.g. laundry after running the machines): a grown-up opens them; hidden from kids otherwise
   var OD=S.config.chores.filter(function(c){return c.on_demand});
-  if(OD.length)tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap">'+OD.map(function(c){var b=S.board[c.id]||{},open=b.opened||(b.pending_by||[]).length;
-    return '<button class="'+(open?'':'ok')+'" data-od="'+c.id+'" '+(open?'disabled':'')+'>'+E(c.icon)+' '+(open?esc(c.name)+' is open for the kids':'Open '+esc(c.name)+' for the kids')+'</button>'}).join("")+'</div>';
+  // toggles: on-demand jobs (laundry) and "Put on clothes!" -- a switch shows plainly whether it's on
+  var DR=S.dress||{},tg=function(id,on,icon,label,sub,attr){return '<label class="tgl'+(on?' on':'')+'" '+attr+'><span class="sw"><span></span></span><span>'+icon+' <b>'+label+'</b>'+(sub?'<br><span class="mute">'+sub+'</span>':'')+'</span></label>'};
+  tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">'+OD.map(function(c){var b=S.board[c.id]||{},open=!!b.opened,busy=(b.pending_by||[]).length;
+      return tg(c.id,open||busy,E(c.icon),esc(c.name)+' open for the kids',busy?'a kid is waiting for inspection':open?'on: the kids can do it now':'off',(busy?'data-odbusy="1" ':'')+'data-od="'+c.id+'" data-on="'+(open?1:0)+'"')}).join("")+
+    tg("dress",DR.on,"👕","Put on clothes!",DR.on?Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅':'off · kids must dress (clothes, socks, shoes) before anything else','id="dresstgl"')+'</div>';
   var BT=S.bedtime||{};
   tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
   tb+='<div class="mute" style="margin-top:6px">Only enforced while Chore time is on. The speaker warns 5 minutes before a TV locks. A TV that reports the episode\'s end lets a show finish (never past an hour into one title; a new episode, pause or app switch locks it). Others lock on the timer.</div>';
   $("tvbox").innerHTML=tb;
-  document.querySelectorAll("[data-od]").forEach(function(b){b.onclick=function(){post("/api/reopen",{chore:b.dataset.od},"Open: the kids can do it now")}});
+  document.querySelectorAll("[data-od]").forEach(function(b){b.onclick=function(e){e.preventDefault();if(b.dataset.odbusy){toast("A kid is waiting: inspect it below");return}
+    if(b.dataset.on==="1")post("/api/close_od",{chore:b.dataset.od},"Closed");else post("/api/reopen",{chore:b.dataset.od},"Open: the kids can do it now")}});
+  if($("dresstgl"))$("dresstgl").onclick=function(e){e.preventDefault();var on=!(S.dress||{}).on;post("/api/dress",{on:on},on?"Put on clothes! is ON":"Put on clothes! is off")};
   if($("bedbtn"))$("bedbtn").onclick=function(){post("/api/bedtime",{on:!(S.bedtime||{}).on},(S.bedtime||{}).on?"Bedtime ended":"Bedtime! Screens are sending them to bed")};
   document.querySelectorAll("[data-ta]").forEach(function(b){b.onclick=function(){var a=b.dataset.ta.split(":");
     post("/api/tv/adjust",{tv:a[0],action:a[1]},{five:"5-minute countdown started",plus:"+10 min",minus:"−10 min",lock:"Locked"}[a[1]])}});

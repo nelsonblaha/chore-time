@@ -298,8 +298,15 @@ def compute_awards(c, reports, evs, earned, typical):
             "awards_seen": seen, "next_awards": nxt}
 
 
+GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "points": 0, "cooldown_h": 0, "shared": True,
+               "hidden": True, "desc": "Clothes, socks and shoes on. Then show a grown-up."}   # the "Put on clothes!" job
+
+
 def cfg():
-    return json.loads(CONFIG.read_text())
+    c = json.loads(CONFIG.read_text())
+    if not any(x.get("id") == "get_dressed" for x in c.get("chores") or []):
+        c.setdefault("chores", []).append(dict(GET_DRESSED))   # built in; never saved unless the config is edited
+    return c
 
 
 def save_cfg(c):
@@ -499,6 +506,75 @@ def watch_when_down():
         except Exception as ex:  # noqa: BLE001
             print("when_down error", ex, flush=True)
         time.sleep(60)
+
+
+# "Put on clothes!" (a grown-up's switch on the parents' page): the listed kids can't do other jobs or spend until a
+# grown-up passes their "Get dressed" (clothes, socks, shoes); the switch turns itself off when all are ready.
+# Spoken reminders every 30 s on house.json dress.speakers (plain speakers: a Hub would drop its kids' screen).
+DRESS = HOUSE.get("dress") or {}
+
+
+def dress_state(evs, reports):
+    last = next((e for e in reversed(evs) if e["type"] == "dress"), None)
+    if not last or not last.get("on"):
+        return {"on": False, "off_ts": last["ts"] if last else None, "off_by": last.get("by") if last else None}
+    out = {}
+    for k in last.get("kids") or []:
+        mine = [r for r in reports.values() if r["chore"] == "get_dressed" and r["kid"] == k and r["ts"] >= last["ts"]]
+        out[k] = "ready" if any(r["status"] == "inspected" for r in mine) else \
+            "waiting" if any(r["status"] == "pending" for r in mine) else "todo"
+    return {"on": True, "since": last["ts"], "by": last.get("by"), "kids": out}
+
+
+def dress_kids(c):
+    """who gets dressed by default: kids at this house whose home switch is on"""
+    tok = ha_token()
+    return [k["id"] for k in c["kids"] if kid_where(c, k["id"]) == home_of(c)
+            and (not k.get("home_entity") or ha_get(k["home_entity"], tok).get("state") == "on")]
+
+
+def dress_announce(first=False):
+    d_ = derive().get("dress") or {}
+    todo = [k for k, v in (d_.get("kids") or {}).items() if v == "todo"]
+    if not d_.get("on") or not todo:
+        return
+    names = " and ".join(next((x["name"] for x in cfg()["kids"] if x["id"] == k), k) for k in todo)
+    msg = (DRESS.get("message") or "{names}: put on your clothes, socks and shoes right now! Then show a grown-up.").format(names=names)
+    spk = DRESS.get("speakers") or ([ANNOUNCE_SPEAKER] if ANNOUNCE_SPEAKER else [])
+    if ANNOUNCE_TTS and spk:
+        ilog({"src": "announce", "msg": msg, "speaker": spk})
+        ha_call("tts.speak", {"entity_id": ANNOUNCE_TTS, "media_player_entity_id": spk, "message": msg, "cache": True}, ha_token())
+
+
+# Hubs grab attention: house.json hubs.<id>.motion = [HA sensors near that Hub]. A sensor turning on after 2+ quiet
+# minutes stamps GUARD["hub_motion"][hub]; that Hub's page then chimes and flashes the kids who have something waiting.
+def watch_hub_motion():
+    prev, quiet_since = {}, {}
+    while True:
+        try:
+            tok = ha_token()
+            for hub, hcfg in (HOUSE.get("hubs") or {}).items():
+                for e in hcfg.get("motion") or []:
+                    st_ = (ha_get(e, tok) or {}).get("state")
+                    if st_ == "on" and prev.get(e) == "off" and time.time() - quiet_since.get(e, 0) >= 120:
+                        GUARD.setdefault("hub_motion", {})[hub] = time.time()
+                    if st_ != "on" and prev.get(e) == "on":
+                        quiet_since[e] = time.time()
+                    elif st_ == "off" and e not in quiet_since:
+                        quiet_since[e] = time.time()
+                    prev[e] = st_
+        except Exception as ex:  # noqa: BLE001
+            print("hub motion error", ex, flush=True)
+        time.sleep(3)
+
+
+def watch_dress():
+    while True:
+        time.sleep(int(DRESS.get("every_s", 30)))
+        try:
+            dress_announce()
+        except Exception as ex:  # noqa: BLE001
+            print("dress announce error", ex, flush=True)
 
 
 def chore_closed(ch, board):
@@ -818,7 +894,8 @@ def derive():
         if part_paid and price is not None and not is_rest:
             price = max(0, price - part_paid)
             bonus = True if price != ch.get("points") else bonus
-        reopened = any(e["type"] == "reopen" and e.get("chore") == cid and e["ts"] > last_ok for e in evs)
+        closed_at = max([e["ts"] for e in evs if e["type"] == "close_od" and e.get("chore") == cid] or [0])   # a grown-up closed it again
+        reopened = any(e["type"] == "reopen" and e.get("chore") == cid and e["ts"] > max(last_ok, closed_at) for e in evs)
         cd = float(ch.get("cooldown_h", 72 if ch.get("room") else 0))   # rooms stay clean 3 days unless an adult reopens
         clean_until = last_ok + cd * 3600 if (last_ok and cd and not reopened) else 0
         if ch.get("daily") and last_ok and not reopened:   # e.g. mail: once a day, available again after midnight
@@ -987,6 +1064,7 @@ def derive():
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
+            "dress": dress_state(evs, reports),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
                           if (chores.get(a["chore"]) or {}).get("remind") for m in (a.get("team") or [k])}}
@@ -1475,6 +1553,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, f.read_bytes(), "image/jpeg")
         if p == "/api/state":
             st = derive()
+            hub_ = next((h for h, x in (HOUSE.get("hubs") or {}).items() if x.get("ip") == self.client_address[0]), None)
+            st["hub"], st["hub_motion"] = hub_, (GUARD.get("hub_motion") or {}).get(hub_)
             try:
                 seen = json.loads(NEWS_SEEN.read_text())
             except (OSError, ValueError):
@@ -1561,6 +1641,9 @@ class H(BaseHTTPRequestHandler):
                 and not (chores.get(b.get("chore") or (st["paused"].get(b.get("kid")) or {}).get("chore")) or {}).get("bedtime_ok"):
             # after bedtime only tooth-brushing; jobs and rewards wait for the morning (6 AM)
             return self.send(409, {"error": "bedtime"})
+        if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and b.get("chore") != "get_dressed" \
+                and (st.get("dress") or {}).get("on") and (st["dress"]["kids"].get(b.get("kid")) or "ready") != "ready":
+            return self.send(409, {"error": "Put on your clothes first!"})
         if p == "/api/log":
             evs = b if isinstance(b, list) else [b]
             opened = {}
@@ -1778,10 +1861,14 @@ class H(BaseHTTPRequestHandler):
             ev = append({"type": "inspect", "ref": r["id"], "by": b["by"], "ok": ok,
                          "points": int(pts) if ok else 0, "label": str(b.get("label") or "")[:60], **extra,
                          **({"feedback": str(b.get("feedback") or "")[:600]} if not ok else {})})
+            if r["chore"] == "get_dressed" and ok:
+                d_ = derive().get("dress") or {}
+                if d_.get("on") and all(v == "ready" for v in d_["kids"].values()):
+                    append({"type": "dress", "on": False, "kids": [], "by": "auto", "why": "everyone dressed"})
             if ok and b.get("leftover_points") is not None and r["chore"] not in ("toy_swap", "other"):
                 append({"type": "price", "chore": r["chore"], "points": max(0, min(50, int(b["leftover_points"]))),
                         "rest": True, "note": str(b.get("leftover_note") or "")[:600], "by": b["by"], "ref": r["id"]})
-            if not ok and not r.get("partial") and r["chore"] not in ("toy_swap", "other"):
+            if not ok and not r.get("partial") and r["chore"] not in ("toy_swap", "other", "get_dressed"):
                 # hand the chore back: the kid's timer resumes from the work time so far (waiting/inspection excluded)
                 worked = (r["ts"] - r["started"]) if r.get("started") else 0
                 append({"type": "rework", "ref": r["id"], "chore": r["chore"], "team": r.get("team") or [r["kid"]],
@@ -2156,6 +2243,20 @@ class H(BaseHTTPRequestHandler):
             else:
                 ev = append({"type": "present_named", "kid": b["kid"], "by": b["by"],
                              "present": int(b.get("present") or 0), "name": str(b.get("name") or "")[:40]})
+        elif p == "/api/close_od":   # an on-demand job (laundry) toggled off again without anyone doing it
+            if b.get("by") not in insp or b.get("chore") not in chores:
+                return self.send(400, {"error": "unknown inspector/chore"})
+            ev = append({"type": "close_od", "chore": b["chore"], "by": b["by"]})
+        elif p == "/api/dress":   # "Put on clothes!": blocks other jobs until each kid is inspected dressed
+            if b.get("by") not in insp:
+                return self.send(400, {"error": "grown-ups only"})
+            on = bool(b.get("on"))
+            who = [k for k in (b.get("kids") or []) if k in kids] or dress_kids(c)
+            if on and not who:
+                return self.send(409, {"error": "no kids home"})
+            ev = append({"type": "dress", "on": on, "kids": who if on else [], "by": b["by"]})
+            if on:
+                threading.Thread(target=dress_announce, args=(True,), daemon=True).start()
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown inspector/chore"})
@@ -3254,7 +3355,7 @@ def watch_bright_rooms():
 # toy_swap, toy_out) and bundles stay local. Passed jobs / "it's clean" -> Grocy execution; "it's dirty" -> reschedule now;
 # undo -> undo the execution; a chore ticked done in Grocy itself -> "marked clean" here.
 GROCY_SYNC = DATA / "grocy_sync.json"
-SYSTEM_CHORES = {"other", "toy_swap", "toy_out"}
+SYSTEM_CHORES = {"other", "toy_swap", "toy_out", "get_dressed"}
 GROCY = HOUSE.get("grocy") or {}   # optional: Grocy is the master chore list (kids' chores tagged with userfields)
 GROCY_START = float(GROCY.get("ledger_seeded_before", 0))   # ledger events before this were imported, never pushed
 
@@ -3694,6 +3795,9 @@ def start_modules():
         if any(k.get("where") for k in cfg()["kids"]):
             go("kid-where", watch_kid_where)      # which household each kid is at (two-household families)
             go("when-down", watch_when_down)      # "plug it back in" jobs appear while a device is unavailable
+            go("dress", watch_dress)              # "Put on clothes!" spoken reminders every 30 s while it's on
+            if any((h_ or {}).get("motion") for h_ in (HOUSE.get("hubs") or {}).values()):
+                go("hub-motion", watch_hub_motion)   # someone walks up to a Hub: it chimes for kids with something waiting
         if TVS or HUBS:
             go("tv-guard", watch_tvs)             # chore time, TV locks, Hub keeper, bedtime holds
         if LAUNCHERS:

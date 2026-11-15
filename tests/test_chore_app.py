@@ -1235,5 +1235,35 @@ class FixItJobs(Case):
         self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "letter"})[0], 200)
         self.assertIn("I'm done", self.app.state()["next_step"]["max"])
 
+
+class PutOnClothes(Case):
+    """A grown-up's switch: listed kids can't do other jobs until each is inspected dressed; then it turns itself off."""
+
+    def test_blocks_until_everyone_is_dressed_then_turns_off(self):
+        code, r = self.app.post("/api/dress", {"by": "jordan", "on": True, "kids": ["ava", "max"]})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(self.app.state()["dress"]["kids"], {"ava": "todo", "max": "todo"})
+        code, r = self.app.post("/api/start", {"kid": "ava", "chore": "kitchen"})
+        self.assertEqual((code, r.get("error")), (409, "Put on your clothes first!"))
+        ids = {}
+        for k in ("ava", "max"):
+            code, r = self.app.post("/api/report", {"kid": k, "chore": "get_dressed", "feeling": "ok"})
+            self.assertEqual(code, 200, r)
+            ids[k] = r["event"]["id"]
+        self.assertEqual(self.app.state()["dress"]["kids"]["ava"], "waiting")
+        self.app.post("/api/inspect", {"ref": ids["ava"], "by": "jordan", "ok": True, "points": 0})
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 200)   # ava is free
+        self.assertTrue(self.app.state()["dress"]["on"])
+        self.app.post("/api/inspect", {"ref": ids["max"], "by": "jordan", "ok": True, "points": 0})
+        self.assertFalse(self.app.state()["dress"]["on"])                                          # all ready: off
+
+    def test_laundry_toggles_closed_again(self):
+        c = self.s.cfg(); c["chores"].append({"id": "wash", "name": "Laundry", "icon": "1f455", "points": 3, "on_demand": True})
+        self.s.save_cfg(c)
+        self.app.post("/api/reopen", {"chore": "wash", "by": "jordan"})
+        self.assertTrue(self.app.state()["board"]["wash"]["opened"])
+        self.assertEqual(self.app.post("/api/close_od", {"chore": "wash", "by": "jordan"})[0], 200)
+        self.assertFalse(self.app.state()["board"]["wash"]["opened"])
+
 if __name__ == "__main__":
     unittest.main()

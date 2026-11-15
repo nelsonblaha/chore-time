@@ -18,6 +18,8 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
   align-items:center;justify-content:center;gap:8px;box-shadow:0 10px 0 rgba(0,0,0,.18),0 18px 40px rgba(0,0,0,.18);
   transition:transform .12s;position:relative;overflow:hidden}
 .kidcard:active{transform:scale(.95)}
+@keyframes attnb{50%{filter:brightness(1.5);box-shadow:0 0 0 12px #ffeb3b}}
+.kidcard.attn{animation:attnb .7s infinite}
 .kidcard .face{font-size:150px}
 .kidcard:nth-child(2) .face{animation-delay:.4s}.kidcard:nth-child(3) .face{animation-delay:.8s}
 .kidcard .nm{font-size:40px;font-weight:900}
@@ -340,6 +342,7 @@ function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adul
   var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
   if(inspModalRef){var ir=S.history.find(function(h){return h.id===inspModalRef});
     if(!ir||ir.status!=="pending"){inspModalRef=null;if($("m").classList.contains("on"))closeModal()}}
+  checkAttention();
   if(sig!==lastSig){lastSig=sig;render();liveCelebrate()}syncTimers();return s})}
 var seenInspecting={},inspModalRef=null;
 function liveCelebrate(){ // inspections/awards that land while a kid is on their own screen pop up right away
@@ -401,11 +404,16 @@ function render(){
   if(!S)return;
   drawBed();
   var h="";
+  var DRK=Object.keys((S.dress&&S.dress.on&&S.dress.kids)||{}).filter(function(x){return S.dress.kids[x]!=="ready"});
+  if(DRK.length)h+='<div style="position:fixed;top:6px;left:3vw;right:3vw;z-index:5;background:#c62828;color:#fff;border-radius:20px;padding:6px 16px;font-size:28px;font-weight:900;text-align:center;animation:attnb .8s infinite">'+E("1f455")+' '+DRK.map(function(x){return (S.config.kids.find(function(y){return y.id===x})||{name:x}).name}).join(", ")+': put on your clothes NOW!</div>';
+  dressBeep();
   S.config.kids.forEach(function(k){
     var b=S.balance[k.id],w=reports(k.id).filter(function(r){return r.status==="pending"}).length,tro=trophies(k.id);
     var fresh=newInspections(k.id).length;
     var nx=(S.next_step||{})[k.id];   // a "remind" job left in progress (a letter): flag it on the card
-    h+='<div class="kidcard" style="--c:'+k.color+'" data-k="'+k.id+'">'+(nx?'<div class="badge" style="animation:pulse 1.2s infinite">'+E("1f449")+'</div>':fresh?'<div class="badge">'+E("2728")+'</div>':(w?'<div class="badge">'+E("1f50d")+'</div>':''))+
+    var dk=dressOf(k.id);
+    var at=(ATTN[k.id]||0)>Date.now()&&kidHas(k.id);
+    h+='<div class="kidcard'+(at||(dk&&dk!=="ready")?' attn':'')+'" style="--c:'+k.color+'" data-k="'+k.id+'">'+(dk&&dk!=="ready"?'<div class="badge">'+E(dk==="waiting"?"1f50d":"1f455")+'</div>':nx?'<div class="badge" style="animation:pulse 1.2s infinite">'+E("1f449")+'</div>':fresh?'<div class="badge">'+E("2728")+'</div>':(w?'<div class="badge">'+E("1f50d")+'</div>':''))+
        (tro?'<div class="trophy">'+tro+'</div>':'')+'<div class="face">'+E(k.icon)+'</div><div class="nm">'+k.name+'</div><div class="pts">'+b+' '+E("2b50")+'</div>'+
        (function(l){return l.length?'<div class="act">'+l.map(function(x){return '<div class="al">'+x+'</div>'}).join("")+'</div>':''})(actLines(k.id))+'</div>';
   });
@@ -555,8 +563,9 @@ function getSeen(k){try{return parseFloat(localStorage.getItem(seenKey(k))||"0")
 function setSeen(k,t){seen[k]=t;try{localStorage.setItem(seenKey(k),String(t))}catch(e){}}
 function newInspections(k){var t=Math.max(getSeen(k),seen[k]||0);return reports(k).filter(function(r){return r.inspected_ts&&r.inspected_ts>t}).reverse()}
 
-function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});kid=k;page=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
+  if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(remindJob(k,lastUse))return;
     var fresh=newInspections(k);if(fresh.length){revealQueue(fresh)}else{if(!getSeen(k))setSeen(k,S.now);showNewAwards()}})})}
 function revealQueue(list){L("reveal",{n:list.length});
@@ -579,7 +588,7 @@ function slotBtns(c,bd){var me=bd.claimed_by===kid,BIG='font-size:36px;font-weig
   if(!bd.claimed_by)return '<div class="faces"><div class="btn" id="claim" style="'+BIG+'background:#fff3c4;border:5px solid #f5b400">'+E("1f64b")+' Claim '+slotWhen(bd.slot)+'</div></div>';
   if(Date.now()/1000<bd.slot-1800)return '<div class="q" style="color:#2e7d32">'+E("1f64c")+" It's yours "+slotWhen(bd.slot)+'!</div><div class="faces"><div class="btn" id="unclaim" style="font-size:22px;padding:6px 16px;opacity:.7">Give it back</div></div>';
   return '<div class="faces"><div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I\'m done!</div></div>'}
-function askChore(cid,fromDoing){L("ask_chore",{chore:cid});
+function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))return;
   var c=S.config.chores.find(function(x){return x.id===cid}),bd=S.board[cid]||{price:c.points},A=(S.active||{})[kid],T=(S.typical||{})[cid]||(c.est_minutes?{minutes:c.est_minutes}:null);
   var other=cid==="other"||c.shared?null:Object.keys(S.active||{}).find(function(k){var a=S.active[k];return a.chore===cid&&(a.team||[k]).indexOf(kid)<0});
   var saver=cid==="other"?null:Object.keys(S.paused||{}).find(function(k){return S.paused[k].chore===cid&&(!c.shared||k===kid)});
@@ -721,6 +730,34 @@ function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){retu
         '<div class="faces"><div class="btn yes" id="envnew" style="'+big+'">'+E("1f501")+' Print a new one</div><div class="btn" id="envkeep" style="font-size:22px;padding:6px 18px">Keep this one</div></div>');
       $("envnew").onclick=function(){load()};$("envkeep").onclick=function(){done()}}}
   from()}
+/* attention: a Hub nobody is looking at chimes and flashes the cards of kids with something waiting */
+var ATTN={},lastMotion=null,prevFresh=null;
+function kidHas(k){var d=dressOf(k);if(d&&d!=="ready")return "dress";if(newInspections(k).length)return "inspected";
+  if((S.next_step||{})[k]||(S.active||{})[k]||(S.paused||{})[k])return "job";return null}
+function checkAttention(){if(!S)return;var now=Date.now(),list=[];
+  var fresh={};S.config.kids.forEach(function(k){fresh[k.id]=newInspections(k.id).length});
+  if(prevFresh&&!kid){var got=S.config.kids.filter(function(k){return fresh[k.id]>(prevFresh[k.id]||0)});
+    if(got.length){L("attn_inspected",{kids:got.map(function(k){return k.id})});chime([659,784,988,1319]);confetti(160);got.forEach(function(k){ATTN[k.id]=now+10*60000})}}
+  prevFresh=fresh;
+  if(lastMotion===null){lastMotion=S.hub_motion||0;return}
+  if(S.hub_motion&&S.hub_motion>lastMotion){lastMotion=S.hub_motion;
+    if(!kid){list=S.config.kids.filter(function(k){return kidHas(k.id)});
+      if(list.length){L("attn_motion",{kids:list.map(function(k){return k.id})});chime([784,988,784,988]);list.forEach(function(k){ATTN[k.id]=Math.max(ATTN[k.id]||0,now+25000)});
+        setTimeout(function(){if(!kid)render()},26000)}}}}
+/* "Put on clothes!" (a grown-up's switch): nothing else until they're dressed and checked */
+function dressOf(k){var D=S.dress||{};return D.on?(D.kids||{})[k]:null}
+function dressScreen(k){var st=dressOf(k);if(!st||st==="ready")return false;L("dress_screen",{st:st});
+  if(st==="waiting"){modal('<div class="big">'+E("1f455")+E("1f50d")+'</div><div class="q">A grown-up is coming to check you!</div><div class="q" style="font-size:24px;opacity:.8">Clothes, socks and shoes on? Wait right here.</div>');addOk();return true}
+  modal('<div class="big" style="animation:pulse 1s infinite">'+E("1f455")+'</div><div class="q" style="font-size:44px;color:#c62828">Put on your clothes NOW!</div>'+
+    '<div class="faces" style="font-size:30px;gap:24px"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
+    '<div class="q" style="font-size:22px;opacity:.75">Nothing else until a grown-up says you\'re ready to go.</div>'+
+    '<div class="faces"><div class="btn yes" id="drdone" style="font-size:38px;font-weight:900;padding:14px 34px">'+E("2705")+' I\'m dressed!</div></div>');
+  $("drdone").onclick=function(){if(busy)return;busy=true;L("dress_done",{});api("/api/report",{kid:k,chore:"get_dressed",feeling:"ok"}).then(function(r){busy=false;if(r.ok)S=r.state;
+    modal('<div class="big">'+E("1f50d")+'</div><div class="q">'+(r.ok?'Go show a grown-up!':'Hmm: '+(r.error||'try again'))+'</div>');chime([523,659]);addOk(function(){render()})}).catch(function(){busy=false})};
+  return true}
+var dressBeepT=0;setInterval(function(){try{dressBeep()}catch(e){}},5000);
+function dressBeep(){var D=S&&S.dress;if(!D||!D.on)return;var todo=Object.keys(D.kids||{}).filter(function(k){return D.kids[k]==="todo"});if(!todo.length)return;
+  if(Date.now()-dressBeepT<30000)return;dressBeepT=Date.now();L("dress_beep",{n:todo.length});chime([880,660,880,660,988])}
 function doReport(c,feel,node,note,ask,delivered){L("report",{chore:c.id,feeling:feel,note:note||null,ask:ask==null?null:ask});
   if(busy)return;busy=true;
   api("/api/report",{kid:kid,chore:c.id,feeling:feel,note:note||undefined,ask:ask==null?undefined:ask,delivered:delivered||undefined}).then(function(res){
