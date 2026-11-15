@@ -687,7 +687,7 @@ class HouseTasks(unittest.TestCase):
         def gcall(method, path, body=None):
             self.calls.append((method, path))
             return self.grocy.get(path) if method == "GET" else {}
-        self.g = {"ha_token": lambda: "t", "DATA": self.tmp, "gcall": gcall, "ilog": lambda e: None, "GUARD": {},
+        self.g = {"HOUSE": {"grocy": {"review_category": "Inbox"}}, "ha_token": lambda: "t", "DATA": self.tmp, "gcall": gcall, "ilog": lambda e: None, "GUARD": {},
                   "ha_get": lambda e, tok: self.ha.get(e, {"state": "unavailable"}),
                   "ha_post_state": lambda ent, state, attrs, tok: self.ha.__setitem__(ent, {"state": state, "attributes": attrs})}
 
@@ -727,6 +727,15 @@ class HouseTasks(unittest.TestCase):
         self.ha["sensor.u"] = {"state": "0"}
         self.H.HouseTasks(self.g).tick()
         self.assertEqual(self.ha["sensor.house_tasks"]["state"], "0")
+
+    def test_an_imported_inbox_is_counted_not_listed(self):
+        """150 imported to-dos would bury the board: the review inbox is a number until they're sorted."""
+        self.grocy["/objects/task_categories"] = [{"id": 2, "name": "inbox"}]
+        self.grocy["/objects/tasks"] = [{"id": i, "name": "imported %d" % i, "done": 0, "category_id": 2} for i in range(30)] + [
+            {"id": 99, "name": "Fix the gate", "done": 0, "category_id": None}]
+        self.H.HouseTasks(self.g).tick()
+        a = self.ha["sensor.house_tasks"]["attributes"]
+        self.assertEqual(([i["name"] for i in a["items"]], a["to_review"]), (["Fix the gate"], 30))
 
     def test_done_by_itself_once(self):
         self.grocy["/objects/tasks"] = [{"id": 3, "name": "Move the wash to the dryer", "done": 0,

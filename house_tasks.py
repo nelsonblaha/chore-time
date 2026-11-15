@@ -11,7 +11,8 @@ Conditions: "<entity> <op> <value>" joined by "and"; op is one of = != > < >= <=
 comes true is completed in Grocy (once). Batteries (Grocy batteries with userfields ha_entity: one or more battery
 sensors of the device, comma separated, the newest reading counts; ha_low: the level that means replace) become
 "Replace the battery" items while the Home Assistant level is at or below ha_low, and are tracked as replaced in
-Grocy when the level comes back up. Everything is published as sensor.house_tasks for the boards.
+Grocy when the level comes back up. Everything is published as sensor.house_tasks for the boards. Tasks in the
+house.json grocy "review_category" (an inbox, e.g. tasks imported from elsewhere) are only counted (to_review).
 """
 import json
 import re
@@ -104,8 +105,14 @@ class HouseTasks:
             out.append({"kind": "chore", "id": o.get("id") or c.get("chore_id"), "name": o.get("name") or c.get("chore_name"),
                         "due": due, "overdue": bool(due and due < now), "assigned": users.get(c.get("next_execution_assigned_to_user_id")),
                         "last": ts(c.get("last_tracked_time")), "uf": uf})
+        inbox = str((self.g["HOUSE"].get("grocy") or {}).get("review_category") or "").strip().lower()
+        inbox_ids = {c["id"] for c in (self.gc("GET", "/objects/task_categories") or []) if inbox and c["name"].lower() == inbox}
+        self.to_review = 0
         for t in self.gc("GET", "/objects/tasks") or []:
             if str(t.get("done")) == "1":
+                continue
+            if t.get("category_id") in inbox_ids:                     # imported, not yet sorted: counted, not listed
+                self.to_review += 1
                 continue
             due = ts(t.get("due_date"))
             out.append({"kind": "task", "id": t["id"], "name": t["name"], "due": due, "overdue": bool(due and due < now),
@@ -151,7 +158,7 @@ class HouseTasks:
         shown.sort(key=lambda i: (not i["overdue"], i["due"] or 9e12, i["name"]))
         due = [i for i in shown if i["visible"] and (i["kind"] != "chore" or (i["due"] and i["due"] <= now + 86400))]
         attrs = {"friendly_name": "House tasks", "icon": "mdi:clipboard-check-outline", "items": due[:40],
-                 "all": len(shown), "updated": now}
+                 "all": len(shown), "to_review": getattr(self, "to_review", 0), "updated": now}
         sig = json.dumps(due, sort_keys=True, default=str)
         if sig != self.last_sig or now - self.D.get("pub", 0) > 600:
             self.g["ha_post_state"]("sensor.house_tasks", str(len(due)), attrs, self.tok)
