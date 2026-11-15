@@ -599,7 +599,8 @@ function slotBtns(c,bd){var me=bd.claimed_by===kid,BIG='font-size:36px;font-weig
   if(bd.claimed_by&&!me)return '<div class="q">'+E(KI2(bd.claimed_by).icon)+' '+KI2(bd.claimed_by).name+' has it '+slotWhen(bd.slot)+'</div>';
   if(!bd.claimed_by)return '<div class="faces"><div class="btn" id="claim" style="'+BIG+'background:#fff3c4;border:5px solid #f5b400">'+E("1f64b")+' Claim '+slotWhen(bd.slot)+'</div></div>';
   if(Date.now()/1000<bd.slot-1800)return '<div class="q" style="color:#2e7d32">'+E("1f64c")+" It's yours "+slotWhen(bd.slot)+'!</div><div class="faces"><div class="btn" id="unclaim" style="font-size:22px;padding:6px 16px;opacity:.7">Give it back</div></div>';
-  if(bd.certify_at)return '<div class="q" style="color:#2e7d32">'+E(c.icon)+' '+(Date.now()/1000<bd.slot+3600?"Do it now!":"Done?")+'</div><div class="q" style="font-size:26px;opacity:.85">'+E("1f50d")+' A grown-up checks it after '+hm(bd.certify_at)+' and gives your stars.</div>';   // the grown-up certifies it, no kid "done" button
+  if(bd.certify_at)return '<div class="q" style="font-size:26px;opacity:.85">'+E("1f50d")+' When you\'re done, tap below. A grown-up checks it and gives your stars.</div>'+
+    '<div class="faces"><div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I did it!</div></div>';
   return '<div class="faces"><div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I\'m done!</div></div>'}
 function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))return;
   var c=S.config.chores.find(function(x){return x.id===cid}),bd=S.board[cid]||{price:c.points},A=(S.active||{})[kid],T=(S.typical||{})[cid]||(c.est_minutes?{minutes:c.est_minutes}:null);

@@ -1046,10 +1046,13 @@ def derive():
                 if e["type"] == "certify" and e.get("chore") == cid and e.get("slot") == sl_:
                     v_ = bool(e.get("ok"))
             return v_
+        def passed(sl_):   # the kid's "I did it" for that service, already inspected
+            return any(r["chore"] == cid and sl_ - 1800 <= r["ts"] < sl_ + 6 * 86400 and r["status"] == "inspected"
+                       and not r.get("partial") for r in reports.values())
         slot = next_slot(ch)
-        if certify_at(ch, slot) is not None:   # last service still waiting for the grown-up's OK: keep showing it
+        if certify_at(ch, slot) is not None:   # last service still waiting for the grown-up: keep showing it
             prev = next_slot(ch, after=time.time() - 6 * 86400)
-            if prev < slot and prev < time.time() and claimant(prev) and checked(prev) is None:
+            if prev < slot and prev < time.time() and claimant(prev) and checked(prev) is None and not passed(prev):
                 slot = prev
         who = claimant(slot)
         done = [r for r in reports.values() if r["chore"] == cid and r["ts"] > slot - 6 * 86400
@@ -1864,8 +1867,6 @@ class H(BaseHTTPRequestHandler):
             if (ch_.get("after") or ch_.get("before")) and chore_closed(ch_, st["board"]) in ("later", "over"):
                 return self.send(409, {"error": "not now: %s-%s" % (ch_.get("after") or "", ch_.get("before") or "")})
             if ch_.get("slot"):
-                if bd.get("certify_at"):
-                    return self.send(409, {"error": "a grown-up checks this one afterwards"})
                 if bd.get("claim_done"):
                     return self.send(409, {"error": "already done this week"})
                 if bd.get("claimed_by") and bd["claimed_by"] != b["kid"]:

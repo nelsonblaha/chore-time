@@ -1432,7 +1432,6 @@ class CertifiedSlot(Case):
         a.event(type="claim", kid="ava", chore="church", slot=self.last_service())
         b = a.state()["board"]["church"]
         self.assertEqual((b["slot"], b["claimed_by"], b["certified"]), (self.last_service(), "ava", None))
-        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "church"})[0], 409)   # kids don't report it
         code, r = a.post("/api/certify", {"chore": "church", "by": "jordan", "ok": True})
         self.assertEqual(code, 200, r)
         st = a.state()
@@ -1446,6 +1445,18 @@ class CertifiedSlot(Case):
         self.assertEqual(a.post("/api/certify", {"chore": "church", "by": "jordan", "ok": False})[0], 200)
         st = a.state()
         self.assertEqual(st["balance"]["ava"], 0)
+        self.assertGreater(st["board"]["church"]["slot"], time.time())
+
+    def test_kid_says_they_did_it_and_the_grown_up_inspects(self):
+        a = self.app
+        a.event(type="claim", kid="ava", chore="church", slot=self.last_service())
+        code, r = a.post("/api/report", {"kid": "ava", "chore": "church"})
+        self.assertEqual(code, 200, r)
+        b = a.state()["board"]["church"]
+        self.assertEqual((b["slot"], b["claim_done"]), (self.last_service(), True))   # waits for the grown-up, no certify card
+        self.assertEqual(a.post("/api/inspect", {"ref": r["event"]["id"], "by": "jordan", "ok": True, "points": 3})[0], 200)
+        st = a.state()
+        self.assertEqual(st["balance"]["ava"], 3)
         self.assertGreater(st["board"]["church"]["slot"], time.time())
 
     def test_every_other_week_and_the_calendar_wins(self):
