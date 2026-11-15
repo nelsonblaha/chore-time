@@ -9,13 +9,21 @@ header{display:flex;align-items:center;gap:16px;padding:18px 28px 6px}
 h1{margin:0;font-size:40px;font-weight:900;flex:1}
 #clock{font-size:40px;font-weight:800;opacity:.8}
 #adult{font-size:28px;font-weight:900;background:#455a64;color:#fff;border-radius:22px;padding:10px 22px;cursor:pointer;box-shadow:0 4px 0 rgba(0,0,0,.3)}
-#list{padding:10px 28px;display:flex;flex-direction:column;gap:16px}
+#grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;padding:4px 24px}
+@media (max-width:900px){#grid{grid-template-columns:1fr}}
+h2{margin:6px 0 10px;font-size:28px;font-weight:900;opacity:.85}
+#list,#chores{display:flex;flex-direction:column;gap:12px}
+.c{display:flex;align-items:center;gap:14px;background:#1c2540;border-radius:20px;padding:10px 16px;border-left:10px solid var(--c)}
+.c .f{font-size:44px;line-height:1}.c .m{flex:1;min-width:0}.c .w{font-size:26px;font-weight:900}.c .x{font-size:20px;opacity:.8}
+.c .t{font-size:30px;font-weight:900;font-variant-numeric:tabular-nums;text-align:right}
+.c.wait{border-left-color:#8e24aa}.c.done{opacity:.85}.c.done .t{color:#81c784}
+.sub{font-size:20px;font-weight:800;opacity:.6;margin:8px 0 2px}
 .row{display:flex;align-items:center;gap:20px;background:#1c2540;border-radius:26px;padding:16px 22px;border-left:14px solid var(--c)}
-.row .face{font-size:84px;line-height:1}
+.row .face{font-size:60px;line-height:1}
 .row .mid{flex:1;min-width:0}
-.row .who{font-size:40px;font-weight:900}
+.row .who{font-size:30px;font-weight:900}
 .row .what{font-size:28px;font-weight:800;opacity:.85}
-.row .left{font-size:64px;font-weight:900;font-variant-numeric:tabular-nums;text-align:right;min-width:210px}
+.row .left{font-size:46px;font-weight:900;font-variant-numeric:tabular-nums;text-align:right;min-width:210px}
 .row .ends{font-size:24px;opacity:.75;text-align:right}
 .bar{height:22px;background:rgba(255,255,255,.14);border-radius:12px;overflow:hidden;margin-top:10px}
 .fill{height:100%;width:0;background:var(--c);border-radius:12px;transition:width 1s linear}
@@ -31,7 +39,7 @@ h1{margin:0;font-size:40px;font-weight:900;flex:1}
 img.e{width:1em;height:1em;vertical-align:-0.12em}
 </style></head><body>
 <header><h1>📺 Right now</h1><div id="clock"></div><div id="adult">👤 Grown-up</div></header>
-<div id="list"></div>
+<div id="grid"><section><h2>📺 Screen time</h2><div id="list"></div></section><section><h2>🧹 Chores</h2><div id="chores"></div></section></div>
 <div class="modal" id="m"><div class="box" id="mbox"></div></div>
 <script>
 var S=null,TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
@@ -49,6 +57,24 @@ function periods(){Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(id){TVN[id
     if(T.finish&&T.finish.until>now)out.push({c:"#8e24aa",face:"1f3ac",who:"Finishing the show",what:esc(T.finish.title)+" · "+(TVN[tid]||tid),until:T.finish.until,start:T.finish.until-1800,tv:tid})});
   (S.timers||[]).forEach(function(t){var k=kids[t.kid]||{};var end=t.start+t.minutes*60;if(end>now)out.push({c:k.color||"#78909c",face:k.icon,who:k.name||t.kid,what:"VR",until:end,start:t.start})});
   return out.sort(function(a,b){return (a.armed?1e12:a.until)-(b.armed?1e12:b.until)})}
+/* jobs: doing now (timer + usual-time bar), waiting for a grown-up's check, and today's finished ones */
+function choresHtml(now){var kids={},ch={},o="";(S.config.kids||[]).forEach(function(k){kids[k.id]=k});(S.config.chores||[]).forEach(function(c){ch[c.id]=c});
+  var face=function(ids){return ids.map(function(k){return E((kids[k]||{}).icon)}).join("")},nm=function(ids){return ids.map(function(k){return esc((kids[k]||{}).name||k)}).join(" + ")};
+  var seen={},doing=[];Object.keys(S.active||{}).forEach(function(k){var a=S.active[k],team=a.team||[k],key=a.chore+team.join();if(seen[key])return;seen[key]=1;doing.push({a:a,team:team})});
+  doing.forEach(function(d){var c=ch[d.a.chore]||{name:d.a.chore,icon:"2b50"},typ=((S.typical||{})[d.a.chore]||{}).minutes||c.est_minutes||10,el=now-d.a.ts,pc=Math.min(100,100*el/(typ*60));
+    o+='<div class="c" style="--c:'+((kids[d.team[0]]||{}).color||"#78909c")+'"><div class="f">'+face(d.team)+'</div><div class="m"><div class="w">'+E(c.icon)+' '+esc(c.name)+'</div><div class="x">'+nm(d.team)+' · usually ~'+Math.round(typ)+' min</div>'+
+      (d.a.notimer?'':'<div class="bar"><div class="fill" style="width:'+pc.toFixed(1)+'%;'+(el>typ*60?'background:#ff9800':'')+'"></div></div>')+'</div><div class="t">'+(d.a.notimer?'':mmss(el))+'</div></div>'});
+  Object.keys(S.paused||{}).forEach(function(k){var z=S.paused[k],c=ch[z.chore]||{name:z.chore,icon:"2b50"};
+    o+='<div class="c" style="--c:#9575cd"><div class="f">'+face(z.team||[k])+'</div><div class="m"><div class="w">⏸ '+E(c.icon)+' '+esc(c.name)+'</div><div class="x">'+nm(z.team||[k])+' · finishing later</div></div></div>'});
+  var H=(S.history||[]).filter(function(h){return h.type==="report"}),wait=H.filter(function(h){return h.status==="pending"});
+  if(wait.length){o+='<div class="sub">🔍 Waiting for a check</div>';wait.slice(0,4).forEach(function(r){var t=r.team&&r.team.length?r.team:[r.kid];
+    o+='<div class="c wait"><div class="f">'+face(t)+'</div><div class="m"><div class="w">'+E(r.chore_icon)+' '+esc(r.chore_name||r.chore)+'</div><div class="x">'+nm(t)+(r.points!=null?' · worth '+r.points+'⭐':'')+'</div></div><div class="t">'+ago(r.ts)+'</div></div>'})}
+  var day0=new Date();day0.setHours(0,0,0,0);var done=H.filter(function(h){return h.status==="inspected"&&(h.inspected_ts||h.ts)>=day0/1000&&!(h.chore==="other"&&!h.awarded)})
+    .sort(function(a,b){return (b.inspected_ts||b.ts)-(a.inspected_ts||a.ts)}).slice(0,4);
+  if(done.length){o+='<div class="sub">✅ Done today</div>';done.forEach(function(r){var t=r.team&&r.team.length?r.team:[r.kid];
+    o+='<div class="c done" style="--c:'+((kids[t[0]]||{}).color||"#78909c")+'"><div class="f">'+face(t)+'</div><div class="m"><div class="w">'+E(r.chore_icon)+' '+esc(r.chore_name||r.chore)+'</div><div class="x">'+nm(t)+' · '+ago(r.inspected_ts||r.ts)+'</div></div><div class="t">+'+(r.awarded||0)+'⭐</div></div>'})}
+  return o||'<div class="empty" style="margin-top:40px;font-size:30px">No jobs going right now</div>'}
+function ago(t){var m=Math.max(0,Math.round((Date.now()/1000-t)/60));return m<60?m+"m ago":Math.floor(m/60)+"h ago"}
 function draw(){if(!S)return;var ps=periods(),now=Date.now()/1000,h="";
   ps.forEach(function(p){var tot=Math.max(60,p.until-p.start),lft=p.until-now,pc=p.armed?0:Math.min(100,100*(1-lft/tot));
     h+='<div class="row'+(p.armed?" wait":lft<=300?" soon":"")+'" style="--c:'+p.c+'"><div class="face">'+E(p.face)+'</div><div class="mid"><div class="who">'+esc(p.who)+'</div><div class="what">'+p.what+'</div>'+
@@ -56,6 +82,7 @@ function draw(){if(!S)return;var ps=periods(),now=Date.now()/1000,h="";
       '<div><div class="left">'+(p.armed?(p.mins||30)+" min<br>when they start":mmss(lft))+'</div>'+(p.armed?"":'<div class="ends">ends '+hm(p.until)+'</div>')+
       (p.tv?'<div class="lock" data-lock="'+p.tv+'">🔒 Lock</div>':'')+'</div></div>'});
   document.getElementById("list").innerHTML=h||'<div class="empty">'+E("1f634")+' No screen time running</div>';
+  document.getElementById("chores").innerHTML=choresHtml(now);
   document.getElementById("clock").textContent=hm(now);
   document.querySelectorAll("[data-lock]").forEach(function(b){b.onclick=function(){lockTv(b.dataset.lock)}})}
 /* a parent's Lock now: kids can reach this board, so the lead grown-up confirms on their watch first */
