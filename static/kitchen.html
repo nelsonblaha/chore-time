@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kitchen</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1d2330;--mute:#6b7280;--line:#e5e7eb;--acc:#2e7d32}
+@media (prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1f27;--ink:#e8eaf0;--mute:#9aa3b2;--line:#2b313c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif;padding:12px 16px 40px;max-width:760px;margin:auto}
+h2{font-size:18px;margin:16px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin:8px 0}
+.day{font-weight:800;margin-bottom:4px}.day.today{color:var(--acc)}
+.meal{display:flex;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}.meal:first-of-type{border-top:0}
+.sec{min-width:78px;color:var(--mute);font-size:14px}.who{margin-left:auto;color:var(--mute);font-size:13px;white-space:nowrap}
+.done{opacity:.45;text-decoration:line-through}
+details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 12px;margin:8px 0}
+summary{font-weight:800;cursor:pointer}
+ul{margin:6px 0;padding-left:20px}.mute{color:var(--mute);font-size:13px}
+.pill{display:inline-block;border-radius:999px;padding:1px 8px;font-size:13px;margin-left:6px}
+.over{background:#fdecea;color:#b71c1c}.soon{background:#fff3e0;color:#e65100}
+.ok{background:#e8f5e9;color:#1b5e20}.miss{background:#eceff1;color:#455a64}
+.items{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.it{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:4px 8px;font-size:15px;display:flex;gap:6px;align-items:center}
+.it button,.rq button{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:2px 6px;cursor:pointer}
+.rq{display:flex;gap:8px;margin-top:6px}.rq input{flex:1;font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+.rq button{font-size:15px;padding:8px 12px;background:#2e7d32;color:#fff;border-color:#2e7d32}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:12px;opacity:0;transition:opacity .2s}#toast.on{opacity:.92}
+</style></head><body>
+<div id="app" class="mute">Loading kitchen…</div>
+<div id="toast"></div>
+<script>
+function hass(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}}
+function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function toast(t){var e=document.getElementById("toast");e.textContent=t;e.classList.add("on");setTimeout(function(){e.classList.remove("on")},2200)}
+function fmtDay(iso,i){var d=new Date(iso+"T12:00:00");return i===0?"Today":i===1?"Tomorrow":d.toLocaleDateString([], {weekday:"long",month:"short",day:"numeric"})}
+var GROUPS=["Protein","Vegetable","Fruit","Grain","Dairy","Meal"],FOLD=["Ingredient","Drink"],ICON={Protein:"🍗",Vegetable:"🥦",Fruit:"🍎",Grain:"🍞",Dairy:"🧀",Meal:"🍲",Snack:"🍿",Treat:"🍫",Drink:"🥤",Ingredient:"🧂"};
+var OPEN={},last=null,typing=false;
+function canRequest(){var h=hass();var n=((h&&h.user&&h.user.name)||"").toLowerCase();   // any configured grown-up may add requests
+  var I=((h&&h.states["sensor.chore_state"]||{}).attributes||{}).config;I=(I&&I.inspectors)||[];
+  return I.some(function(i){return n.indexOf(String(i.name).toLowerCase())>=0||n.indexOf(i.id)>=0})}
+function request(text,pid,label){var h=hass();if(!h)return;var n=Math.random().toString(36).slice(2,9),msg={a:"grocy_request",n:n,text:text||""};if(pid)msg.product_id=pid;
+  h.callService("input_text","set_value",{entity_id:"input_text.chore_action",value:JSON.stringify(msg)}).then(function(){
+    var t=0;(function w(){var a=hass().states["sensor.chore_state"]&&hass().states["sensor.chore_state"].attributes;
+      if(a&&a.last_result&&a.last_result.n===n){toast(a.last_result.ok?"Requested: "+(label||text):(a.last_result.error||"Couldn't request"));last=null;return}
+      if(++t<40)setTimeout(w,250)})()})}
+function itemRow(x,req){return '<span class="it">'+esc(x.name)+' <span class="mute">'+esc(x.amount)+' '+esc(x.unit)+'</span>'+(req?'<button data-out="'+x.id+'" data-nm="'+esc(x.name)+'">🛒 out</button>':'')+'</span>'}
+function render(){var h=hass(),st=h&&h.states["sensor.grocy_kitchen"];if(!st){document.getElementById("app").textContent="Kitchen data not available yet.";return}
+  if(typing)return;var a=st.attributes;if(last===st.last_updated)return;last=st.last_updated;var req=canRequest(),out="";
+  var use=(a.overdue||[]).concat(a.expired||[]).map(function(x){return '<li>'+esc(x.name)+'<span class="pill over">past '+esc(x.date)+'</span></li>'}).join("")+(a.due||[]).map(function(x){return '<li>'+esc(x.name)+'<span class="pill soon">by '+esc(x.date)+'</span></li>'}).join("");
+  if(use)out+='<h2>🥦 Use it up</h2><div class="card"><ul>'+use+'</ul></div>';
+  var rd=a.ready||[];if(rd.length){out+='<h2>🍳 Ready to make</h2><div class="card">'+rd.map(function(r){return '<div style="padding:3px 0">'+(r.ready?'<span class="pill ok">Ready now</span>':(r.thaw||[]).length?'<span class="pill thaw">🧊 Thaw first</span>':'<span class="pill miss">Missing '+r.missing_n+'</span>')+' <b>'+esc(r.name)+'</b>'+
+    (r.ready?'':(r.thaw||[]).length?' <span class="mute">— move '+esc(r.thaw.join(", "))+' to the fridge a few hours ahead</span>':' <span class="mute">— '+esc((r.missing||[]).join(", "))+'</span>')+'</div>'}).join("")+'</div>'}
+  var G=a.groups||{};
+  out+='<h2>🏠 In the house</h2>';
+  GROUPS.forEach(function(g){var xs=G[g]||[];if(!xs.length)return;out+='<div class="card"><b>'+ICON[g]+' '+g+'</b> <span class="mute">('+xs.length+')</span><div class="items">'+xs.map(function(x){return itemRow(x,req)}).join("")+'</div></div>'});
+  var sn=(G.Snack||[]).concat(G.Treat||[]);if(sn.length)out+='<h2>🍿 Snacks</h2><div class="card"><div class="items">'+sn.map(function(x){return itemRow(x,req)}).join("")+'</div></div>';
+  FOLD.forEach(function(g){var xs=G[g]||[];if(!xs.length)return;out+='<details data-k="'+g+'"'+(OPEN[g]?" open":"")+'><summary>'+ICON[g]+' '+g+' <span class="mute">('+xs.length+')</span></summary><div class="items">'+xs.map(function(x){return itemRow(x,req)}).join("")+'</div></details>'});
+  if(req){out+='<h2>🙋 Requests</h2><div class="card"><div class="rq"><input id="rqt" placeholder="Request something (e.g. more yogurt)"><button id="rqb">Request</button></div>'+
+    ((a.requests||[]).length?'<ul>'+a.requests.map(function(r){return '<li>'+esc(r.name||r.note)+(r.name&&r.note?' <span class="mute">— '+esc(r.note)+'</span>':'')+' <span class="mute">('+esc(r.by||"?")+')</span></li>'}).join("")+'</ul>':'<div class="mute" style="margin-top:6px">No open requests</div>')+
+    '<div class="mute">A grown-up reviews these with the grocery order.</div></div>'}
+  out+='<h2>🍽️ Meals</h2>';
+  (a.days||[]).forEach(function(d,i){var ms=(a.meals||{})[d]||[];if(!ms.length&&i>0)return;
+    out+='<div class="card"><div class="day'+(i===0?' today':'')+'">'+fmtDay(d,i)+'</div>'+(ms.length?ms.map(function(m){return '<div class="meal'+(m.done?' done':'')+'"><span class="sec">'+esc(m.section)+'</span><span>'+esc(m.what)+'</span>'+(m.who?'<span class="who">'+esc(m.who.replace(/,/g,", "))+'</span>':'')+'</div>'}).join(""):'<div class="mute">Nothing planned</div>')+'</div>'});
+  out+='<h2>🛒 Shopping lists</h2>';
+  Object.keys(a.shopping||{}).sort().forEach(function(l){var it=a.shopping[l];out+='<details data-k="sl_'+esc(l)+'"'+(OPEN["sl_"+l]?" open":"")+'><summary>'+esc(l)+' <span class="mute">('+it.length+')</span></summary><ul>'+it.map(function(x){return '<li>'+esc(x.name)+(x.amount&&x.amount!=1?' ×'+esc(x.amount):'')+(x.note?' <span class="mute">— '+esc(x.note)+'</span>':'')+'</li>'}).join("")+'</ul></details>'});
+  out+='<div class="mute" style="margin-top:14px">From Grocy · updated '+new Date(a.updated*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'</div>';
+  document.getElementById("app").innerHTML=out;
+  document.querySelectorAll("details[data-k]").forEach(function(d){d.ontoggle=function(){OPEN[d.dataset.k]=d.open}});
+  document.querySelectorAll("[data-out]").forEach(function(b){b.onclick=function(){request("we're out",+b.dataset.out,b.dataset.nm)}});
+  var t=document.getElementById("rqt");if(t){t.onfocus=function(){typing=true};t.onblur=function(){typing=false};
+    document.getElementById("rqb").onclick=function(){var v=t.value.trim();if(!v)return;typing=false;request(v,null,v);t.value=""}}}
+render();setInterval(render,4000);
+</script></body></html>

@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chore Inspection</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--ink:#1d2330;--mute:#6b7280;--line:#e5e7eb;--ok:#16a34a;--no:#dc2626;--acc:#2563eb}
+@media (prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1f27;--ink:#e8eaf0;--mute:#9aa3b2;--line:#2b313c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.35 system-ui,sans-serif;padding:12px 16px 60px;max-width:760px;margin:auto}
+img.e{width:1.25em;height:1.25em;vertical-align:-.25em}
+h1{font-size:22px;margin:4px 0 10px;display:flex;align-items:center;gap:8px}
+h2{font-size:17px;margin:20px 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.who{display:flex;gap:8px;margin-left:auto}
+.who button{font-size:15px}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:12px;padding:8px 12px;cursor:pointer}
+button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+button.ok{background:var(--ok);color:#fff;border-color:var(--ok)}
+button.no{background:transparent;color:var(--no);border-color:var(--no)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;margin:8px 0}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.big{font-size:30px}
+.mute{color:var(--mute);font-size:14px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chips button{min-width:46px}
+input,select{font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+input[type=number]{width:80px}
+.bal{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.bal .card{text-align:center;margin:0}
+.bal .n{font-size:30px;font-weight:800}
+.grid{display:grid;grid-template-columns:1fr;gap:6px}
+.chore{display:flex;align-items:center;gap:8px;padding:8px 10px}
+.chore .nm{flex:1}
+.tag{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--line)}
+.tag.bonus{background:#ffedd5;color:#9a3412}.tag.clean{background:#dcfce7;color:#166534}.tag.pend{background:#dbeafe;color:#1e40af}
+.big2{font-size:22px;padding:10px 16px}
+input[type=range]{width:100%;height:36px}
+.tvgo{width:100%;font-size:22px;font-weight:800;padding:14px;margin-top:10px}
+.topbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px}.ttl{font-size:20px}
+.chip{border-radius:999px;padding:6px 12px;font-weight:700}
+.h2b{color:var(--ink);font-size:18px;text-transform:none;letter-spacing:0;margin:14px 0 6px}
+details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 12px;margin:8px 0}
+summary{font-weight:700;cursor:pointer;padding:4px 0}
+.pmodal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:50;overflow:auto;padding:16px}
+.pmodal.on{display:flex}.pbox{background:var(--bg);border-radius:18px;padding:16px;width:100%;max-width:640px;position:relative;margin-top:20px}
+.px{position:absolute;top:6px;right:10px;font-size:34px;cursor:pointer;line-height:1}
+details.cgrp{margin:6px 0;padding:4px 10px}
+.pbar{position:relative;height:22px;background:#e9ecef;border-radius:12px;margin:34px 6px 22px;min-width:200px}
+.pbar.big{height:34px;margin:36px 8px 24px;flex:1}
+.pbar .pf{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:12px;background:linear-gradient(90deg,#ffd54a,#43a047)}
+.pbar.over .pf{background:#ff9800}
+.pbar .pm{position:absolute;top:-30px;transform:translateX(-50%);font-size:20px;white-space:nowrap;text-align:center;line-height:1}
+.pbar .pm span{display:block;font-size:12px;font-weight:800;color:#555}
+.pbar .pm::after{content:"";position:absolute;left:50%;top:26px;width:2px;height:26px;background:rgba(0,0,0,.3)}
+.pbar.big .pm::after{height:38px}
+.pbar .pm.pb{top:auto;bottom:-34px}.pbar .pm.pb::after{top:auto;bottom:22px}
+.pbar .pr{position:absolute;top:-4px;font-size:26px;transform:translateX(-50%);left:0}
+.pbar.big .pr{font-size:36px;top:-6px}
+.empty{color:var(--mute);text-align:center;padding:16px}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:12px;opacity:0;transition:opacity .2s}
+#toast.on{opacity:.92}
+body.hub{max-width:none;font-size:20px}body.hub button{font-size:20px;padding:10px 14px}
+</style></head><body>
+<script>if(location.search.indexOf("hub=1")>=0)document.body.classList.add("hub")</script>
+<div class="topbar"><span class="ttl" id="hicon"></span><b class="ttl">Chores</b>
+  <button class="chip" id="ctchip"></button><button class="chip ok" id="tvbtn">📺 Give TV time</button><button class="chip" id="tourbtn">🚶 Price tour</button><div class="who" id="who"></div></div>
+
+<div id="tvbox"></div>
+
+<div id="pendwrap"><h2 class="h2b">🔍 Claimed done — inspect <span id="pcount" class="tag pend"></span></h2>
+<div id="pending"></div></div>
+
+<div id="actbox"></div>
+<div id="pzbox"></div>
+
+<details><summary>⭐ Points <span class="mute" id="balsum"></span></summary><div class="bal" id="bal"></div>
+<div class="card" style="margin-top:8px"><b>Give or take points</b>
+  <div class="row" id="adjkids" style="margin-top:6px"></div>
+  <div class="chips" id="adjpts"></div>
+  <div class="row" style="margin-top:8px"><input id="adjreason" placeholder="What for? (e.g. folded towels, hitting)" style="flex:1"><button class="ok" id="adjgo">Save</button></div>
+</div></details>
+
+<details><summary>🎁 Presents (toy swap)</summary><div id="presentsadm"></div></details>
+
+<details><summary>🧹 Chore chart</summary>
+<div class="mute">Change the price for the next cleaning only, reopen a room, or edit the chart.</div>
+<div class="grid" id="chart"></div>
+<div class="card row"><input id="nname" placeholder="New chore" style="flex:1"><input id="npts" type="number" placeholder="pts" min="0" max="50"><label class="mute"><input type="checkbox" id="nroom" checked> room (stays clean 3 days)</label><button id="nadd">Add</button></div>
+</details>
+
+<details><summary>🕘 Recent</summary><div id="recent"></div></details>
+
+<div class="pmodal" id="pm"><div class="pbox"><div class="px" id="pmx">&times;</div><div id="pmbody"></div></div></div>
+<div id="toast"></div>
+
+<script>
+
+var _q=[],_sess=Math.random().toString(36).slice(2,8);
+function L(ev,data){var o={ev:ev,page:location.pathname,sess:_sess,t:Date.now()/1000};if(typeof kid!=="undefined"&&kid)o.kid=kid;if(data)for(var k in data)o[k]=data[k];_q.push(o);if(_q.length>=20)flushL()}
+function flushL(){if(!_q.length)return;if(location.pathname.indexOf("/local/")===0){_q=[];return}var b=JSON.stringify(_q);_q=[];try{fetch("/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:b,keepalive:true})}catch(e){}}
+setInterval(flushL,3000);addEventListener("pagehide",flushL);
+addEventListener("error",function(e){L("js_error",{msg:String(e.message),line:e.lineno})});
+document.addEventListener("click",function(e){var n=e.target.closest("[data-c],[data-k],[data-r],[data-f],[data-tv],[data-p],[data-x],[data-u],[data-a],[data-i],[data-n],button,.homebtn,#exit,.x,.btn");
+  L("tap",{target:n?(n.id||n.className||n.tagName):String(e.target.tagName),data:n?Object.assign({},n.dataset):null,x:Math.round(e.clientX),y:Math.round(e.clientY)})},true);
+L("load",{w:innerWidth,h:innerHeight,ua:navigator.userAgent.slice(0,120),q:location.search});
+var TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
+var CUSTOM_ICONS={"x-chandelier":"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%3E%3Cpath%20d%3D%22M32%202v14%22%20stroke%3D%22%237a5a1e%22%20stroke-width%3D%222.5%22/%3E%3Cpath%20d%3D%22M8%2030c4%2010%2020%2012%2024%202c4%2010%2020%208%2024-2%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%223.5%22/%3E%3Cpath%20d%3D%22M20%2034c3%206%209%206%2012%200c3%206%209%206%2012%200%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%223%22/%3E%3C/g%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2220%22%20r%3D%225%22%20fill%3D%22%23e0b040%22/%3E%3Cpath%20d%3D%22M29%2024h6l-1%2010h-4z%22%20fill%3D%22%23c9952b%22/%3E%3Cg%20fill%3D%22%23fff8e1%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%221.5%22%3E%3Crect%20x%3D%225%22%20y%3D%2220%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2253%22%20y%3D%2220%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2217%22%20y%3D%2224%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2241%22%20y%3D%2224%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3C/g%3E%3Cg%20fill%3D%22%23ffb300%22%3E%3Cpath%20d%3D%22M8%2012c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M56%2012c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M20%2016c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M44%2016c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3C/g%3E%3Cg%20fill%3D%22%239ad7ff%22%20stroke%3D%22%234fa3d1%22%20stroke-width%3D%221%22%3E%3Cpath%20d%3D%22M14%2040l3%205-3%205-3-5z%22/%3E%3Cpath%20d%3D%22M32%2040l3%206-3%206-3-6z%22/%3E%3Cpath%20d%3D%22M50%2040l3%205-3%205-3-5z%22/%3E%3Cpath%20d%3D%22M23%2044l2%204-2%204-2-4z%22/%3E%3Cpath%20d%3D%22M41%2044l2%204-2%204-2-4z%22/%3E%3C/g%3E%3C/svg%3E"};
+function cp(c){if(CUSTOM_ICONS[c])return "";return c.split("-").map(function(h){return String.fromCodePoint(parseInt(h,16))}).join("")}
+function E(c){if(c&&CUSTOM_ICONS[c])return '<img class="e" src="'+CUSTOM_ICONS[c]+'" alt="">';return c?'<img class="e" src="'+TW+c+'.svg" alt="'+cp(c)+'" onerror="this.outerHTML=this.alt">':""}
+function $(i){return document.getElementById(i)}
+function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+var S=null,me=null,adjKid=null,adjPts=null;
+try{me=localStorage.getItem("inspector")}catch(e){}
+function api(p,b){return fetch(p,{method:b?"POST":"GET",headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
+
+var HA_MODE=location.pathname.indexOf("/local/")===0,haUserMe=null;
+var ON_HUB=location.search.indexOf("hub=1")>=0,qby=(location.search.match(/[?&]by=([a-z]+)/)||[])[1];
+function hass(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}}
+function haState(){var h=hass();var st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));a.now=Date.now()/1000;return a}
+if(HA_MODE){
+  api=function(path,body){
+    if(!body)return new Promise(function(res,rej){var t=0;(function w(){var st=haState();if(st)return res(st);if(++t>40)return rej("no sensor.chore_state");setTimeout(w,250)})()});
+    var n=Math.random().toString(36).slice(2,9),msg=Object.assign({a:path.replace("/api/",""),n:n},body);
+    var v=JSON.stringify(msg);
+    function send1(val,nn){return hass().callService("input_text","set_value",{entity_id:"input_text.chore_action",value:val}).then(function(){
+      return new Promise(function(res){var t=0;(function w(){var h=hass(),a=h&&h.states["sensor.chore_state"]&&h.states["sensor.chore_state"].attributes;
+        if(a&&a.last_result&&a.last_result.n===nn){var st=haState();return res({ok:a.last_result.ok,error:a.last_result.error,state:st})}
+        if(++t>60)return res({ok:false,error:"no answer from chore app"});setTimeout(w,250)})()})})}
+    if(v.length<=255)return send1(v,n);
+    // HA input_text holds 255 chars: send long actions (lists of fixes) in acknowledged pieces; the app reassembles them.
+    var parts=[],rest=v,id=n;while(rest.length){var k=Math.min(rest.length,200),p;
+      while(true){p=JSON.stringify({a:"_part",n:"",id:id,i:parts.length,of:0,d:rest.slice(0,k)});if(p.length<=240||k<10)break;k=Math.floor(k*0.8)}
+      parts.push(rest.slice(0,k));rest=rest.slice(k)}
+    var chain=Promise.resolve({ok:true});parts.forEach(function(d,i){chain=chain.then(function(r){if(!r.ok)return r;var nn=i===parts.length-1?n:n+"p"+i;
+      return send1(JSON.stringify({a:"_part",n:nn,id:id,i:i,of:parts.length,d:d}),nn)})});
+    return chain;
+  };
+  try{var nm=(hass().user.name||"").toLowerCase(),I=((hass().states["sensor.chore_state"]||{}).attributes||{}).config.inspectors||[];   // the HA login names the grown-up
+    var hit=I.find(function(i){return nm.indexOf(String(i.name).toLowerCase())>=0||nm.indexOf(i.id)>=0});if(hit)haUserMe=hit.id}catch(e){}
+  if(haUserMe)me=haUserMe;
+}
+if(ON_HUB){if(qby)me=qby;
+  document.addEventListener("DOMContentLoaded",function(){});
+  var BACK=((location.search.match(/[?&]back=([a-z]+)/)||[])[1]==="now")?"/now":"/";   // the kitchen Hub's grown-up board comes back to itself
+  var hubIdle=null;function hubPoke(){clearTimeout(hubIdle);hubIdle=setTimeout(function(){location.href=BACK+"?v="+Date.now()},300000)}
+  document.addEventListener("click",hubPoke,true);document.addEventListener("touchstart",hubPoke,{passive:true});hubPoke();
+  setTimeout(function(){var d=document.createElement("button");d.textContent=BACK==="/now"?"✅ Done":"✅ Done — back to kids";d.className="ok";
+    d.style.cssText="position:fixed;top:10px;right:12px;z-index:70;font-size:22px;padding:10px 18px";d.onclick=function(){location.href=BACK+"?v="+Date.now()};document.body.appendChild(d)},50)}
+function toast(t){if(!t)return;$("toast").textContent=t;$("toast").classList.add("on");setTimeout(function(){$("toast").classList.remove("on")},1800)}
+function post(p,b,msg){if(!me){toast("Pick who you are first");return Promise.resolve()}b.by=me;return api(p,b).then(function(r){if(r.ok){S=r.state;render();if(msg)toast(msg)}else toast(r.error||"failed")})}
+function kidOf(id){return S.config.kids.find(function(k){return k.id===id})||{name:id}}
+function inspOf(id){return S.config.inspectors.find(function(k){return k.id===id})||{name:id}}
+function choreOf(id){return S.config.chores.find(function(k){return k.id===id})||{name:id}}
+function ago(ts){var s=S.now-ts;if(s<90)return"just now";if(s<5400)return Math.round(s/60)+" min ago";if(s<129600)return Math.round(s/3600)+" h ago";return Math.round(s/86400)+" d ago"}
+function feel(f){var x=(S.config.feelings||[]).find(function(y){return y.id===f});return x?E(x.icon):""}
+
+var PM=null,TOUR=null,MOSTLY=null,NOTEFORM=null,NOTYET=null;
+function renderNotYet(){if($("nyfb"))return;var r=S.history.find(function(h){return h.id===NOTYET});if(!r){closePM();return}
+  $("pmbody").innerHTML='<h2 class="h2b">Not yet: '+E(r.chore_icon)+' '+esc(r.chore_name)+'</h2><div class="mute">The chore goes back to '+esc((r.team||[r.kid]).map(function(x){return kidOf(x).name}).join(" + "))+' with the timer resuming. They tap Inspect again when it\'s fixed.</div>'+
+    '<label class="mute" style="display:block;margin-top:10px">What still needs fixing? (add each one — kids see each as a bullet)</label>'+
+    ''+listEd("nyfb","","e.g. balloon on the floor")+
+    '<button class="no tvgo" id="nygo" style="background:#c62828;color:#fff">Hand it back to fix</button>';
+  wireList("nyfb");$("nygo").onclick=function(){post("/api/inspect",{ref:r.id,ok:false,feedback:$("nyfb").value.trim()},"Handed back to fix").then(closePM)}}
+function listEd(id,text,ph){return '<textarea id="'+id+'" style="display:none">'+esc(text||"")+'</textarea><div id="'+id+'L" style="margin:4px 0"></div>'+
+  '<div class="row"><input id="'+id+'I" placeholder="'+ph+'" style="flex:1;font-size:18px;min-width:0" enterkeyhint="done"><button class="ok" id="'+id+'A" style="font-size:18px">＋ Add</button></div>'}
+function wireList(id){var ta=$(id),inp=$(id+"I");if(!ta||!inp)return;var items=(ta.value||"").split("\n").map(function(t){return t.trim()}).filter(Boolean);
+  function sync(){ta.value=items.concat(inp.value.trim()?[inp.value.trim()]:[]).join("\n");if(ta.oninput)ta.oninput.call(ta)}
+  function draw(){var L=$(id+"L");L.innerHTML=items.length?items.map(function(t,i){return '<div class="row" style="padding:6px 8px;margin:3px 0;background:rgba(127,127,127,.12);border-radius:8px"><span style="flex:1;font-size:18px">'+(i+1)+'. '+esc(t)+'</span><button data-i="'+i+'" title="Remove">✕</button></div>'}).join(""):'<div class="mute">Nothing added yet. Type one thing, tap ＋ Add, then the next.</div>';
+    L.querySelectorAll("button[data-i]").forEach(function(b){b.onclick=function(){items.splice(+b.dataset.i,1);draw();sync()}})}
+  function add(){var t=inp.value.trim();if(!t){inp.focus();return}items.push(t);inp.value="";draw();sync();inp.focus()}
+  $(id+"A").onclick=add;inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();add()}};inp.oninput=sync;draw()}
+function ptsSlider(id,v,base,mx){v=v==null?0:v;mx=mx||Math.max(10,(base||0)*3,v);
+  return '<div style="text-align:center;font-size:40px;font-weight:800;margin:6px 0" id="'+id+'v">'+v+' ⭐</div>'+
+    '<input type="range" id="'+id+'" min="0" max="'+mx+'" step="1" value="'+v+'">'+
+    '<div class="row mute" style="justify-content:space-between"><span>0</span>'+(base!=null?'<span>usual: '+base+'</span>':'')+'<span>'+mx+'</span></div>'}
+function wireSlider(id,base,cb){var s=$(id);if(!s)return;s.oninput=function(){var v=+s.value,d=$(id+"v");d.textContent=v+" ⭐";
+  d.style.color=base==null?"":v>base?"#d50000":v<base?"#1e88e5":"";if(cb)cb(v)}}
+function renderNoteForm(){if($("nfnote"))return;var c=choreOf(NOTEFORM.chore),bd=S.board[c.id]||{},cur=bd.price!=null?bd.price:c.points;
+  $("pmbody").innerHTML='<h2 class="h2b">'+E(c.icon)+' '+esc(c.name)+'</h2><div class="mute">'+(NOTEFORM.mode==="reopen"?"Reopen it so a kid can do it again.":"Set the price for its next cleaning.")+'</div>'+
+    '<label class="mute" style="display:block;margin-top:10px">Points</label>'+ptsSlider("nfpts",cur,c.points)+
+    '<label class="mute" style="display:block;margin-top:10px">📝 What needs doing? (kids see this)</label>'+listEd("nfnote",bd.note||"","e.g. toys under the couch")+
+    '<button class="ok tvgo" id="nfgo">'+(NOTEFORM.mode==="reopen"?"Reopen":"Save")+'</button>';
+  $("nfgo").onclick=function(){var pts=$("nfpts").value,note=$("nfnote").value.trim(),chain=Promise.resolve();
+    if(NOTEFORM.mode==="reopen")chain=post("/api/reopen",{chore:c.id,note:note},c.name+" reopened");
+    if(!(cur==null&&+pts===0)&&+pts!==cur)chain=chain.then(function(){return post("/api/price",{chore:c.id,points:+pts,note:note},"Price "+pts)});
+    else if(NOTEFORM.mode!=="reopen")chain=chain.then(function(){return post("/api/note",{chore:c.id,note:note},"Note saved")});
+    chain.then(closePM)};wireSlider("nfpts",c.points);wireList("nfnote")}
+function renderMostly(){var r=S.history.find(function(h){return h.id===MOSTLY});if(!r){closePM();return}var k=kidOf(r.kid);
+  if($("mnow"))return;  // keep what the parent is typing
+  $("pmbody").innerHTML='<h2 class="h2b">🧩 Mostly done</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><span class="mute">full job '+r.points+' ⭐</span></div>'+
+    '<label class="mute">Points for what\'s done now</label>'+ptsSlider("mnow",Math.max(0,r.points-1),null,Math.max(10,r.points))+
+    '<label class="mute" style="margin-top:8px;display:block">Points for what\'s left (anyone can do it)</label>'+ptsSlider("mleft",1,null,Math.max(10,r.points))+
+    '<label class="mute" style="margin-top:8px;display:block">What\'s left? (kids see this)</label>'+listEd("mwhat","","e.g. pen on the shelf")+
+    '<button class="ok tvgo" id="mgo">Save: pay now, leave the rest</button>';
+  $("mgo").onclick=function(){post("/api/inspect",{ref:r.id,ok:true,points:+$("mnow").value,leftover_points:+$("mleft").value,leftover_note:$("mwhat").value.trim()},
+    "+"+$("mnow").value+" now · "+$("mleft").value+" left").then(closePM)};wireSlider("mnow");wireSlider("mleft");wireList("mwhat")}
+function tourNeeds(id){var c=S.config.chores.find(function(x){return x.id===id}),bd=S.board[id]||{},now=S.now;
+  if(!c||c.hidden)return null;
+  if((c.daily||c.weekly)&&bd.clean_until)return null;                       // done for the day/week: never applies
+  if(bd.tour_seen&&now-bd.tour_seen<6*3600)return null;                      // you looked in the last 6 h
+  if(bd.clean_until&&bd.clean_until-now>12*3600)return null;                 // clean for a good while yet
+  if((bd.pending_by||[]).length||Object.keys(S.active||{}).some(function(k){return S.active[k].chore===id}))return null; // a kid is on it
+  return true}
+function renderTour(){
+  var route=(S.config.tour||[]).filter(function(id){return S.config.chores.some(function(c){return c.id===id&&!c.hidden})});
+  if(!TOUR.ids){ // start at the room you haven't looked at for the longest, then walk the route from there
+    var need=route.filter(tourNeeds);
+    var lastLook=function(id){var bd=S.board[id]||{};return Math.max(bd.tour_seen||0,bd.last_clean||0)};
+    var first=need.slice().sort(function(a,b){return lastLook(a)-lastLook(b)})[0],i0=Math.max(0,need.indexOf(first));
+    TOUR.ids=need.slice(i0).concat(need.slice(0,i0))}
+  var ids=TOUR.ids;
+  if(TOUR.i>=ids.length){$("pmbody").innerHTML='<h2 class="h2b">🚶 Tour done!</h2>'+(TOUR.changed.length?'<p>You changed:</p>'+TOUR.changed.map(function(x){return '<div class="card row">'+E(x.icon)+' <b>'+esc(x.name)+'</b><span class="mute">'+x.from+' → '+x.to+' ⭐</span></div>'}).join("")+'<div class="mute">The kids see it as news the next time they open their screen.</div>':'<p class="mute">No prices changed.</p>')+'<button class="ok tvgo" id="tdone">Close</button>';
+    $("tdone").onclick=closePM;return}
+  var c=S.config.chores.find(function(x){return x.id===ids[TOUR.i]}),bd=S.board[c.id]||{},base=c.points,cur=bd.price!=null?bd.price:base;
+  if(TOUR.val==null)TOUR.val=cur==null?0:cur;var mx=Math.max(10,(base||0)*3,cur||0);
+  var st=bd.clean_until&&c.daily?"✅ done today"+(bd.clean_by?" ("+esc(kidOf(bd.clean_by).name)+")":""):bd.clean_until?"✨ clean until "+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+(bd.clean_by?" ("+esc(kidOf(bd.clean_by).name)+")":""):
+    (bd.pending_by&&bd.pending_by.length)?"🔍 waiting for inspection ("+bd.pending_by.map(function(k){return esc(kidOf(k).name)}).join(", ")+")":
+    (Object.keys(S.active||{}).filter(function(k){return S.active[k].chore===c.id}).map(function(k){return "⏱ "+esc(kidOf(k).name)+" is doing it"})[0]||"available");
+  var v=TOUR.val,cls=base==null?"":v>base?"color:#d50000":v<base?"color:#1e88e5":"";
+  $("pmbody").innerHTML='<div class="mute">Stop '+(TOUR.i+1)+' of '+ids.length+(c.where?' · 📍 '+esc(c.where):'')+'</div>'+
+    '<div style="text-align:center;font-size:72px;margin:6px 0">'+E(c.icon)+'</div><h2 class="h2b" style="text-align:center;font-size:24px">'+esc(c.name)+'</h2>'+
+    '<div class="mute" style="text-align:center">'+st+'</div>'+
+    '<div style="text-align:center;font-size:40px;font-weight:800;margin:10px 0;'+cls+'" id="tv">'+v+' ⭐</div>'+
+    '<input type="range" id="tsl" min="0" max="'+mx+'" step="1" value="'+v+'">'+
+    '<div class="row mute" style="justify-content:space-between"><span>0</span><span>usual: '+(base==null?"adult sets":base)+'</span><span>'+mx+'</span></div>'+
+    '<label class="mute" style="display:block;margin-top:8px">📝 Notes for the kids </label>'+listEd("tnote",TOUR.note!=null?TOUR.note:(bd.note||""),"e.g. items on the dining room table")+
+    (bd.clean_until&&!TOUR.messy?'<div class="row" style="margin-top:12px"><button class="ok tvgo" style="flex:2" id="tstill">✅ Still '+(c.room?'clean':'done')+' → next</button></div>'+
+      '<div class="row" style="margin-top:6px"><button style="flex:1" id="tmessy">🧹 It\'s dirty — reopen & set price</button></div>':
+    '<div class="row" style="margin-top:12px"><button class="ok tvgo" style="flex:2" id="tset">Set '+v+' ⭐ → next</button></div>'+
+    (c.room&&!bd.clean_until?'<div class="row" style="margin-top:6px"><button style="flex:1" id="tclean">✨ It\'s clean (no points) → next</button></div>':''))+
+    '<div class="row" style="margin-top:6px"><button style="flex:1" id="tskip">Skip</button>'+(base!=null?'<button style="flex:1" id="tusual">Usual ('+base+')</button>':'')+'<button style="flex:1" id="tback">◀ Back</button><button class="no" style="flex:1" id="tstop">End tour</button></div>';
+  if($("tsl"))$("tsl").oninput=function(){TOUR.val=+this.value;$("tv").textContent=TOUR.val+" ⭐";$("tv").style.color=base==null?"":TOUR.val>base?"#d50000":TOUR.val<base?"#1e88e5":"";$("tset").textContent="Set "+TOUR.val+" ⭐ → next"};
+  if($("tnote"))$("tnote").oninput=function(){TOUR.note=this.value};wireList("tnote");
+  var noteNow=function(){return $("tnote")?$("tnote").value.trim():(bd.note||"")},noteChanged=function(){return noteNow()!==(bd.note||"")};
+  function saveNoteIfChanged(){return noteChanged()?post("/api/note",{chore:c.id,note:noteNow()},"Note saved"):Promise.resolve()}
+  function next(){post("/api/tour_seen",{chore:c.id},"");TOUR.i++;TOUR.val=null;TOUR.messy=false;TOUR.note=null;renderTour()}
+  if($("tstill"))$("tstill").onclick=function(){saveNoteIfChanged().then(next)};
+  if($("tmessy"))$("tmessy").onclick=function(){post("/api/reopen",{chore:c.id,note:noteNow()},esc(c.name)+" reopened").then(function(){TOUR.messy=true;renderTour()})};
+  if($("tclean"))$("tclean").onclick=function(){post("/api/mark_clean",{chore:c.id},esc(c.name)+" marked clean").then(function(){return noteChanged()?post("/api/note",{chore:c.id,note:""},""):null}).then(next)};
+  if($("tset"))$("tset").onclick=function(){var to=TOUR.val;if(to===cur){saveNoteIfChanged().then(next);return}
+    post("/api/price",{chore:c.id,points:to,note:noteNow()},esc(c.name)+": "+to+" ⭐").then(function(){if(to!==(base==null?null:base))TOUR.changed.push({icon:c.icon,name:c.name,from:cur,to:to});next()})};
+  $("tskip").onclick=function(){saveNoteIfChanged().then(next)};$("tstop").onclick=function(){TOUR.i=999;renderTour()};
+  $("tback").onclick=function(){if(TOUR.i>0){TOUR.i--;TOUR.val=null;renderTour()}};
+  if($("tusual"))$("tusual").onclick=function(){if(cur===base){next();return}post("/api/price",{chore:c.id,points:base},esc(c.name)+": back to usual").then(next)}}
+function openPM(w){PM=w;$("pmbody").innerHTML="";$("pm").classList.add("on");render()}
+function closePM(){PM=null;$("pm").classList.remove("on");$("pmbody").innerHTML=""}
+
+/* shared progress bar: elapsed vs expected (personal), record (holder icon), personal best */
+function expectFor(S,k,chore,team){var n=(team||[k]).length,key=n>1?chore+"@"+n:chore,E2=((S.expected||{})[k]||{});
+  if(E2[key])return E2[key].minutes;var solo=(E2[chore]||{}).minutes||((S.typical||{})[chore]||{}).minutes||(S.config.chores.find(function(c){return c.id===chore})||{}).est_minutes||10;
+  return n>1?solo/Math.pow(n,0.7):solo}
+function chartBar(S,k,chore,since,team,big){var n=(team||[k]).length,key=n>1?chore+"@"+n:chore,exp=expectFor(S,k,chore,team)*60,R=(S.records||{})[key],
+  PB=((S.personal_best||{})[k]||{})[key],tot=Math.max(exp*1.35,exp+300,R?R.sec*1.2:0,PB?PB.sec*1.2:0),K=function(id){return S.config.kids.find(function(x){return x.id===id})||{icon:"2753"}},
+  hm=function(t){var d=new Date(t*1000),h=d.getHours()%12||12,m=d.getMinutes();return h+":"+(m<10?"0":"")+m},pc=function(x){return Math.min(100,x/tot*100).toFixed(1)+"%"};
+  var h='<div class="pbar'+(big?' big':'')+'" data-since="'+since+'" data-tot="'+tot+'" data-exp="'+exp+'"><div class="pf"></div>'+
+    '<div class="pm exp" style="left:'+pc(exp)+'">'+E("1f3af")+'<span>'+Math.round(exp/60)+' min</span></div>'+
+    (R?'<div class="pm rec" style="left:'+pc(R.sec)+'">'+E("1f3c1")+(R.team?R.team.map(function(x){return E(K(x).icon)}).join(""):E(K(R.kid).icon))+'<span>'+(big?'beat by '+hm(since+R.sec):Math.floor(R.sec/60)+':'+("0"+R.sec%60).slice(-2))+'</span></div>':'')+
+    (PB&&(!R||Math.abs(PB-R.sec)>5)?'<div class="pm pb" style="left:'+pc(PB)+'">'+E("2b50")+E(K(k).icon)+'<span>my best</span></div>':'')+
+    '<div class="pr">'+(team&&team.length>1?team.map(function(x){return E(K(x).icon)}).join(""):E(K(k).icon))+'</div></div>';
+  return h}
+function tickBars(){var now=Date.now()/1000;document.querySelectorAll(".pbar").forEach(function(b){var el=now-+b.dataset.since,tot=+b.dataset.tot,p=Math.min(100,el/tot*100);
+  b.querySelector(".pf").style.width=p+"%";b.querySelector(".pr").style.left=p+"%";b.classList.toggle("over",el>+b.dataset.exp)})}
+setInterval(tickBars,1000);
+function render(){
+  var w="";if(!(HA_MODE&&haUserMe)){S.config.inspectors.forEach(function(i){w+='<button class="'+(me===i.id?"on":"")+'" data-i="'+i.id+'">'+E(i.icon)+' '+i.name+'</button>'})}
+  $("who").innerHTML=w;$("hicon").innerHTML=me?E(inspOf(me).icon):E("1f50d");
+  document.querySelectorAll("#who button").forEach(function(b){b.onclick=function(){me=b.dataset.i;try{localStorage.setItem("inspector",me)}catch(e){}render()}});
+  var bl="";S.config.kids.forEach(function(k){bl+='<div class="card" style="border-top:5px solid '+k.color+'"><div class="big">'+E(k.icon)+'</div><div class="n">'+S.balance[k.id]+'</div><div class="mute">'+k.name+(S.pending_points[k.id]?' · +'+S.pending_points[k.id]+' waiting':'')+'</div></div>'});
+  $("bal").innerHTML=bl;$("balsum").textContent=S.config.kids.map(function(k){return k.name+" "+S.balance[k.id]}).join(" · ");
+  // pending
+  var pend=S.history.filter(function(h){return h.type==="report"&&h.status==="pending"}).reverse();
+  pend.sort(function(a,b){return (b.priority?1:0)-(a.priority?1:0)});
+  var ph="";pend.forEach(function(r){var k=kidOf(r.kid),fixed=r.points!=null,other=r.chore==="other";
+    if(r.chore==="toy_out"){ph+='<div class="card" data-r="'+r.id+'"><div class="row"><span class="big">'+E(k.icon)+'🧸👋</span><div><b>'+esc(k.name)+'</b> wants to give away <b>'+esc(r.note||"a toy")+'</b> · asks <b>'+(r.ask||0)+' ⭐</b><div class="mute">'+ago(r.ts)+' · settle on what the choice is worth</div></div></div>'+
+      '<div class="chips">'+[0,1,2,3,4,5,6].map(function(n){return '<button class="'+(n===r.ask?"ok":"")+'" data-p="'+n+'">'+(n===r.ask?"✓ ":"")+n+'</button>'}).join("")+'<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div></div>';return}
+    if(r.chore==="toy_swap"){ph+='<div class="card" data-r="'+r.id+'" data-swap="1"><div class="row"><span class="big">'+E(k.icon)+'🧸➡️👋 🎁</span><div><b>'+esc(k.name)+'</b> is ready to swap: <b>'+esc(r.old_name||"an old toy (other)")+'</b> out, a present in<div class="mute">'+ago(r.ts)+' · '+((S.toys||{})[r.kid]||{left:[]}).left.length+' presents wrapped · approving draws a random present she may open; tick "old toy gone" / "opened" later below</div></div></div>'+
+      '<div class="row" style="margin-top:8px"><input class="lbl" placeholder="Old toy (name it if \'other\')" value="'+esc(r.old_name||"")+'" style="flex:1"><button class="ok" data-sw="1">Approve swap</button><button class="no" data-x="1">Not yet</button></div></div>';return}
+    var sec=r.started?r.ts-r.started:0,rec=(S.records||{})[r.chore];
+    var took=r.started?' · took '+Math.floor(sec/60)+':'+("0"+Math.round(sec%60)%60).slice(-2)+(sec>=30&&(!rec||sec<rec.sec)?' <span class="tag bonus">🥇 would be a record'+(rec?' (now '+Math.floor(rec.sec/60)+':'+("0"+rec.sec%60).slice(-2)+')':'')+' — check it carefully</span>':''):'';
+    var team=(r.team||[]).length>1?r.team:null,tn=team?team.map(function(x){return kidOf(x).name}).join(" + "):k.name;
+    if(r.partial)took=' <span class="tag" style="background:#ede7f6;color:#4527a0">🙋 partly done — full job is '+(r.full_price==null?'?':r.full_price)+'⭐; it stays available</span>'+(r.worked?' · worked '+Math.round(r.worked/60)+' min':'');
+    var split=team?' <span class="tag">👥 '+(r.split&&Object.keys(r.split).length?'deal: '+Object.keys(r.split).map(function(m){return kidOf(m).name+" "+r.split[m]}).join(", ")+', rest to the others':'shared equally')+'</span> <a href="#" data-split="'+r.id+'">edit split</a>':'';
+    ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
+      (other?'<div class="row" style="margin-top:8px"><input class="lbl" placeholder="What did they do?" value="'+esc(r.note?r.note.charAt(0)+r.note.slice(1).toLowerCase():"")+'" style="flex:1"></div>':'')+
+      (r.ask!=null?'<div class="mute" style="margin-top:4px">🙋 asks <b>'+r.ask+' ⭐</b> — go look, then settle</div>':'')+
+      '<div class="chips">'+[0,1,2,3,4,5,6,8,10].map(function(n){var on=(fixed&&n===r.points)||(r.ask!=null&&n===r.ask);return'<button class="'+(on?"ok":"")+'" data-p="'+n+'">'+(on?"✓ ":"")+n+'</button>'}).join("")+
+      '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>'+
+      (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
+      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button>'+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
+  $("pcount").textContent=pend.length;$("pendwrap").style.display=pend.length?"":"none";
+  $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
+  document.querySelectorAll("[data-split]").forEach(function(a){a.onclick=function(e){e.preventDefault();var r=S.history.find(function(h){return h.id===a.dataset.split});if(!r)return;
+    var sp={};(r.team||[]).forEach(function(m){var v=prompt("Points for "+kidOf(m).name+" (blank = share the rest)",r.split&&r.split[m]!=null?r.split[m]:"");if(v!==null&&v!=="")sp[m]=+v});
+    post("/api/split",{ref:r.id,split:sp},"Split saved")}});
+  document.querySelectorAll('#pending .card[data-swap]').forEach(function(c){var id=c.dataset.r;
+    c.querySelector("[data-sw]").onclick=function(){var l=c.querySelector(".lbl").value.trim();
+      post("/api/inspect",{ref:id,ok:true,points:0,label:l},"Approved — the kid screen will draw her present")};
+    c.querySelector("[data-x]").onclick=function(){NOTYET=id;openPM("notyet")}});
+  document.querySelectorAll("[data-mostly]").forEach(function(b){b.onclick=function(){MOSTLY=b.dataset.mostly;openPM("mostly")}});
+  document.querySelectorAll("[data-is]").forEach(function(b){b.onclick=function(){var c=b.closest(".card");if(c){c.scrollIntoView({behavior:"smooth",block:"start"});c.style.outline="3px solid #43a047";setTimeout(function(){c.style.outline=""},2500)}
+    post("/api/inspect_start",{ref:b.dataset.is},"Inspecting — set the points or tap Not yet")}});
+  document.querySelectorAll('#pending .card:not([data-swap])').forEach(function(c){var id=c.dataset.r;
+    c.querySelectorAll("[data-p]").forEach(function(b){b.onclick=function(){var l=c.querySelector(".lbl");
+      post("/api/inspect",{ref:id,ok:true,points:+b.dataset.p,label:l?l.value:""},"Inspected ✓ +"+b.dataset.p)}});
+    c.querySelector(".cus").onkeydown=function(e){if(e.key==="Enter"&&this.value!==""){var l=c.querySelector(".lbl");post("/api/inspect",{ref:id,ok:true,points:+this.value,label:l?l.value:""},"Inspected ✓")}};
+    c.querySelector("[data-x]").onclick=function(){NOTYET=id;openPM("notyet")}});
+  document.querySelectorAll("[data-mostly]").forEach(function(b){b.onclick=function(){MOSTLY=b.dataset.mostly;openPM("mostly")}});
+  // adjust
+  var ak="";S.config.kids.forEach(function(k){ak+='<button class="'+(adjKid===k.id?"on":"")+'" data-k="'+k.id+'">'+E(k.icon)+' '+k.name+'</button>'});$("adjkids").innerHTML=ak;
+  document.querySelectorAll("#adjkids button").forEach(function(b){b.onclick=function(){adjKid=b.dataset.k;render()}});
+  $("adjpts").innerHTML=[-5,-3,-2,-1,1,2,3,5].map(function(n){return'<button class="'+(adjPts===n?"on":"")+'" data-n="'+n+'">'+(n>0?"+":"")+n+'</button>'}).join("")+'<input type="number" id="adjcus" placeholder="other">';
+  document.querySelectorAll("#adjpts button").forEach(function(b){b.onclick=function(){adjPts=+b.dataset.n;render()}});
+  $("adjgo").onclick=function(){var c=$("adjcus").value;var pts=c!==""?+c:adjPts;if(!adjKid||!pts){toast("Pick a kid and points");return}
+    post("/api/adjust",{kid:adjKid,points:pts,reason:$("adjreason").value},(pts>0?"+":"")+pts+" for "+kidOf(adjKid).name).then(function(){adjPts=null;$("adjreason").value=""})};
+  var pa="";Object.keys(S.toys||{}).forEach(function(kid){var T=S.toys[kid],k=kidOf(kid),kc=S.config.kids.find(function(x){return x.id===kid})||{};
+    pa+='<div class="card"><div class="row"><span class="big">'+E(k.icon)+'</span><b>'+esc(k.name)+'</b><span class="mute">'+T.left.length+' of '+T.total+' presents still wrapped</span><span style="margin-left:auto"></span><button data-pc="'+kid+'">Change count</button></div>'+
+      T.opened.map(function(o){return '<div class="row" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px"><b>🎁 #'+o.present+'</b><span class="mute">out: '+esc(o.gave||"?")+' · it was: '+(o.got?esc(o.got):'<button data-pn="'+kid+':'+o.present+'">name it</button>')+'</span><span style="margin-left:auto"></span>'+
+        '<button class="'+(o.old_out?"on":"")+'" data-st="'+o.ref+':old_out:'+(o.old_out?1:0)+'">'+(o.old_out?"✓ ":"")+'Old toy gone</button><button class="'+(o.unwrapped?"on":"")+'" data-st="'+o.ref+':opened:'+(o.unwrapped?1:0)+'">'+(o.unwrapped?"✓ ":"")+'Present opened</button></div>'}).join("")+
+      '<div class="row" style="margin-top:10px"><span class="mute">Old toys she can pick:</span>'+(kc.old_toys||[]).map(function(t){return '<span class="tag">'+esc(t.name)+' <a href="#" data-orm="'+kid+':'+t.id+'">✕</a></span>'}).join(" ")+
+      '<input id="otn_'+kid+'" placeholder="Add an old toy" style="flex:1;min-width:140px"><button data-oadd="'+kid+'">Add</button></div></div>'});
+  $("presentsadm").innerHTML=pa||'<div class="empty">No toy swaps set up</div>';
+  document.querySelectorAll("[data-pc]").forEach(function(b){b.onclick=function(){var v=prompt("How many wrapped presents in total (opened + unopened)?",S.toys[b.dataset.pc].total);if(v===null||v==="")return;post("/api/toys",{kid:b.dataset.pc,presents:+v},"Saved")}});
+  document.querySelectorAll("[data-pn]").forEach(function(b){b.onclick=function(){var a=b.dataset.pn.split(":");var v=prompt("What was in present #"+a[1]+"?");if(!v)return;post("/api/toys",{kid:a[0],present:+a[1],name:v},"Saved")}});
+  document.querySelectorAll("[data-st]").forEach(function(b){b.onclick=function(){var a=b.dataset.st.split(":");post("/api/swap_step",{ref:a[0],step:a[1],undo:a[2]==="1"},"Saved")}});
+  document.querySelectorAll("[data-oadd]").forEach(function(b){b.onclick=function(){var kid=b.dataset.oadd,v=$("otn_"+kid).value.trim();if(!v)return;post("/api/toys",{kid:kid,old_toy_add:v},"Added "+v)}});
+  document.querySelectorAll("[data-orm]").forEach(function(a){a.onclick=function(e){e.preventDefault();var p=a.dataset.orm.split(":");if(confirm("Remove from her old-toy list?"))post("/api/toys",{kid:p[0],old_toy_remove:p[1]},"Removed")}});
+  // ---- top bar: chore time chip / give TV time ----
+  var ctOn=S.tv&&S.tv.lock_until>S.now,CM=S.chore_mode||{};
+  var hmx=function(t){return new Date(t*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})};
+  $("ctchip").innerHTML=(CM.on?"🧹 Chore mode ON":"Chore mode OFF")+' <span style="font-weight:400;opacity:.8">· '+(CM.override?"until "+hmx(CM.next_change)+" · tap for auto":CM.on?"auto · tap to free the TVs":"auto · tap to turn on")+(CM.on&&CM.chill?" · 😌 chill ("+CM.recent_jobs+" jobs in 3 h)":"")+'</span>';
+  $("ctchip").title=CM.override?"Tap to go back to automatic":"Tap to switch "+(CM.on?"off":"on")+" until "+(CM.next_change?hmx(CM.next_change):"the next change");
+  $("ctchip").className="chip"+(CM.on?" no":"");
+  $("ctchip").onclick=function(){var lbl=CM.override?"Back to automatic chore mode":(CM.on?"Chore mode OFF":"Chore mode ON")+" until "+(CM.next_change?hmx(CM.next_change):"the next change");
+    post("/api/chore_toggle",{},lbl)};$("tvbtn").onclick=function(){openPM("tv")};
+  $("tourbtn").onclick=function(){TOUR={i:0,changed:[],val:null};openPM("tour")};
+  if(PM==="mostly")renderMostly();
+  if(PM==="noteform")renderNoteForm();
+  if(PM==="notyet")renderNotYet();
+  if(PM==="tour"&&!(document.activeElement&&document.activeElement.id==="tsl")&&!$("tsl"))renderTour();
+  if(PM==="ct"){var hrs=[1,1.5,2,3,4];
+    $("pmbody").innerHTML='<h2 class="h2b">🧹 Chore mode</h2><div class="mute">While on, shows, movies and games must be earned (bought with stars) or granted by you.</div>'+
+      '<div class="card"><b>AUTO:</b> 5 AM – 9 PM whenever a kid is home.<div class="mute">Home now: '+((CM.home||[]).join(", ")||"nobody")+(CM.in_hours?"":" · outside 5 AM–9 PM")+(CM.paused_until?" · ⏸ paused until "+new Date(CM.paused_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"}):"")+'</div>'+
+      '<div class="row" style="margin-top:8px">'+(CM.paused_until?'<button class="ok" id="ctresume">▶ Resume auto</button>':'<button class="no" id="ctpause">⏸ Pause for the rest of today</button>')+'</div></div>'+
+      '<div class="mute" style="margin-top:10px">Manual (outside auto hours, or extra):</div>'+
+      (ctOn&&!CM.auto?'<p>On until <b>'+new Date(S.tv.lock_until*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'</b></p><button class="no tvgo" id="ctoff">Turn chore time OFF</button><div class="mute" style="margin-top:10px">Or restart it for:</div>':'<div class="mute" style="margin-top:10px">Turn on for:</div>')+
+      '<div class="row" style="margin-top:6px">'+hrs.map(function(h){return '<button class="big2" data-cth="'+h+'">'+h+' h</button>'}).join("")+'</div>'+
+      (new Date().getHours()<21?'<button class="ok tvgo" id="cttoday">🌙 Rest of today (until 9 PM)</button>':'');
+    if($("ctoff"))$("ctoff").onclick=function(){post("/api/chore_time",{on:false},"Chore time off").then(closePM)};
+    if($("ctpause"))$("ctpause").onclick=function(){post("/api/chore_pause",{},"Paused until tomorrow 5 AM").then(closePM)};
+    if($("ctresume"))$("ctresume").onclick=function(){post("/api/chore_pause",{resume:true},"Auto chore mode resumed").then(closePM)};
+    document.querySelectorAll("[data-cth]").forEach(function(b){b.onclick=function(){post("/api/chore_time",{on:true,hours:+b.dataset.cth},"Chore time on for "+b.dataset.cth+" h").then(closePM)}});
+    if($("cttoday"))$("cttoday").onclick=function(){post("/api/chore_time",{on:true,today:true},"Chore time on until 9 PM").then(closePM)};
+  }
+  // ---- TV request panel (in the modal) ----
+  var PRE=[{id:"show",icon:"1f4fa",name:"Show",min:30},{id:"movie",icon:"1f3ac",name:"Movie",min:95},{id:"games",icon:"1f3ae",name:"Games",min:60},
+           {id:"vr",icon:"1f97d",name:"VR",min:10},{id:"other",icon:"2728",name:"Other",min:20}];
+  var TVIDS=Object.keys((S.tv&&S.tv.tvs)||{}),tvLabel=function(id){var t=((S.tv&&S.tv.tvs)||{})[id];return id==="*"?"every TV":t?t.name:id};
+  var TR=window.TR||(window.TR={kid:null,what:"show",tv:TVIDS[0]||"*",min:30,charge:true});
+  var pre=PRE.find(function(p){return p.id===TR.what}),rw=S.config.rewards.find(function(r){return r.id===TR.what});
+  if(PM==="tv"&&!$("tvreq"))$("pmbody").innerHTML='<h2 class="h2b">📺 Give TV time</h2><div id="tvreq"></div>';
+  if(PM==="tv"){
+  var h='<div style="font-weight:700">👧 For which kid? <span class="mute">(optional)</span></div><div class="row" style="margin-top:4px">'+S.config.kids.map(function(k){return '<button class="big2 '+(TR.kid===k.id?"on":"")+'" data-tk="'+k.id+'">'+E(k.icon)+' '+esc(k.name)+' <span class="mute">'+S.balance[k.id]+'⭐</span></button>'}).join("")+'</div>'+
+    '<div class="row" style="margin-top:8px">'+PRE.map(function(p){return '<button class="big2 '+(TR.what===p.id?"on":"")+'" data-tw="'+p.id+'">'+E(p.icon)+' '+p.name+' <span class="mute">'+p.min+'m</span></button>'}).join("")+'</div>'+
+    '<div style="margin-top:12px;font-weight:700">📺 Which TV?</div><div class="row" style="margin-top:4px">'+TVIDS.map(function(id){var t=S.tv.tvs[id];return [id,E(t.icon||"1f4fa")+" "+esc(t.short||t.name)]}).concat(TVIDS.length>1?[["*","All"]]:[]).map(function(t){return '<button class="big2 '+(TR.tv===t[0]?"on":"")+'" data-tt="'+t[0]+'">'+t[1]+'</button>'}).join("")+'</div>'+
+    '<div style="margin-top:10px"><b id="trmin">'+TR.min+' min</b> <span class="mute">(suggested '+pre.min+')</span><input type="range" id="trs" min="'+Math.max(5,pre.min-10)+'" max="'+(pre.min+10)+'" step="1" value="'+TR.min+'"></div>'+
+    (rw&&TR.kid?'<label class="row" style="margin-top:6px"><input type="checkbox" id="trc" '+(TR.charge?"checked":"")+'> Charge '+rw.cost+' ⭐ from '+esc(kidOf(TR.kid).name)+' (has '+S.balance[TR.kid]+')</label>':'')+
+    '<div class="mute" style="margin-top:8px">'+({show:"✅ Enforced: the TV locks itself when the time runs out.",
+      movie:"✅ Enforced: the TV locks itself when the time runs out.",games:"✅ Enforced: the console's HDMI input is blocked again when the time runs out.",
+      vr:"⚠️ Not enforced: only casting to the TV is unlocked — the headset itself can\'t be stopped yet. Speaker announces 1 min left + time\'s up; set a Google timer as a backup if nobody\'s nearby.",
+      other:"✅ Enforced on the TVs: everything allowed until the time runs out, then locked."}[TR.what]||"")+'</div>'+
+    '<button class="ok tvgo" id="trgo">🔓 Unlock '+tvLabel(TR.tv)+' for '+TR.min+' min</button>';
+  $("tvreq").innerHTML=h;
+  document.querySelectorAll("[data-tk]").forEach(function(b){b.onclick=function(){TR.kid=TR.kid===b.dataset.tk?null:b.dataset.tk;render()}});
+  document.querySelectorAll("[data-tw]").forEach(function(b){b.onclick=function(){TR.what=b.dataset.tw;TR.min=PRE.find(function(p){return p.id===TR.what}).min;render()}});
+  document.querySelectorAll("[data-tt]").forEach(function(b){b.onclick=function(){TR.tv=b.dataset.tt;render()}});
+  $("trs").oninput=function(){TR.min=+this.value;$("trmin").textContent=TR.min+" min";$("trgo").textContent="🔓 Unlock "+tvLabel(TR.tv)+" for "+TR.min+" min"};
+  if($("trc"))$("trc").onchange=function(){TR.charge=this.checked};
+  $("trgo").onclick=function(){var body={tv:TR.tv,minutes:TR.min,what:TR.what==="other"?null:TR.what,kid:TR.kid,charge:!!(TR.charge&&rw&&TR.kid)};
+    post("/api/tv/unlock",body,tvLabel(TR.tv)+" unlocked for "+TR.min+" min").then(function(){TR.kid=null;closePM()})};
+  }
+  var tb="",tvs=(S.tv&&S.tv.tvs)||{};
+  (S.timers||[]).forEach(function(t){var left=Math.round(t.start+t.minutes*60-S.now),k=kidOf(t.kid);
+    tb+='<div class="row" style="margin:4px 0;padding:6px;border-radius:10px;background:'+(left>60?"#1b5e20":left>0?"#8a6d00":"#7f1d1d")+';color:#fff"><b>'+E(k.icon)+' '+esc(k.name)+' · 🥽 VR timer</b><span>'+(left>0?Math.floor(left/60)+":"+("0"+left%60).slice(-2)+" left":"time is up")+'</span><span style="margin-left:auto"></span><button data-tre="'+t.ref+'">↻ Restart '+t.minutes+':00</button></div>'+
+      '<div class="mute" style="margin:0 0 8px 6px">⚠️ <b>Not enforced:</b> the system can\'t take the headset away yet. A speaker announces 1 minute left and time\'s up — if nobody will be nearby, set a Google timer as a backup.</div>'});
+  var choreOn=S.tv&&S.tv.lock_until>S.now;
+  var WHAT={show:"📺 Show",movie:"🎬 Movie",games:"🎮 Games",vr:"🥽 VR casting",other:"✨ Other"};
+  // one combined card: the TVs are locked or unlocked together from your side
+  var allG=[],ends=[];Object.keys(tvs).forEach(function(id){(tvs[id].grants||[]).forEach(function(g){g._tv=tvs[id].name;allG.push(g)});if(tvs[id].unlocked_until)ends.push(tvs[id].unlocked_until)});
+  var seenG={},grants=allG.filter(function(g){var k=g.kid+g.what+Math.round(g.until);if(seenG[k]){seenG[k].tvs.push(g._tv);return false}g.tvs=[g._tv];seenG[k]=g;return true});
+  // when each TV actually locks: running clocks + queued purchases back to back, or the end of the show it's finishing
+  var fmtT=function(t){return new Date(t*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})};
+  var tvRows=[],nexts=[],waiting=false;
+  Object.keys(tvs).forEach(function(id){var T=tvs[id],F=T.finish&&T.finish.until>S.now?T.finish:null,la=T.locks_at&&T.locks_at>S.now?T.locks_at:0,st;
+    if(F){st='🎬 finishing <b>'+esc(F.title)+'</b> · <b><span class="cd" data-until="'+F.until+'"></span></b>';nexts.push(F.until)}
+    else if(la){st='🔓 <b><span class="cd" data-until="'+la+'"></span></b> · locks '+fmtT(la);nexts.push(la)}
+    else if(T.waiting&&T.waiting.length){st='🔓 clock starts when they watch';waiting=true}
+    else st='🔒 locked';
+    tvRows.push('<div class="row" style="margin:3px 0;font-size:16px"><span>'+E(T.icon||"1f4fa")+' '+esc(T.name)+'</span><span style="margin-left:auto">'+st+'</span>'+
+      ((F||la||(T.waiting&&T.waiting.length))?'<button class="no" style="background:#fff;margin-left:8px;padding:4px 10px" data-ta="'+id+':lock">🔒 Lock</button>':'')+'</div>')});
+  var open=grants.length>0||nexts.length>0,last=nexts.length?Math.min.apply(null,nexts):0,left=last?Math.round(last-S.now):(waiting?99999:0);
+  var bg=!choreOn?"#374151":!open?"#7f1d1d":left<=300?"#8a6d00":"#1b5e20";
+  tb+='<div style="background:'+bg+';color:#fff;border-radius:14px;padding:10px 12px;margin:6px 0">'+
+    '<div class="row"><b style="font-size:18px">📺 TVs</b><span style="margin-left:auto;font-size:22px;font-weight:800">'+(!choreOn?"free (chore time off)":last?'<span class="cd" data-until="'+last+'"></span>':waiting?"🔓 waiting to start":"🔒 LOCKED")+'</span></div>'+
+    (choreOn?tvRows.join(""):'')+
+    (grants.length?'<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null;return '<div style="opacity:.9;font-size:14px">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</div>'}).join("")+'</div>':'')+
+    (choreOn&&open?'<div class="row" style="margin-top:8px"><button data-ta="*:five">⏱️ 5-min countdown</button><button data-ta="*:minus">−10</button><button data-ta="*:plus">+10</button><button class="no" style="background:#fff" data-ta="*:lock">🔒 Lock now</button></div>':'')+'</div>';
+  var BT=S.bedtime||{};
+  tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
+  tb+='<div class="mute" style="margin-top:6px">Only enforced while Chore time is on. The speaker warns 5 minutes before a TV locks. A TV that reports the episode\'s end lets a show finish (never past an hour into one title; a new episode, pause or app switch locks it). Others lock on the timer.</div>';
+  $("tvbox").innerHTML=tb;
+  if($("bedbtn"))$("bedbtn").onclick=function(){post("/api/bedtime",{on:!(S.bedtime||{}).on},(S.bedtime||{}).on?"Bedtime ended":"Bedtime! Screens are sending them to bed")};
+  document.querySelectorAll("[data-ta]").forEach(function(b){b.onclick=function(){var a=b.dataset.ta.split(":");
+    post("/api/tv/adjust",{tv:a[0],action:a[1]},{five:"5-minute countdown started",plus:"+10 min",minus:"−10 min",lock:"Locked"}[a[1]])}});
+  document.querySelectorAll("[data-tre]").forEach(function(b){b.onclick=function(){post("/api/timer_restart",{ref:b.dataset.tre},"VR timer restarted")}});
+  document.querySelectorAll("[data-un]").forEach(function(b){b.onclick=function(){var m=+b.dataset.un;post("/api/tv/unlock",{tv:"*",minutes:m},m?"TVs unlocked for "+m+" min":"TVs locked again")}});
+  var AC=S.active||{},seenA={},ah="";
+  Object.keys(AC).forEach(function(k){var a=AC[k],team=a.team||[k],key=a.chore+":"+team.join(",");if(seenA[key])return;seenA[key]=1;
+    var c=choreOf(a.chore),T=((S.typical||{})[a.chore]||{}).minutes||c.est_minutes,R=(S.records||{})[team.length>1?a.chore+"@"+team.length:a.chore];
+    ah+='<div class="card"><div class="row"><span class="big">'+team.map(function(x){return E(kidOf(x).icon)}).join("")+E(c.icon)+'</span><div style="flex:1"><b>'+team.map(function(x){return esc(kidOf(x).name)}).join(" + ")+'</b> · '+esc(c.name)+
+      (a.round?' <span class="tag">round '+a.round+'</span>':'')+(a.split&&Object.keys(a.split).length?' <span class="tag">deal: '+Object.keys(a.split).map(function(m){return esc(kidOf(m).name)+" "+a.split[m]}).join(", ")+'</span>':'')+
+      '<div class="mute">'+(a.notimer?'timer off':'⏱ <span class="cdu2" data-since="'+a.ts+'"></span>')+' · expected ~'+Math.round(expectFor(S,team[0],a.chore,team))+' min'+
+      (a.rework&&a.rework.feedback?' · 🔁 "'+esc(a.rework.feedback)+'"':'')+'</div></div></div>'+(a.notimer?'':chartBar(S,team[0],a.chore,a.ts,team,false))+'</div>'});
+  $("actbox").innerHTML=ah?'<h2 class="h2b">⏱ In progress</h2>'+ah:'';
+  var PZ=S.paused||{},pz="";
+  Object.keys(PZ).forEach(function(k){var z=PZ[k],c=choreOf(z.chore),tm=(z.team||[k]).map(function(x){return E(kidOf(x).icon)+" "+esc(kidOf(x).name)}).join(" + ");
+    pz+='<div class="card"><div class="row"><span class="big">'+E(c.icon)+'</span><div><b>'+tm+'</b> · '+esc(c.name)+' <span class="tag">⏸ partly done</span><div class="mute">saved '+ago(z.ts)+(z.notimer?'':' · worked '+Math.round(z.elapsed/60)+' min')+' · held until '+new Date(z.until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</div></div></div>'+
+      '<div class="row" style="margin-top:6px"><button data-pzp="'+k+'">Give partial points…</button><button class="no" data-pzr="'+k+'">Release (anyone can do it)</button>'.replace(/^.*$/,c.shared?'':'$&')+'</div></div>'});
+  $("pzbox").innerHTML=pz?'<h2 class="h2b">⏸ Partly done — saved for later</h2>'+pz:'';
+  document.querySelectorAll("[data-pzr]").forEach(function(b){b.onclick=function(){if(confirm("Release it? Anyone can then do this chore."))post("/api/release",{kid:b.dataset.pzr},"Released")}});
+  document.querySelectorAll("[data-pzp]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzp,z=PZ[k],v=prompt("Partial points for "+kidOf(k).name+" ("+choreOf(z.chore).name+")?","1");if(!v)return;
+    post("/api/adjust",{kid:k,points:+v,reason:"partly did "+choreOf(z.chore).name},"+"+v+" for "+kidOf(k).name)}});
+  // chart
+  var ch="";S.config.chores.forEach(function(c){if(c.hidden)return;var bd=S.board[c.id]||{};var tags=c.bundle?'<span class="tag">'+(c.only?c.only.join(", ")+' only · ':'')+'now '+(bd.price||0)+' pts = '+((bd.covers||[]).map(function(x){var cc=S.config.chores.find(function(y){return y.id===x})||{name:x};return esc(cc.name)+' '+((S.board[x]||{}).price||0)}).join(' + ')||'all clean')+(bd.boost_pct?' +'+bd.boost_pct+'% big-job bonus ('+bd.boost_from+'→'+bd.price+')':'')+'</span> ':"";
+    if(bd.bonus)tags+='<span class="tag bonus">next time: '+(bd.price==null?"?":bd.price)+'</span> ';
+    if(bd.note)tags+='<span class="tag">📝 '+esc(bd.note).replace(/\n/g," · ")+'</span> ';
+    if(bd.clean_until)tags+='<span class="tag clean">clean until '+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</span> ';
+    if(bd.pending_by&&bd.pending_by.length)tags+='<span class="tag pend">waiting</span> ';
+    var T=(S.typical||{})[c.id];if(T)tags+='<span class="tag">⏱ ~'+Math.round(T.minutes)+' min ('+T.n+')</span> ';
+    ch+='<div class="card chore" data-c="'+c.id+'"><span class="big">'+E(c.icon)+'</span><span class="nm">'+esc(c.name)+' <span class="mute">'+(c.points==null?"adult sets":c.points+" pts")+(c.room?" · room":"")+'</span><br>'+tags+'</span>'+
+      '<button data-a="price">Price once</button>'+(bd.clean_until?'<button data-a="reopen">Reopen</button>':'')+'<button data-a="edit">Edit</button></div>'});
+  // group into collapsible floors (open/closed state remembered while the page is open)
+  var groups={Downstairs:[],Upstairs:[],Other:[]};
+  ch.split('<div class="card chore" data-c="').slice(1).forEach(function(part){var id=part.slice(0,part.indexOf('"')),c=choreOf(id);
+    (groups[c.floor||"Other"]||groups.Other).push('<div class="card chore" data-c="'+part)});
+  window.CHOPEN=window.CHOPEN||{};
+  $("chart").innerHTML=["Downstairs","Upstairs","Other"].filter(function(g){return groups[g].length}).map(function(g){
+    return '<details class="cgrp" data-g="'+g+'"'+(CHOPEN[g]?" open":"")+'><summary>'+({Downstairs:"⬇️",Upstairs:"⬆️",Other:"✨"}[g])+' '+g+' <span class="mute">('+groups[g].length+')</span></summary>'+groups[g].join("")+'</details>'}).join("");
+  document.querySelectorAll("#chart details.cgrp").forEach(function(d){d.ontoggle=function(){CHOPEN[d.dataset.g]=d.open}});
+  document.querySelectorAll("#chart .chore").forEach(function(n){var c=choreOf(n.dataset.c);
+    n.querySelector('[data-a="price"]').onclick=function(){NOTEFORM={chore:c.id,mode:"price"};openPM("noteform")};
+    var ro=n.querySelector('[data-a="reopen"]');if(ro)ro.onclick=function(){NOTEFORM={chore:c.id,mode:"reopen"};openPM("noteform")};
+    n.querySelector('[data-a="edit"]').onclick=function(){var nm=prompt("Name (blank = remove from chart)",c.name);if(nm===null)return;
+      if(nm===""){if(confirm("Remove "+c.name+" from the chart?"))post("/api/chore",{chore:{id:c.id,name:c.name},remove:true},"Removed");return}
+      var pts=prompt("Normal points (blank = adult sets each time)",c.points==null?"":c.points);if(pts===null)return;
+      post("/api/chore",{chore:{id:c.id,name:nm,points:pts===""?null:+pts,icon:c.icon}},"Saved")}});
+  $("nadd").onclick=function(){var nm=$("nname").value.trim();if(!nm){toast("Name it first");return}
+    post("/api/chore",{chore:{name:nm,points:$("npts").value===""?null:+$("npts").value,icon:"2b50"}},"Added "+nm).then(function(){$("nname").value="";$("npts").value=""})};
+  // recent
+  var rc="";S.history.slice(0,25).forEach(function(h){var k=kidOf(h.kid),line,undo=h.id;
+    if(h.type==="report"){line=E(h.chore_icon)+' '+esc(h.chore_name)+' — '+(h.status==="pending"?"waiting":h.status==="inspected"?E(inspOf(h.inspected_by).icon)+" +"+h.awarded:"sent back");undo=h.status==="pending"?h.id:h.inspect_id}
+    else if(h.type==="spend")line=E(h.reward_icon)+' bought '+esc(h.reward_name)+' (−'+h.cost+')';
+    else line=(h.points>0?"+":"")+h.points+' '+esc(h.reason||"")+' '+E(inspOf(h.by).icon);
+    rc+='<div class="card row"><span>'+E(k.icon)+'</span><span style="flex:1">'+line+'<div class="mute">'+ago(h.ts)+'</div></span><button data-u="'+undo+'">Undo</button></div>'});
+  $("recent").innerHTML=rc;
+  document.querySelectorAll("[data-u]").forEach(function(b){b.onclick=function(){if(confirm("Undo this?"))post("/api/undo",{ref:b.dataset.u},"Undone")}});
+}
+function load(){api("/api/state").then(function(s){S=s;var a=document.activeElement;if(!a||(a.tagName!=="INPUT"&&a.tagName!=="TEXTAREA")||a.type==="checkbox")render()})}
+$("pmx").onclick=closePM;$("pm").onclick=function(e){if(e.target===$("pm"))closePM()};
+load();setInterval(load,8000);
+setInterval(function(){document.querySelectorAll(".cdu2[data-since]").forEach(function(n){var l=Math.round(Date.now()/1000-+n.dataset.since);n.textContent=Math.floor(l/60)+":"+("0"+l%60).slice(-2)});
+  document.querySelectorAll(".cd[data-until]").forEach(function(n){var u=+n.dataset.until;if(!u)return;var l=Math.max(0,Math.round(u-Date.now()/1000));
+  n.textContent=Math.floor(l/60)+":"+("0"+l%60).slice(-2)+" left"})},1000);
+</script></body></html>

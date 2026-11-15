@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TV is resting</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:"Nunito",system-ui,sans-serif;color:#fff;
+  background:radial-gradient(circle at 50% 30%,#2a3a7a,#0d1030 70%)}
+img.e{width:1em;height:1em;vertical-align:-.12em}
+.wrap{height:86%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2vh;text-align:center}
+.hero{display:flex;align-items:flex-end;gap:5vw}
+.brainbox{position:relative;width:24vh;height:22vh}
+.brain{font-size:22vh;line-height:1;animation:grow 2.6s ease-in-out infinite;transform-origin:50% 70%}
+@keyframes grow{0%,100%{transform:scale(1) rotate(-2deg)}50%{transform:scale(1.08) rotate(2deg)}}
+.glow{position:absolute;inset:-4vh;border-radius:50%;background:radial-gradient(circle,rgba(255,150,200,.45),transparent 65%);animation:grow 2.6s ease-in-out infinite}
+.face{position:absolute;left:18%;top:30%;width:64%;animation:grow 2.6s ease-in-out infinite;transform-origin:50% 120%}
+.pupil{animation:look 4s ease-in-out infinite}
+@keyframes look{0%,40%,100%{transform:translate(0,0)}50%,80%{transform:translate(-4px,1px)}}
+.eyes{animation:blink 5s infinite;transform-origin:50% 22px}
+@keyframes blink{0%,46%,50%,100%{transform:scaleY(1)}48%{transform:scaleY(.1)}}
+.spark{position:absolute;font-size:6vh;animation:tw 1.8s ease-in-out infinite}
+.s1{left:-6%;top:5%}.s2{right:-8%;top:20%;animation-delay:.6s}.s3{left:10%;bottom:-4%;animation-delay:1.2s}
+@keyframes tw{0%,100%{opacity:.2;transform:scale(.6)}50%{opacity:1;transform:scale(1.2)}}
+.tv{font-size:12vh;animation:sleep 3.5s ease-in-out infinite}
+@keyframes sleep{0%,100%{transform:rotate(-4deg) translateY(0)}50%{transform:rotate(4deg) translateY(-2vh)}}
+.z{position:absolute;font-size:6vh;opacity:0;animation:zz 3s linear infinite}
+@keyframes zz{0%{opacity:0;transform:translate(0,0) scale(.6)}20%{opacity:1}100%{opacity:0;transform:translate(8vw,-18vh) scale(1.4)}}
+h1{font-size:5.5vh;margin:0}
+.how{font-size:5vh;display:flex;align-items:center;gap:2vw;background:rgba(255,255,255,.1);padding:1.5vh 3vw;border-radius:5vh}
+.kids{display:flex;gap:2.5vw;margin-top:1vh;width:92vw;justify-content:center}
+.k{background:rgba(255,255,255,.1);border:.6vh solid var(--c);border-radius:4vh;padding:1.5vh 1.6vw;flex:1;max-width:30vw;box-shadow:0 1vh 0 rgba(0,0,0,.3);text-align:left}
+.k .hd{display:flex;align-items:center;gap:1vw}.k .hd .nm{font-size:4.5vh;font-weight:900}.k .hd .bal{margin-left:auto;font-size:5vh;font-weight:900}
+.gb{display:flex;align-items:center;gap:1vw;margin-top:1.2vh}.gbar{flex:1;height:3.4vh;background:rgba(255,255,255,.2);border-radius:2vh;overflow:hidden;position:relative}
+.gbar .f{position:absolute;left:0;top:0;bottom:0;background:#ffd54a;border-radius:2vh}
+.gbar .p{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,#ffd54a 0 1vh,transparent 1vh 2vh);opacity:.6}
+.gi{font-size:6vh}.next{font-size:3.2vh;font-weight:900;margin-top:1vh;padding:.6vh 1vw;border-radius:2vh}
+.next.buy{background:#2e7d32}
+.pbar{height:1.6vh;background:rgba(255,255,255,.25);border-radius:1vh;overflow:hidden;margin-top:.6vh}.pfill{height:100%;background:#fff;border-radius:1vh;transition:width 4s linear}.next.go{background:rgba(255,255,255,.12)}
+.doing{font-size:2.6vh;margin-top:.8vh;opacity:.9}
+.k .f{font-size:10vh}.k .p{font-size:5vh;font-weight:900}
+.bar{height:2vh;background:rgba(255,255,255,.25);border-radius:2vh;overflow:hidden;margin-top:1vh}
+.bar div{height:100%;background:#ffd54a;border-radius:2vh;transition:width 1s}
+.ok{font-size:4vh;color:#ffd54a;font-weight:900;margin-top:.5vh}
+.tvnews{position:absolute;left:3vw;right:3vw;bottom:6vh;display:flex;align-items:center;gap:1.5vw;background:rgba(255,255,255,.12);border-radius:3vh;padding:1.2vh 2vw;font-size:3.6vh;font-weight:800;min-height:8vh}
+.tvnews .ni{font-size:6vh}.tvnews .nl{font-size:2.4vh;opacity:.7;text-transform:uppercase;letter-spacing:.2vw}
+.foot{position:absolute;bottom:2.5vh;font-size:3vh;opacity:.6}
+</style></head><body>
+<div class="wrap">
+  <div class="hero">
+    <div class="brainbox"><div class="glow"></div><div class="brain" id="brain"></div>
+      <svg class="face" viewBox="0 0 100 60"><g class="eyes"><ellipse cx="32" cy="22" rx="9" ry="11" fill="#fff"/><ellipse cx="68" cy="22" rx="9" ry="11" fill="#fff"/>
+        <circle class="pupil" cx="34" cy="24" r="5" fill="#222"/><circle class="pupil" cx="70" cy="24" r="5" fill="#222"/></g>
+        <path d="M30 42 Q50 60 70 42" stroke="#7a1f4a" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+      <div class="spark s1" id="sp1"></div><div class="spark s2" id="sp2"></div><div class="spark s3" id="sp3"></div>
+    </div>
+    <div style="position:relative"><div class="tv" id="tv"></div><div class="z" style="left:70%;top:0">z</div><div class="z" style="left:75%;top:0;animation-delay:1s">Z</div><div class="z" style="left:80%;top:0;animation-delay:2s">z</div></div>
+  </div>
+  <h1 id="title">TV is resting &mdash; brain time!</h1>
+  <div class="how" id="how"></div>
+  <div class="kids" id="kids"></div>
+</div>
+<div class="tvnews" id="tvnews"></div>
+<div class="foot" id="foot"></div>
+<script>
+
+var _q=[],_sess=Math.random().toString(36).slice(2,8);
+function L(ev,data){var o={ev:ev,page:location.pathname,sess:_sess,t:Date.now()/1000};if(typeof kid!=="undefined"&&kid)o.kid=kid;if(data)for(var k in data)o[k]=data[k];_q.push(o);if(_q.length>=20)flushL()}
+function flushL(){if(!_q.length)return;var b=JSON.stringify(_q);_q=[];try{fetch("/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:b,keepalive:true})}catch(e){}}
+setInterval(flushL,3000);addEventListener("pagehide",flushL);
+addEventListener("error",function(e){L("js_error",{msg:String(e.message),line:e.lineno})});
+document.addEventListener("click",function(e){var n=e.target.closest("[data-c],[data-k],[data-r],[data-f],[data-tv],[data-p],[data-x],[data-u],[data-a],[data-i],[data-n],button,.homebtn,#exit,.x,.btn");
+  L("tap",{target:n?(n.id||n.className||n.tagName):String(e.target.tagName),data:n?Object.assign({},n.dataset):null,x:Math.round(e.clientX),y:Math.round(e.clientY)})},true);
+L("load",{w:innerWidth,h:innerHeight,ua:navigator.userAgent.slice(0,120),q:location.search});
+var TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
+var CUSTOM_ICONS={"x-chandelier":"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%3E%3Cpath%20d%3D%22M32%202v14%22%20stroke%3D%22%237a5a1e%22%20stroke-width%3D%222.5%22/%3E%3Cpath%20d%3D%22M8%2030c4%2010%2020%2012%2024%202c4%2010%2020%208%2024-2%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%223.5%22/%3E%3Cpath%20d%3D%22M20%2034c3%206%209%206%2012%200c3%206%209%206%2012%200%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%223%22/%3E%3C/g%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2220%22%20r%3D%225%22%20fill%3D%22%23e0b040%22/%3E%3Cpath%20d%3D%22M29%2024h6l-1%2010h-4z%22%20fill%3D%22%23c9952b%22/%3E%3Cg%20fill%3D%22%23fff8e1%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%221.5%22%3E%3Crect%20x%3D%225%22%20y%3D%2220%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2253%22%20y%3D%2220%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2217%22%20y%3D%2224%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2241%22%20y%3D%2224%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3C/g%3E%3Cg%20fill%3D%22%23ffb300%22%3E%3Cpath%20d%3D%22M8%2012c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M56%2012c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M20%2016c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M44%2016c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3C/g%3E%3Cg%20fill%3D%22%239ad7ff%22%20stroke%3D%22%234fa3d1%22%20stroke-width%3D%221%22%3E%3Cpath%20d%3D%22M14%2040l3%205-3%205-3-5z%22/%3E%3Cpath%20d%3D%22M32%2040l3%206-3%206-3-6z%22/%3E%3Cpath%20d%3D%22M50%2040l3%205-3%205-3-5z%22/%3E%3Cpath%20d%3D%22M23%2044l2%204-2%204-2-4z%22/%3E%3Cpath%20d%3D%22M41%2044l2%204-2%204-2-4z%22/%3E%3C/g%3E%3C/svg%3E"};
+function cp(c){if(CUSTOM_ICONS[c])return "";return c.split("-").map(function(h){return String.fromCodePoint(parseInt(h,16))}).join("")}
+function E(c){if(CUSTOM_ICONS[c])return '<img class="e" src="'+CUSTOM_ICONS[c]+'" alt="">';return '<img class="e" src="'+TW+c+'.svg" alt="'+cp(c)+'" onerror="this.outerHTML=this.alt">'}
+document.getElementById("tv").innerHTML=E("1f4fa");
+document.getElementById("brain").innerHTML=E("1f9e0");
+["sp1","sp2","sp3"].forEach(function(i){document.getElementById(i).innerHTML=E("2728")});
+document.getElementById("how").innerHTML=E("1f9f9")+E("1f455")+E("1f37d")+" &rarr; "+E("1f9e0")+E("1f4aa")+" &rarr; "+E("2b50")+" &rarr; "+E("1f4fa");
+
+/* --- news feed: features, price changes, records, level-ups (newest first) --- */
+function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(function(x){return x.id===k})||{name:k})},CH=function(id){return S.config.chores.find(function(x){return x.id===id})||{name:id,icon:"2b50"}};
+  (S.whatsnew_all||[]).forEach(function(n){(n.items||[]).forEach(function(it){out.push({ts:n.ts||0,icon:it.icon,text:it.text,kind:"new"})})});
+  Object.keys(S.board||{}).forEach(function(id){var b=S.board[id],c=CH(id);if(!b.bonus||b.clean_until||c.hidden||c.bundle||b.price==null||b.base==null||b.is_rest||b.part_paid)return;
+    out.push({ts:b.tour_seen||S.now-1800,icon:b.price>b.base?"1f525":"2b07",text:c.name+" is worth "+b.price+(b.price===1?" star":" stars")+" this time"+(b.price>b.base?" — extra messy!":"."),kind:"price"})});
+  Object.keys(S.records||{}).forEach(function(key){var R=S.records[key],c=CH(key.split("@")[0]),who=R.team?R.team.map(function(k){return KN(k).name}).join(" + "):KN(R.kid).name;
+    out.push({ts:R.ts,icon:"1f947",text:who+" set the "+c.name+(R.size?" ("+R.size+"-person)":"")+" record: "+Math.floor(R.sec/60)+":"+("0"+R.sec%60).slice(-2)+"!",kind:"record"})});
+  Object.keys(S.awards||{}).forEach(function(k){(S.awards[k]||[]).forEach(function(a){if(/^(lvl|jobs|earned|days):/.test(a.id||"")&&!/^jobs:1$/.test(a.id))out.push({ts:a.ts,icon:"2b06",text:KN(k).name+": "+a.title.replace("!","")+"!",kind:"level"})})});
+  return out.sort(function(a,b){return b.ts-a.ts}).slice(0,12)}
+var NEWSI=0,NEWS=[];
+setInterval(function(){if(!NEWS.length)return;var n=NEWS[NEWSI%NEWS.length];NEWSI++;
+  document.getElementById("tvnews").innerHTML='<span class="ni">'+E(n.icon)+'</span><span><span class="nl">'+E("1f4f0")+' News</span><br>'+n.text+'</span>'},8000);
+function goalOf(S,k){var b=S.balance[k],rs=S.config.rewards.slice().sort(function(x,y){return x.cost-y.cost}),ch=(S.goals||{})[k];
+  var r=ch&&rs.find(function(x){return x.id===ch});if(r)return r;var fav=(S.favorite||{})[k];r=fav&&rs.find(function(x){return x.id===fav});if(r)return r;
+  return rs.find(function(x){return x.cost>b})||rs[rs.length-1]}
+var VER0=null;
+function load(){fetch("/api/state").then(function(r){return r.json()}).then(function(S){
+  if(S.ver_tv){if(VER0===null)VER0=S.ver_tv;else if(S.ver_tv!==VER0){location.replace(location.pathname+"?v="+Date.now());return}}
+  var h="",ear=S.earned||{},top=Math.max.apply(null,S.config.kids.map(function(k){return S.balance[k.id]})),tope=Math.max.apply(null,S.config.kids.map(function(k){return ear[k.id]||0}));
+  S.config.kids.forEach(function(k){var b=S.balance[k.id],p=(S.pending_points||{})[k.id]||0,G=goalOf(S,k.id),gc=G.cost;
+    var tro=(top>0&&b===top?E("1f3c6"):"")+(tope>0&&(ear[k.id]||0)===tope?'<span style="filter:grayscale(1) brightness(1.35)">'+E("1f3c6")+'</span>':"");
+    var A=(S.active||{})[k.id],ac=A&&S.config.chores.find(function(c){return c.id===A.chore});
+    h+='<div class="k" style="--c:'+k.color+'"><div class="hd"><span style="font-size:7vh">'+E(k.icon)+'</span><span class="nm">'+k.name+' '+tro+'</span><span class="bal">'+b+' '+E("2b50")+'</span></div>'+
+      '<div class="gb"><div class="gbar"><div class="f" style="width:'+Math.min(100,b/gc*100)+'%"></div><div class="p" style="left:'+Math.min(100,b/gc*100)+'%;width:'+Math.max(0,Math.min(100-b/gc*100,p/gc*100))+'%"></div></div><span class="gi">'+E(G.icon)+'</span><b style="font-size:3vh">'+gc+'</b></div>'+
+      ((function(){var gs=[];Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(t){((S.tv.tvs[t].grants)||[]).forEach(function(g){if(g.kid===k.id&&g.what!=="vr")gs.push({t:t,g:g})})});
+        if(!gs.length)return "";var x=gs[0],tn=((S.tv&&S.tv.tvs||{})[x.t]||{}).short||x.t,wi={games:"1f3ae",movie:"1f3ac",show:"1f4fa"}[x.g.what]||"1f4fa",wn={games:"Video games",movie:"Movie",show:"Show"}[x.g.what]||"TV";
+        var now=Date.now()/1000,tot=Math.max(60,x.g.until-(x.g.start||x.g.until-1800)),pc=x.g.armed?0:Math.min(100,100*(1-(x.g.until-now)/tot));
+        return '<div class="next buy">'+E(wi)+' '+wn+' on the '+tn+' TV: '+(x.g.armed?(x.g.mins||30)+' min, starts when you play':Math.max(0,Math.round((x.g.until-now)/60))+' min left')+
+          '<div class="pbar"><div class="pfill" style="width:'+pc.toFixed(1)+'%"></div></div></div>'})()||
+      ((function(){var rr=((S.reward_ready||{})[k.id]||{})[G.id];return rr&&rr>Date.now()/1000})()?
+        '<div class="next go">'+E("1f634")+' '+E(G.icon)+' again at '+new Date(S.reward_ready[k.id][G.id]*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'</div>':
+       b>=gc?'<div class="next buy">'+E("2705")+' Enough for '+E(G.icon)+'! Buy it on the Hub</div>':'<div class="next go">'+E("1f9f9")+' '+(gc-b)+' more '+E("2b50")+' to '+E(G.icon)+(p?' &middot; '+E("1f50d")+' +'+p+' waiting':'')+'</div>'))+
+      (ac?'<div class="doing">'+E("23f1")+' Doing: '+E(ac.icon)+' '+ac.name+'</div>':'')+'</div>'});
+  document.getElementById("kids").innerHTML=h;
+  var CMx=S.chore_mode||{};document.getElementById("title").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time "+E("1f31f"):"TV is resting &mdash; brain time!";
+  var first=!NEWS.length;NEWS=newsFeed(S).slice(0,6);if(first&&NEWS.length){var n=NEWS[0];NEWSI=1;document.getElementById("tvnews").innerHTML='<span class="ni">'+E(n.icon)+'</span><span><span class="nl">'+E("1f4f0")+' News</span><br>'+n.text+'</span>'}
+  var tl=S.tv&&S.tv.lock_until?new Date(S.tv.lock_until*1000):null;
+  document.getElementById("foot").textContent=tl?"Chore time until "+tl.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
+}).catch(function(){})}
+load();setInterval(load,5000);
+</script></body></html>

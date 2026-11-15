@@ -1,0 +1,43 @@
+"""Create the userfields Chore Time reads on Grocy's 'chores' entity (idempotent). Never prints the API key.
+Kids' names for the "Only for" checklist come from your chores.json."""
+import json
+import sys
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _house import DATA, grocy  # noqa: E402
+
+API, KEY = grocy()
+KIDS = "\n".join(k["name"] for k in json.loads((DATA / "chores.json").read_text())["kids"])
+
+
+def call(method, path, body=None):
+    req = urllib.request.Request(API + path, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                 headers={"GROCY-API-KEY": KEY, "Content-Type": "application/json", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        t = r.read()
+        return json.loads(t) if t else None
+
+
+FIELDS = [
+    ("kids", "Kids' screens", "checkbox", None, 1),
+    ("kid_points", "Kids' points (empty = grown-up sets)", "number-integral", None, 2),
+    ("kid_icon", "Kids' icon (emoji code, e.g. 1f9f9)", "text-single-line", None, 3),
+    ("kid_only", "Only for", "preset-checklist", KIDS, 4),
+    ("kid_floor", "Floor", "preset-list", "Downstairs\nUpstairs\nOther", 5),
+    ("kid_where", "Where", "text-single-line", None, 6),
+    ("kid_map", "Map rooms (floor-plan ids, comma separated)", "text-single-line", None, 7),
+    ("kid_key", "Chore app key (don't change)", "text-single-line", None, 8),
+    ("kid_extra", "Chore app extras (JSON: shared, daylight, slot, each_daily, ...)", "text-multi-line", None, 9),
+]
+have = {(u["entity"], u["name"]) for u in call("GET", "/objects/userfields")}
+for name, cap, typ, conf, sort in FIELDS:
+    if ("chores", name) in have:
+        print("exists", name)
+        continue
+    body = {"entity": "chores", "name": name, "caption": cap, "type": typ, "sort_number": sort, "input_required": 0,
+            "show_as_column_in_tables": 1 if name in ("kids", "kid_points") else 0}
+    if conf:
+        body["config"] = conf
+    print("created", name, call("POST", "/objects/userfields", body))

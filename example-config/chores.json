@@ -1,0 +1,383 @@
+{
+  "kids": [
+    {
+      "id": "ava",
+      "name": "Ava",
+      "color": "#d0103a",
+      "icon": "1f430",
+      "home_entity": "input_boolean.ava_home"
+    },
+    {
+      "id": "max",
+      "name": "Max",
+      "color": "#1e88e5",
+      "icon": "1f428",
+      "home_entity": "input_boolean.max_home",
+      "family_color": "#8e24aa"
+    },
+    {
+      "id": "zoe",
+      "name": "Zoe",
+      "color": "#43a047",
+      "icon": "1f984",
+      "home_entity": "input_boolean.zoe_home",
+      "toy_swap": true,
+      "presents": 6,
+      "old_toys": []
+    }
+  ],
+  "inspectors": [
+    {
+      "id": "jordan",
+      "name": "Jordan",
+      "icon": "1f9d4",
+      "color": "#00e676"
+    },
+    {
+      "id": "casey",
+      "name": "Casey",
+      "icon": "1f469",
+      "color": "#e91e63"
+    }
+  ],
+  "chores": [
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "kitchen",
+      "name": "Kitchen",
+      "icon": "1f373",
+      "points": 4,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "kitchen"
+      ]
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "living_room",
+      "name": "Living room",
+      "icon": "1f6cb",
+      "points": 3,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "living_room"
+      ]
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "family_room",
+      "name": "Family room",
+      "icon": "1f4fa",
+      "points": 3,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "family_room"
+      ]
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "front_hall",
+      "name": "Front hall",
+      "icon": "1f6aa",
+      "points": 2,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "front_hall"
+      ]
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "bathroom",
+      "name": "Downstairs bathroom",
+      "icon": "1f6bd",
+      "points": 3,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "bathroom"
+      ]
+    },
+    {
+      "id": "whole_downstairs",
+      "name": "Whole downstairs",
+      "icon": "2b07",
+      "points": null,
+      "bundle": [
+        "kitchen",
+        "living_room",
+        "family_room",
+        "front_hall",
+        "bathroom"
+      ],
+      "boost": {
+        "pct": 25,
+        "min": 3
+      },
+      "floor": "Downstairs"
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "kids_room",
+      "name": "Kids' room",
+      "icon": "1f6cf",
+      "points": 5,
+      "floor": "Upstairs",
+      "map_rooms": [
+        "kids_room"
+      ]
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "kids_bath",
+      "name": "Kids' bathroom",
+      "icon": "1f6c1",
+      "points": 3,
+      "floor": "Upstairs"
+    },
+    {
+      "room": true,
+      "cooldown_h": 168,
+      "id": "stairs",
+      "name": "Sweep the stairs",
+      "icon": "1f9f9",
+      "points": 2,
+      "floor": "Upstairs"
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "art_table",
+      "name": "Art table",
+      "icon": "1f3a8",
+      "points": 2,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "living_room"
+      ]
+    },
+    {
+      "room": true,
+      "cooldown_h": 72,
+      "id": "toy_table",
+      "name": "Toy table",
+      "icon": "1f9f8",
+      "points": 2,
+      "floor": "Downstairs",
+      "map_rooms": [
+        "living_room"
+      ]
+    },
+    {
+      "id": "laundry",
+      "name": "Put away laundry",
+      "icon": "1f455",
+      "points": 3,
+      "cooldown_h": 72,
+      "floor": "Upstairs"
+    },
+    {
+      "id": "plants",
+      "name": "Water the plants",
+      "icon": "1fab4",
+      "points": 1,
+      "cooldown_h": 72,
+      "floor": "Downstairs"
+    },
+    {
+      "id": "mail",
+      "name": "Sort the mail",
+      "icon": "1f4ec",
+      "points": 1,
+      "daily": true,
+      "floor": "Downstairs"
+    },
+    {
+      "room": true,
+      "cooldown_h": 168,
+      "id": "car",
+      "name": "Clean out the car",
+      "icon": "1f697",
+      "points": 4,
+      "floor": "Other",
+      "where": "The car",
+      "daylight": true,
+      "desc": "Trash, toys and snacks out of the car."
+    },
+    {
+      "id": "organize",
+      "name": "Organizing",
+      "icon": "1f4e6",
+      "points": null,
+      "cooldown_h": 0,
+      "shared": true,
+      "propose": true,
+      "propose_max": 8,
+      "floor": "Upstairs",
+      "desc": "Sort your stuff into the boxes, then say how many stars it's worth."
+    },
+    {
+      "id": "letter",
+      "name": "Write a letter to a cousin",
+      "icon": "1f48c",
+      "points": null,
+      "cooldown_h": 0,
+      "shared": true,
+      "propose": true,
+      "propose_max": 10,
+      "floor": "Other"
+    },
+    {
+      "id": "homework",
+      "name": "Homework",
+      "icon": "1f4da",
+      "points": 2,
+      "weekly": {
+        "open_dow": 0,
+        "due_dow": 4
+      },
+      "floor": "Other",
+      "only": [
+        "ava"
+      ]
+    },
+    {
+      "id": "piano",
+      "name": "Practice piano",
+      "icon": "1f3b9",
+      "points": 2,
+      "cooldown_h": 0,
+      "slot": {
+        "dow": 5,
+        "time": "10:00"
+      },
+      "floor": "Other",
+      "desc": "One kid per Saturday lesson slot: claim it ahead of time."
+    },
+    {
+      "id": "brush_teeth",
+      "name": "Brush teeth",
+      "icon": "1faa5",
+      "points": 1,
+      "cooldown_h": 0,
+      "shared": true,
+      "each_daily": true,
+      "after": "19:30",
+      "bedtime_ok": true,
+      "floor": "Upstairs",
+      "desc": "Brush your teeth.",
+      "desc_for": {
+        "zoe": "Brush your teeth and floss."
+      }
+    },
+    {
+      "id": "shower",
+      "name": "Shower",
+      "icon": "1f6bf",
+      "points": 2,
+      "cooldown_h": 0,
+      "shared": true,
+      "each_daily": true,
+      "each_days": 2,
+      "after": "19:30",
+      "before": "20:30",
+      "floor": "Upstairs"
+    },
+    {
+      "id": "other",
+      "name": "Something else",
+      "icon": "2728",
+      "points": null,
+      "shared": true,
+      "floor": "Other"
+    },
+    {
+      "id": "toy_swap",
+      "name": "Toy swap",
+      "icon": "1f381",
+      "points": 0,
+      "hidden": true,
+      "floor": "Other",
+      "shared": true
+    },
+    {
+      "id": "toy_out",
+      "name": "Toy goodbye",
+      "icon": "1f44b",
+      "points": null,
+      "hidden": true,
+      "floor": "Other",
+      "shared": true
+    }
+  ],
+  "rewards": [
+    {
+      "id": "show",
+      "name": "TV show",
+      "icon": "1f4fa",
+      "cost": 5,
+      "tv_minutes": 30
+    },
+    {
+      "id": "movie",
+      "name": "Movie",
+      "icon": "1f3ac",
+      "cost": 15,
+      "tv_minutes": 100
+    },
+    {
+      "id": "games",
+      "name": "Video games",
+      "icon": "1f3ae",
+      "cost": 10,
+      "tv_minutes": 60
+    },
+    {
+      "id": "vr",
+      "name": "VR",
+      "icon": "1f97d",
+      "cost": 2,
+      "minutes": 5,
+      "break_min": 30
+    }
+  ],
+  "bedtime": "20:30",
+  "feelings": [
+    {
+      "id": "fun",
+      "icon": "1f600"
+    },
+    {
+      "id": "ok",
+      "icon": "1f610"
+    },
+    {
+      "id": "hard",
+      "icon": "1f62b"
+    }
+  ],
+  "tour": [
+    "front_hall",
+    "mail",
+    "kitchen",
+    "bathroom",
+    "family_room",
+    "living_room",
+    "art_table",
+    "toy_table",
+    "stairs",
+    "kids_bath",
+    "kids_room",
+    "laundry",
+    "plants"
+  ],
+  "adult_only_rooms": [
+    "office",
+    "primary_bedroom"
+  ]
+}

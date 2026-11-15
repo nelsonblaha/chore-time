@@ -1,0 +1,237 @@
+{
+  "port": 8790,
+  "public_url": "http://192.168.1.10:8790",
+  "home_assistant": {
+    "url": "http://homeassistant.local:8123",
+    "token_file": "~/.config/chore-time/ha-token",
+    "chore_time_switch": "input_boolean.chore_time",
+    "chore_time_hours": "input_number.chore_time_hours",
+    "relay_text": "input_text.chore_action",
+    "sun": "sun.sun",
+    "announce": {
+      "tts": "tts.home_assistant_cloud",
+      "speaker": "media_player.family_room_speaker"
+    }
+  },
+  "adults": {
+    "jordan": {
+      "presence": "person.jordan",
+      "home_state": "home",
+      "notify": [
+        "notify.mobile_app_jordans_phone"
+      ]
+    },
+    "casey": {
+      "presence": "person.casey",
+      "home_state": "home",
+      "notify": []
+    }
+  },
+  "quiet_hours": [
+    {
+      "weekdays": [
+        5,
+        6
+      ],
+      "until": "08:00"
+    }
+  ],
+  "hours": {
+    "chore_start": 6,
+    "chore_end": 21,
+    "bed_end": 6
+  },
+  "casting": {
+    "catt": "catt",
+    "hub_volume": 40
+  },
+  "tvs": {
+    "livingroom": {
+      "name": "Living room TV",
+      "icon": "1f6cb",
+      "ip": "192.168.1.20",
+      "kind": "sony",
+      "finish_show": true,
+      "remote": "remote.living_room_tv",
+      "television": "media_player.living_room_tv_television",
+      "players": [
+        "media_player.living_room_tv",
+        "media_player.living_room_tv_cast"
+      ]
+    },
+    "kitchen": {
+      "name": "Kitchen TV",
+      "icon": "1f373",
+      "ip": "192.168.1.21",
+      "kind": "vizio",
+      "home_first": "remote.kitchen_tv",
+      "television": "media_player.kitchen_tv",
+      "players": [
+        "media_player.kitchen_tv",
+        "media_player.kitchen_tv_cast"
+      ]
+    }
+  },
+  "hubs": {
+    "living_room": {
+      "ip": "192.168.1.30",
+      "entity": "media_player.living_room_hub_max"
+    },
+    "kids_room": {
+      "ip": "192.168.1.31",
+      "entity": "media_player.kids_room_hub_max",
+      "from_h": 7
+    }
+  },
+  "launchers": {
+    "input_button.chore_board_living_room": {
+      "ip": "192.168.1.30",
+      "path": "/"
+    },
+    "input_button.chore_board_kids_room": {
+      "ip": "192.168.1.31",
+      "path": "/"
+    }
+  },
+  "lights": {
+    "chore_rooms": {
+      "kitchen": {
+        "modes": [
+          "input_select.kitchen_lights_mode"
+        ]
+      },
+      "living_room": {
+        "modes": [
+          "input_select.living_room_lights_mode"
+        ]
+      },
+      "art_table": {
+        "modes": [
+          "input_select.living_room_lights_mode"
+        ]
+      },
+      "toy_table": {
+        "modes": [
+          "input_select.living_room_lights_mode"
+        ]
+      },
+      "family_room": {
+        "modes": [
+          "input_select.family_room_lights_mode"
+        ],
+        "covers": [
+          "cover.family_room_shade"
+        ]
+      },
+      "front_hall": {
+        "modes": [
+          "input_select.front_hall_lights_mode"
+        ]
+      },
+      "bathroom": {
+        "modes": [
+          "input_select.hall_lights_mode"
+        ]
+      },
+      "stairs": {
+        "modes": [
+          "input_select.stairs_lights_mode",
+          "input_select.front_hall_lights_mode"
+        ]
+      },
+      "kids_room": {
+        "modes": [
+          "input_select.kids_room_lights_mode"
+        ]
+      },
+      "organize": {
+        "modes": [
+          "input_select.kids_room_lights_mode"
+        ]
+      },
+      "kids_bath": {
+        "modes": [
+          "input_select.kids_bath_lights_mode"
+        ]
+      }
+    },
+    "signal_bulbs": {
+      "stairs": {
+        "bulbs": [
+          "light.landing_sconce"
+        ],
+        "ref": "light.upstairs_hall"
+      },
+      "living_room": {
+        "bulbs": [
+          "light.living_room_sconce_left",
+          "light.living_room_sconce_right"
+        ],
+        "pick": 3,
+        "pool": [
+          "light.living_room_chandelier_1",
+          "light.living_room_chandelier_2",
+          "light.living_room_chandelier_3",
+          "light.living_room_chandelier_4",
+          "light.living_room_chandelier_5",
+          "light.living_room_chandelier_6",
+          "light.living_room_chandelier_7",
+          "light.living_room_chandelier_8",
+          "light.living_room_chandelier_9"
+        ]
+      }
+    }
+  },
+  "vacuum": {
+    "vacuum": "vacuum.downstairs_robot",
+    "room_sensor": "sensor.downstairs_robot_current_room",
+    "status": "sensor.downstairs_robot_status",
+    "battery": "sensor.downstairs_robot_battery",
+    "error": "sensor.downstairs_robot_vacuum_error",
+    "cleaning": "binary_sensor.downstairs_robot_cleaning",
+    "mode_select": "select.downstairs_robot_cleaning_mode",
+    "enable": "input_boolean.vacuum_autopilot",
+    "active": "input_boolean.vacuum_autopilot_active",
+    "map_flag": 0,
+    "clean_script": "script.vacuum_clean_rooms",
+    "nobody_upstairs": "binary_sensor.upstairs_motion_last_30_minutes",
+    "segments": {
+      "Kitchen": {
+        "chore": "kitchen",
+        "mop": true
+      },
+      "Living Room": {
+        "chore": "living_room"
+      },
+      "Family Room": {
+        "chore": "family_room"
+      },
+      "Entry": {
+        "chore": "front_hall",
+        "mop": true
+      },
+      "Hall": {}
+    },
+    "sensors": {
+      "binary_sensor.kitchen_motion": "Kitchen",
+      "binary_sensor.living_room_motion": "Living Room",
+      "binary_sensor.living_room_presence": "Living Room",
+      "binary_sensor.family_room_motion": "Family Room",
+      "binary_sensor.entry_motion": "Entry",
+      "binary_sensor.stairs_motion": "Entry"
+    },
+    "voice_volume": "number.downstairs_robot_volume",
+    "night_from_h": 20,
+    "night_until_h": 7,
+    "entry_sensors": [
+      "binary_sensor.stairs_motion",
+      "binary_sensor.entry_motion"
+    ],
+    "entry_doors": [
+      "binary_sensor.front_door",
+      "binary_sensor.back_door"
+    ]
+  },
+  "grocy": null,
+  "dashboard_mirror": null
+}

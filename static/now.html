@@ -1,0 +1,86 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Right now</title>
+<style>
+/* Grown-up "right now" board for the kitchen Hub Max: who is on recreation time, how much is left. */
+*{box-sizing:border-box}
+body{margin:0;font-family:"Nunito","Segoe UI",system-ui,sans-serif;background:#10172a;color:#f4f6fb;min-height:100vh;overflow:hidden}
+header{display:flex;align-items:center;gap:16px;padding:18px 28px 6px}
+h1{margin:0;font-size:40px;font-weight:900;flex:1}
+#clock{font-size:40px;font-weight:800;opacity:.8}
+#adult{font-size:28px;font-weight:900;background:#455a64;color:#fff;border-radius:22px;padding:10px 22px;cursor:pointer;box-shadow:0 4px 0 rgba(0,0,0,.3)}
+#list{padding:10px 28px;display:flex;flex-direction:column;gap:16px}
+.row{display:flex;align-items:center;gap:20px;background:#1c2540;border-radius:26px;padding:16px 22px;border-left:14px solid var(--c)}
+.row .face{font-size:84px;line-height:1}
+.row .mid{flex:1;min-width:0}
+.row .who{font-size:40px;font-weight:900}
+.row .what{font-size:28px;font-weight:800;opacity:.85}
+.row .left{font-size:64px;font-weight:900;font-variant-numeric:tabular-nums;text-align:right;min-width:210px}
+.row .ends{font-size:24px;opacity:.75;text-align:right}
+.bar{height:22px;background:rgba(255,255,255,.14);border-radius:12px;overflow:hidden;margin-top:10px}
+.fill{height:100%;width:0;background:var(--c);border-radius:12px;transition:width 1s linear}
+.row.soon .fill{background:#ff9800}.row.soon .left{color:#ffb74d}
+.row.wait .left{font-size:30px;opacity:.8}
+.lock{margin-top:8px;font-size:24px;font-weight:900;background:#fff;color:#b71c1c;border-radius:16px;padding:6px 14px;text-align:center;cursor:pointer}
+.empty{font-size:40px;font-weight:800;opacity:.6;text-align:center;margin-top:120px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+.modal.on{display:flex}
+.box{background:#fff;color:#222;border-radius:30px;padding:30px 40px;text-align:center;min-width:520px}
+.box .big{font-size:90px}.box .q{font-size:34px;font-weight:900;margin:8px 0}.box .s{font-size:24px;opacity:.7}
+.btn{display:inline-block;font-size:30px;font-weight:900;background:#eceff1;border-radius:20px;padding:10px 26px;margin-top:14px;cursor:pointer}
+img.e{width:1em;height:1em;vertical-align:-0.12em}
+</style></head><body>
+<header><h1>📺 Right now</h1><div id="clock"></div><div id="adult">👤 Grown-up</div></header>
+<div id="list"></div>
+<div class="modal" id="m"><div class="box" id="mbox"></div></div>
+<script>
+var S=null,TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
+function E(c){return c?'<img class="e" src="'+TW+c+'.svg" alt="">':""}
+function api(p,b){return fetch(p,b?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}:{}).then(function(r){return r.json()}).catch(function(){return {}})}
+function adultName(id){var I=(S&&S.config.inspectors)||[];var a=I.find(function(i){return i.id===(id||S.lead_adult)})||I[0];return a?a.name:"Grown-up"}
+function hm(t){var d=new Date(t*1000),h=d.getHours()%12||12,m=d.getMinutes();return h+":"+(m<10?"0":"")+m+(d.getHours()<12?" AM":" PM")}
+function mmss(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+":"+("0"+s%60).slice(-2)}
+function esc(s){return String(s==null?"":s).replace(/[<>&"]/g,function(c){return{"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]})}
+var TVN={},WHAT={show:"Show",movie:"Movie",games:"Games",other:"TV time"};
+function periods(){Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(id){TVN[id]=S.tv.tvs[id].name});var out=[],now=Date.now()/1000,kids={};(S.config.kids||[]).forEach(function(k){kids[k.id]=k});
+  Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(tid){var T=S.tv.tvs[tid];(T.grants||[]).forEach(function(g){if(g.what==="vr")return;
+    var k=g.kid?kids[g.kid]:null;out.push({c:k?k.color:"#78909c",face:k?k.icon:"1f9d1",who:k?k.name:adultName(g.by),
+      what:(WHAT[g.what]||g.what)+" · "+(TVN[tid]||tid),armed:g.armed,mins:g.mins,until:g.until,start:g.start,tv:tid})});
+    if(T.finish&&T.finish.until>now)out.push({c:"#8e24aa",face:"1f3ac",who:"Finishing the show",what:esc(T.finish.title)+" · "+(TVN[tid]||tid),until:T.finish.until,start:T.finish.until-1800,tv:tid})});
+  (S.timers||[]).forEach(function(t){var k=kids[t.kid]||{};var end=t.start+t.minutes*60;if(end>now)out.push({c:k.color||"#78909c",face:k.icon,who:k.name||t.kid,what:"VR",until:end,start:t.start})});
+  return out.sort(function(a,b){return (a.armed?1e12:a.until)-(b.armed?1e12:b.until)})}
+function draw(){if(!S)return;var ps=periods(),now=Date.now()/1000,h="";
+  ps.forEach(function(p){var tot=Math.max(60,p.until-p.start),lft=p.until-now,pc=p.armed?0:Math.min(100,100*(1-lft/tot));
+    h+='<div class="row'+(p.armed?" wait":lft<=300?" soon":"")+'" style="--c:'+p.c+'"><div class="face">'+E(p.face)+'</div><div class="mid"><div class="who">'+esc(p.who)+'</div><div class="what">'+p.what+'</div>'+
+      '<div class="bar"><div class="fill" style="width:'+pc.toFixed(1)+'%"></div></div></div>'+
+      '<div><div class="left">'+(p.armed?(p.mins||30)+" min<br>when they start":mmss(lft))+'</div>'+(p.armed?"":'<div class="ends">ends '+hm(p.until)+'</div>')+
+      (p.tv?'<div class="lock" data-lock="'+p.tv+'">🔒 Lock</div>':'')+'</div></div>'});
+  document.getElementById("list").innerHTML=h||'<div class="empty">'+E("1f634")+' No screen time running</div>';
+  document.getElementById("clock").textContent=hm(now);
+  document.querySelectorAll("[data-lock]").forEach(function(b){b.onclick=function(){lockTv(b.dataset.lock)}})}
+/* a parent's Lock now: kids can reach this board, so the lead grown-up confirms on their watch first */
+function lockTv(tv){var nm=TVN[tv]||tv;
+  modal('<div class="big">⌚🔒</div><div class="q">Lock the '+nm+'?</div><div class="s" id="adst">'+adultName()+', tap "It\'s me" on your watch…</div><div class="btn" onclick="closeM()">Cancel</div>');
+  api("/api/adult_request",{purpose:"lock"}).then(function(r){if(!r.ok){document.getElementById("adst").textContent="Could not reach the watch";return}var n=0;
+    (function poll(){if(!document.getElementById("m").classList.contains("on"))return;api("/api/adult_status",{nonce:r.nonce}).then(function(st){
+      if(st.status==="ok"){api("/api/tv/adjust",{tv:tv,action:"lock",by:S.lead_adult}).then(function(x){modal('<div class="big">'+(x.ok?"🔒":"❌")+'</div><div class="q">'+(x.ok?nm+" locked":"Could not lock")+'</div><div class="btn" onclick="closeM()">OK</div>');load()});return}
+      if(st.status==="no"||st.status==="timeout"){modal('<div class="big">🚫</div><div class="q">'+(st.status==="no"?adultName()+" said no.":"No answer.")+'</div><div class="btn" onclick="closeM()">OK</div>');return}
+      if(++n<70)setTimeout(poll,2000)})})()})}
+function load(){api("/api/state").then(function(s){if(!s||!s.config)return;
+  if(s.adult_go){location.href="/inspect?hub=1&back=now&by="+s.adult_go+"&v="+Date.now();return}
+  S=s;draw()})}
+/* grown-up login: the lead grown-up taps "It's me" on the watch -> their parent screen (same as the kid Hubs) */
+function modal(h){document.getElementById("mbox").innerHTML=h;document.getElementById("m").classList.add("on")}
+function closeM(){document.getElementById("m").classList.remove("on")}
+document.getElementById("m").onclick=function(e){if(e.target.id==="m")closeM()};
+document.getElementById("adult").onclick=function(){
+  modal('<div class="big">⌚</div><div class="q">'+adultName()+', check your watch!</div><div class="s" id="adst">Waiting for "It\'s me"…</div><div class="btn" onclick="closeM()">Cancel</div>');
+  api("/api/adult_request",{}).then(function(r){if(!r.ok){document.getElementById("adst").textContent="Could not reach the watch";return}var n=0;
+    (function poll(){if(!document.getElementById("m").classList.contains("on"))return;api("/api/adult_status",{nonce:r.nonce}).then(function(st){
+      if(st.status==="ok"){location.href="/inspect?hub=1&back=now&by="+(S&&S.lead_adult||"")+"&v="+Date.now();return}
+      if(st.status==="no"||st.status==="timeout"){modal('<div class="big">🚫</div><div class="q">'+(st.status==="no"?adultName()+" said no.":"No answer.")+'</div><div class="btn" onclick="closeM()">OK</div>');return}
+      if(++n<70)setTimeout(poll,2000)})})()})};
+load();setInterval(load,5000);setInterval(draw,1000);
+setTimeout(function(){if(!document.getElementById("m").classList.contains("on"))location.replace(location.pathname+"?v="+Date.now())},3600*1000);
+</script>
+</body></html>

@@ -1,0 +1,80 @@
+# Home Assistant script used by the Chore Time vacuum autopilot (house.json vacuum.clean_script).
+# Paste into scripts.yaml. Works with the core Roborock integration.
+vacuum_clean_rooms:
+  alias: 'Vacuum: clean rooms by name'
+  description: Resolves Roborock room NAMES to segment ids at run time (roborock.get_maps),
+    so a re-numbered map never misdirects the robot. Sends segments as a segments+repeat
+    object (current firmware ignores a bare id list). Falls back to fallback ids and
+    raises a persistent notification if a name is not on the map.
+  mode: parallel
+  fields:
+    vacuum:
+      description: vacuum entity
+      example: vacuum.downstairs_robot
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+    map_flag:
+      description: Roborock map flag (0=Downstairs, 1=Upstairs)
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 9
+    rooms:
+      description: room names exactly as in the Roborock app
+      required: true
+      selector:
+        object: {}
+    fallback:
+      description: segment ids to use if a name is not found
+      required: false
+      selector:
+        object: {}
+  sequence:
+  - action: roborock.get_maps
+    target:
+      entity_id: '{{ vacuum }}'
+    response_variable: maps
+  - variables:
+      room_map: '{% set ns = namespace(m={}) %}{% for e, v in maps.items() %}{% for
+        mp in v.maps if mp.flag | int == map_flag | int %}{% set ns.m = mp.rooms %}{%
+        endfor %}{% endfor %}{{ ns.m }}'
+      ids: '{% set ns = namespace(ids=[], missing=[]) %}{% for r in rooms %}{% set
+        hit = room_map | dictsort | selectattr(''1'',''eq'', r) | map(attribute=''0'')
+        | map(''int'') | list %}{% if hit %}{% set ns.ids = ns.ids + hit %}{% else
+        %}{% set ns.missing = ns.missing + [r] %}{% endif %}{% endfor %}{{ ns.ids
+        }}'
+      missing: '{% set ns = namespace(missing=[]) %}{% for r in rooms %}{% if not
+        (room_map | dictsort | selectattr(''1'',''eq'', r) | list) %}{% set ns.missing
+        = ns.missing + [r] %}{% endif %}{% endfor %}{{ ns.missing }}'
+  - if:
+    - condition: template
+      value_template: '{{ missing | length > 0 }}'
+    then:
+    - action: persistent_notification.create
+      data:
+        notification_id: vacuum_room_lookup
+        title: Vacuum room lookup failed
+        message: '{{ vacuum }} map {{ map_flag }}: rooms {{ missing }} not found (map
+          has {{ room_map.values() | list }}). {% if fallback %}Used fallback segments
+          {{ fallback }}.{% else %}Nothing sent.{% endif %}'
+    - if:
+      - condition: template
+        value_template: '{{ fallback is defined and fallback }}'
+      then:
+      - action: vacuum.send_command
+        target:
+          entity_id: '{{ vacuum }}'
+        data:
+          command: app_segment_clean
+          params: '{{ [{"segments": fallback, "repeat": 1}] }}'
+    else:
+    - action: vacuum.send_command
+      target:
+        entity_id: '{{ vacuum }}'
+      data:
+        command: app_segment_clean
+        params: '{{ [{"segments": ids, "repeat": 1}] }}'
+
