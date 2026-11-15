@@ -80,6 +80,35 @@ def rank(items, room, floor_of, now):
     return sorted(items, key=lambda i: (-score(i, room, floor_of, now), i.get("due") or 9e12, i.get("name") or ""))
 
 
+def plan_list(list_items, jobs, mapping):
+    """Pure: keep a Home Assistant to-do list in step with the due jobs.
+
+    list_items: [{"uid", "summary", "status": "needs_action" | "completed"}]; jobs: due jobs; mapping: uid -> job key.
+    -> (remove: [uid], done: [(uid, key)], new_tasks: [(uid, summary)], add: [job], mapping)
+      ticked + ours + still due -> done in Grocy, then removed   | ticked otherwise -> removed
+      open + ours + no longer due -> removed (done somewhere else) | open + not ours -> a new Grocy task
+      a due job not on the list -> added"""
+    due = {"%s:%s" % (j["kind"], j["id"]): j for j in jobs if not str(j.get("name", "")).startswith("🔒")}
+    mapping = {u: k for u, k in mapping.items() if any(i["uid"] == u for i in list_items)}
+    remove, done, new_tasks = [], [], []
+    for it in list_items:
+        uid, key = it["uid"], mapping.get(it["uid"])
+        if it.get("status") == "completed":
+            if key in due:
+                done.append((uid, key))
+            else:
+                remove.append(uid)
+                mapping.pop(uid, None)
+        elif key and key not in due:
+            remove.append(uid)
+            mapping.pop(uid, None)
+        elif not key and (it.get("summary") or "").strip():
+            new_tasks.append((uid, it["summary"].strip()))
+    listed = set(mapping.values())
+    add = [j for k, j in due.items() if k not in listed]
+    return remove, done, new_tasks, add, mapping
+
+
 def now_value(ent, when=None):
     """now.hour (0-23), now.weekday (0 = Monday … 6 = Sunday), now.month (1-12), now.day: for 'evenings only' etc."""
     t = when or datetime.now()
@@ -128,6 +157,66 @@ class HouseTasks:
 
     def gc(self, method, path, body=None):
         return self.g["gcall"](method, path, body)
+
+    def ha(self, domain, service, data, response=False):
+        """Call a Home Assistant service; with response=True return its service_response. Raises on failure."""
+        if "ha_service" in self.g:                                    # tests
+            return self.g["ha_service"](domain, service, data, response)
+        url = "%s/api/services/%s/%s%s" % (self.g["HA_URL"], domain, service, "?return_response" if response else "")
+        req = urllib.request.Request(url, data=json.dumps(data).encode(), method="POST",
+                                     headers={"Authorization": "Bearer " + self.tok, "Content-Type": "application/json"})
+        out = json.loads(urllib.request.urlopen(req, timeout=15).read() or b"{}")
+        return out.get("service_response") if response else out
+
+    def complete(self, kind, iid):
+        path = {"task": "/tasks/%s/complete", "chore": "/chores/%s/execute", "battery": "/batteries/%s/charge"}[kind] % iid
+        self.gc("POST", path, {"tracked_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")} if kind == "chore" else {})
+
+    def sync_list(self, due):
+        """A Home Assistant to-do list (house.json house_tasks.todo_entity) mirrors the due jobs, both ways: tick it
+        (in the app, or "complete X on house jobs" to Assist) and Grocy records it; add to it and Grocy gets a task."""
+        ent = (self.g["HOUSE"].get("house_tasks") or {}).get("todo_entity")
+        if not ent:
+            return
+        items = (self.ha("todo", "get_items", {"entity_id": ent, "status": ["needs_action", "completed"]}, True) or {}).get(ent, {}).get("items")
+        if items is None:
+            return                                                    # unreadable: change nothing
+        remove, done, new_tasks, add, mapping = plan_list(items, due, self.D.get("todo_map", {}))
+        jobs = {"%s:%s" % (j["kind"], j["id"]): j for j in due}
+        for uid, key in done:                                         # Grocy first: the item goes only once recorded
+            kind, iid = key.split(":")
+            try:
+                self.complete(kind, iid)
+                self.g["ilog"]({"src": "house", "action": "done", "via": ent, "item": key})
+                remove.append(uid)
+                mapping.pop(uid, None)
+            except Exception as ex:  # noqa: BLE001
+                print("house list: could not record", key, ex, flush=True)
+        for uid, name in new_tasks:
+            try:
+                r = self.gc("POST", "/objects/tasks", {"name": name[:200], "description": "Added on the %s list." % ent})
+                mapping[uid] = "task:%s" % int(r["created_object_id"])
+                self.g["ilog"]({"src": "house", "action": "added", "via": ent, "name": name})
+            except Exception as ex:  # noqa: BLE001
+                print("house list: could not add", name, ex, flush=True)
+        if remove:
+            self.ha("todo", "remove_item", {"entity_id": ent, "item": remove})
+        for j in add[:30]:
+            data = {"entity_id": ent, "item": j["name"]}
+            if j.get("due"):
+                data["due_date"] = datetime.fromtimestamp(j["due"]).strftime("%Y-%m-%d")
+            if j.get("rooms"):
+                data["description"] = ", ".join(j["rooms"])
+            self.ha("todo", "add_item", data)
+        if add:                                                       # learn the new items' ids (ours, not typed ones)
+            fresh = (self.ha("todo", "get_items", {"entity_id": ent, "status": ["needs_action"]}, True) or {}).get(ent, {}).get("items") or []
+            taken = set(mapping)
+            for j in add[:30]:
+                hit = next((i for i in fresh if i["uid"] not in taken and i.get("summary") == j["name"]), None)
+                if hit:
+                    mapping[hit["uid"]] = "%s:%s" % (j["kind"], j["id"])
+                    taken.add(hit["uid"])
+        self.D["todo_map"] = mapping
 
     def items(self):
         now = time.time()
@@ -218,6 +307,10 @@ class HouseTasks:
         if sig != self.last_sig or now - self.D.get("pub", 0) > 600:
             self.g["ha_post_state"]("sensor.house_tasks", str(len(due)), attrs, self.tok)
             self.last_sig, self.D["pub"] = sig, now
+        try:
+            self.sync_list([i for i in due if i["visible"]])
+        except Exception as ex:  # noqa: BLE001
+            print("house list sync error", repr(ex), flush=True)
         self.g["GUARD"]["house_tasks"] = due
         self.g["GUARD"]["house_tasks_displays"] = by_display
         self.g["GUARD"]["house_tasks_meta"] = {"private": attrs["private"], "to_review": attrs["to_review"]}

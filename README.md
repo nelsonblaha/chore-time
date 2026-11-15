@@ -103,7 +103,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 - Bright white light and open shades in the room being cleaned. Selected colour bulbs show the working kid's colour (one kid asked for their colour plus a "family purple" pair, so that's a setting).
 - A room waiting for inspection glows in the inspecting grown-up's colour.
 - **Vacuum autopilot** with goals: the kitchen every night, the dining room on nights dinner was eaten there (one long sit at the table, as seen by its motion sensor, not people passing through), every other room at least every 3 days, and any room right after its tidy passes (the floor is clear). Any robot run, even one started by a room's button, resets that room's clock. It only goes once the floor has been empty for 20 minutes. Quiet suction and a muted robot voice at night. It pauses for a *person* coming onto the floor (a door opening, the stairs, or walking through rooms), not for the robot setting off its own sensors. It docks if the person stays.
-- An optional **Grocy** integration uses Grocy as the master chore list, with chore completions written back.
+- An optional **Grocy** integration uses Grocy as the master chore list, with chore completions written back. The grown-ups get their side too: due house jobs, one-off tasks and batteries to replace, ranked per screen by room, mirrored to a Home Assistant to-do list you can tick or add to by voice.
 
 ## Install for your house
 
@@ -131,7 +131,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 - **Tested against real life:** every test in [`tests/`](tests) comes from something that went wrong in a real family. For example: a personal job vanished because a sibling's report was waiting for inspection, a console on HDMI never locked because the lock page kept running in the background, and a bedtime rule paused a kid mid-toothbrush.
 
 ```bash
-python3 -m unittest discover -s tests      # ~60 tests, ~15 s, no network
+python3 -m unittest discover -s tests      # ~65 tests, ~15 s, no network
 node tools/smoke.js                        # renders every page against a running server
 ```
 

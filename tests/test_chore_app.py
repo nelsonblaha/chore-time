@@ -788,6 +788,64 @@ class HouseTasks(unittest.TestCase):
         up = self.ha["sensor.house_tasks"]["attributes"]["displays"]["up"]
         self.assertEqual([(i["name"], i["here"]) for i in up], [("Fix bath fan", True), ("Descale kettle", False)])
 
+    def _fake_list(self):
+        """A tiny Home Assistant to-do list: get_items / add_item / remove_item, uids like HA's."""
+        L = {"items": [], "n": 0}
+
+        def svc(domain, service, data, response):
+            if service == "get_items":
+                return {data["entity_id"]: {"items": [dict(i) for i in L["items"] if i["status"] in data.get("status", ["needs_action"])]}}
+            if service == "add_item":
+                L["n"] += 1
+                L["items"].append({"uid": "u%d" % L["n"], "summary": data["item"], "status": "needs_action", "due": data.get("due_date")})
+            if service == "remove_item":
+                L["items"] = [i for i in L["items"] if i["uid"] not in data["item"]]
+            return {}
+        self.g["ha_service"] = svc
+        self.g["HOUSE"]["house_tasks"] = {"todo_entity": "todo.house_jobs"}
+        return L
+
+    def test_the_ha_list_mirrors_due_jobs_both_ways(self):
+        """The house list (Assist / the HA app) and Grocy agree: ticks go to Grocy, new lines become tasks."""
+        L = self._fake_list()
+        created = []
+        gcall = self.g["gcall"]
+
+        def grocy(method, path, body=None):
+            if method == "POST" and path == "/objects/tasks":
+                created.append(body["name"])
+                return {"created_object_id": "70"}
+            return gcall(method, path, body)
+        self.g["gcall"] = grocy
+        self.grocy["/objects/tasks"] = [{"id": 5, "name": "Fix the gate", "done": 0, "userfields": {"ctx_rooms": "Garage"}},
+                                        {"id": 6, "name": "Call the plumber", "done": 0, "userfields": {}}]
+        h = self.H.HouseTasks(self.g)
+        h.tick()
+        self.assertEqual(sorted(i["summary"] for i in L["items"]), ["Call the plumber", "Fix the gate"])
+        h.tick()
+        self.assertEqual(len(L["items"]), 2)                                         # no echo, no duplicates
+        next(i for i in L["items"] if i["summary"] == "Fix the gate")["status"] = "completed"   # ticked in the app
+        L["items"].append({"uid": "spoken", "summary": "Buy furnace filter", "status": "needs_action"})   # "add … to house jobs"
+        h.tick()
+        self.assertIn(("POST", "/tasks/5/complete"), self.calls)
+        self.assertEqual(created, ["Buy furnace filter"])
+        self.assertEqual(sorted(i["summary"] for i in L["items"]), ["Buy furnace filter", "Call the plumber"])
+        self.grocy["/objects/tasks"] = [{"id": 70, "name": "Buy furnace filter", "done": 0, "userfields": {}}]   # plumber done on a phone
+        h.tick()
+        self.assertEqual([i["summary"] for i in L["items"]], ["Buy furnace filter"])
+        self.assertEqual(created, ["Buy furnace filter"])                            # the spoken task wasn't re-added
+
+    def test_a_tick_stays_until_grocy_records_it(self):
+        L = self._fake_list()
+        self.grocy["/objects/tasks"] = [{"id": 5, "name": "Fix the gate", "done": 0, "userfields": {}}]
+        h = self.H.HouseTasks(self.g)
+        h.tick()
+        L["items"][0]["status"] = "completed"
+        gcall = self.g["gcall"]
+        self.g["gcall"] = lambda m, p, b=None: (_ for _ in ()).throw(OSError("grocy down")) if m == "POST" else gcall(m, p, b)
+        h.tick()
+        self.assertEqual([(i["summary"], i["status"]) for i in L["items"]], [("Fix the gate", "completed")])
+
     def test_done_by_itself_once(self):
         self.grocy["/objects/tasks"] = [{"id": 3, "name": "Move the wash to the dryer", "done": 0,
                                          "userfields": {"ctx_done_when": "sensor.dryer = running"}}]
