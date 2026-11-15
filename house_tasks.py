@@ -7,7 +7,8 @@ and batteries that need replacing. Each item can carry context (Grocy userfields
   ctx_show_when  only show while this Home Assistant condition holds, e.g.  person.ben = home
   ctx_done_when  done by itself when this holds, e.g.  binary_sensor.washer_running = off and sensor.x > 50
 
-Conditions: "<entity> <op> <value>" joined by "and"; op is one of = != > < >= <=. A due item whose ctx_done_when
+Conditions: "<entity> <op> <value>" joined by "and"; op is one of = != > < >= <=. Besides Home Assistant entities,
+now.hour, now.weekday (0 = Monday), now.month and now.day test the clock, e.g. "now.hour >= 17" or "now.weekday >= 5". A due item whose ctx_done_when
 comes true is completed in Grocy (once). Batteries (Grocy batteries with userfields ha_entity: one or more battery
 sensors of the device, comma separated, the newest reading counts; ha_low: the level that means replace) become
 "Replace the battery" items while the Home Assistant level is at or below ha_low, and are tracked as replaced in
@@ -48,6 +49,12 @@ def check(cond, get):
     return True
 
 
+def now_value(ent, when=None):
+    """now.hour (0-23), now.weekday (0 = Monday … 6 = Sunday), now.month (1-12), now.day: for 'evenings only' etc."""
+    t = when or datetime.now()
+    return {"now.hour": t.hour, "now.weekday": t.weekday(), "now.month": t.month, "now.day": t.day}.get(ent)
+
+
 def battery_level(states):
     """The level from the newest reading among a device's battery entities (a 4-button remote often has 4, some stale)."""
     best = None
@@ -84,6 +91,8 @@ class HouseTasks:
         self.last_sig = None
 
     def get(self, ent):
+        if ent.startswith("now."):                                    # clock conditions, no Home Assistant needed
+            return {"state": now_value(ent)}
         return self.g["ha_get"](ent, self.tok)
 
     def gc(self, method, path, body=None):

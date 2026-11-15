@@ -700,6 +700,15 @@ class HouseTasks(unittest.TestCase):
         self.assertIsNone(self.H.check("sensor.nothing = on", get))             # unknown: neither show nor auto-complete
         self.assertIsNone(self.H.check("person.jordan > home", get))            # no ordering on words
 
+    def test_clock_conditions(self):
+        """'Evenings only' and 'weekends only' without a Home Assistant helper entity."""
+        sat_evening = datetime(2026, 1, 3, 18, 30)
+        get = lambda e: {"state": self.H.now_value(e, sat_evening)}
+        self.assertTrue(self.H.check("now.weekday >= 5 and now.hour >= 17", get))
+        self.assertFalse(self.H.check("now.hour < 12", get))
+        h = self.H.HouseTasks(self.g)
+        self.assertIsNotNone(h.get("now.hour")["state"])
+
     def test_a_four_button_remote_reads_its_newest_battery_entity(self):
         """A quad remote showed 4 battery entities with different levels: the stale ones lag behind."""
         lvl = self.H.battery_level([{"state": "95", "last_reported": "2026-01-01T10:00:00+00:00"},

@@ -34,7 +34,7 @@ FIELDS = [
 # the grown-ups' side (house_tasks.py): context on chores and tasks, and a Home Assistant link for batteries
 CONTEXT = [
     ("ctx_show_on", "Show on (displays, comma separated; empty = everywhere)", "text-single-line", None, 20),
-    ("ctx_show_when", "Show only when (HA condition, e.g. person.jordan = home)", "text-single-line", None, 21),
+    ("ctx_show_when", "Show only when (HA condition or now.hour / now.weekday, e.g. person.jordan = home)", "text-single-line", None, 21),
     ("ctx_done_when", "Done by itself when (HA condition)", "text-single-line", None, 22),
 ]
 BATTERIES = [
