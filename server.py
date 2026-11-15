@@ -2672,16 +2672,21 @@ def sync_mae_dashboard():
                             "show_in_sidebar": True, "require_admin": False, "icon": "mdi:home-heart"})
             ov = (await call({"type": "lovelace/config"}))["result"]
             byp = {v.get("path"): v for v in ov["views"]}
-            views = []
+            byt = {v.get("title"): v for v in ov["views"]}
+            views, missing = [], []
             for path, title in MAE_ORDER:
-                v = dict(byp.get(path) or {})
+                v = dict(byp.get(path) or byt.get(title) or {})   # a renamed path is still found by its title
                 if not v:
+                    missing.append(path)
                     continue
                 v.pop("visible", None)
                 v["title"] = title
                 if path == "chores":
                     v["icon"] = "mdi:broom"
                 views.append(v)
+            if missing:   # never shrink someone's dashboard because a source view moved; say so and keep theirs
+                print("dashboard mirror: source views not found, not syncing:", missing, flush=True)
+                return
             cfg = {"title": _MIRROR.get("title", "Home"), "views": views}
             sig = hashlib.md5(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
             if GUARD.get("mae_sig") != sig:
