@@ -1,11 +1,25 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TV is resting</title>
+<title>TV locked</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;font-family:"Nunito",system-ui,sans-serif;color:#fff;
   background:radial-gradient(circle at 50% 30%,#2a3a7a,#0d1030 70%)}
 img.e{width:1em;height:1em;vertical-align:-.12em}
-.wrap{height:86%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2vh;text-align:center}
+.wrap{height:92%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3vh;text-align:center}
+.top{display:flex;gap:2vw;width:94vw;height:50vh;text-align:left}
+.top section{background:rgba(255,255,255,.08);border-radius:3vh;padding:2vh 1.6vw;min-width:0;display:flex;flex-direction:column}
+.jobs{flex:3}.news{flex:2;overflow:hidden}
+.hdr{font-size:3.4vh;font-weight:900;opacity:.85;margin-bottom:1.4vh;letter-spacing:.02em}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:1fr;gap:1.4vh 1vw;flex:1;min-height:0}
+.job{background:rgba(255,255,255,.1);border-radius:2.4vh;padding:1.2vh 1vw;display:flex;flex-direction:column;justify-content:space-between;min-width:0;position:relative;overflow:hidden}
+.job.hot{background:linear-gradient(135deg,rgba(255,140,0,.35),rgba(255,255,255,.08))}
+.job .ji{font-size:6vh;line-height:1}.job .jn{font-size:2.9vh;font-weight:900;line-height:1.15;margin-top:.6vh;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.job .jp{position:absolute;top:1vh;right:1vw;font-size:3.6vh;font-weight:900}
+.job .jt{font-size:2.2vh;font-weight:800;opacity:.85;margin-top:.4vh;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.none{font-size:3.4vh;opacity:.7;margin:auto;text-align:center}
+.ni2{display:flex;gap:1vw;align-items:center;padding:1.1vh 0;border-bottom:1px solid rgba(255,255,255,.12);font-size:2.9vh;font-weight:800;line-height:1.2}
+.ni2:last-child{border-bottom:0}.ni2 .i{font-size:5vh;flex-shrink:0}.ni2 .ago{display:block;font-size:2vh;opacity:.6;font-weight:700}
+.ni2{animation:fadein .8s ease}@keyframes fadein{from{opacity:0;transform:translateY(1vh)}to{opacity:1;transform:none}}
 .hero{display:flex;align-items:flex-end;gap:5vw}
 .brainbox{position:relative;width:24vh;height:22vh}
 .brain{font-size:22vh;line-height:1;animation:grow 2.6s ease-in-out infinite;transform-origin:50% 70%}
@@ -44,20 +58,12 @@ h1{font-size:5.5vh;margin:0}
 .foot{position:absolute;bottom:2.5vh;font-size:3vh;opacity:.6}
 </style></head><body>
 <div class="wrap">
-  <div class="hero">
-    <div class="brainbox"><div class="glow"></div><div class="brain" id="brain"></div>
-      <svg class="face" viewBox="0 0 100 60"><g class="eyes"><ellipse cx="32" cy="22" rx="9" ry="11" fill="#fff"/><ellipse cx="68" cy="22" rx="9" ry="11" fill="#fff"/>
-        <circle class="pupil" cx="34" cy="24" r="5" fill="#222"/><circle class="pupil" cx="70" cy="24" r="5" fill="#222"/></g>
-        <path d="M30 42 Q50 60 70 42" stroke="#7a1f4a" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
-      <div class="spark s1" id="sp1"></div><div class="spark s2" id="sp2"></div><div class="spark s3" id="sp3"></div>
-    </div>
-    <div style="position:relative"><div class="tv" id="tv"></div><div class="z" style="left:70%;top:0">z</div><div class="z" style="left:75%;top:0;animation-delay:1s">Z</div><div class="z" style="left:80%;top:0;animation-delay:2s">z</div></div>
+  <div class="top">
+    <section class="jobs"><div class="hdr" id="jobshd"></div><div class="grid" id="jobs"></div></section>
+    <section class="news"><div class="hdr"><span id="newsic"></span> News</div><div id="newslist"></div></section>
   </div>
-  <h1 id="title">TV is resting &mdash; brain time!</h1>
-  <div class="how" id="how"></div>
   <div class="kids" id="kids"></div>
 </div>
-<div class="tvnews" id="tvnews"></div>
 <div class="foot" id="foot"></div>
 <script>
 
@@ -73,10 +79,7 @@ var TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
 var CUSTOM_ICONS={"x-chandelier":"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cg%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%3E%3Cpath%20d%3D%22M32%202v14%22%20stroke%3D%22%237a5a1e%22%20stroke-width%3D%222.5%22/%3E%3Cpath%20d%3D%22M8%2030c4%2010%2020%2012%2024%202c4%2010%2020%208%2024-2%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%223.5%22/%3E%3Cpath%20d%3D%22M20%2034c3%206%209%206%2012%200c3%206%209%206%2012%200%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%223%22/%3E%3C/g%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2220%22%20r%3D%225%22%20fill%3D%22%23e0b040%22/%3E%3Cpath%20d%3D%22M29%2024h6l-1%2010h-4z%22%20fill%3D%22%23c9952b%22/%3E%3Cg%20fill%3D%22%23fff8e1%22%20stroke%3D%22%23c9952b%22%20stroke-width%3D%221.5%22%3E%3Crect%20x%3D%225%22%20y%3D%2220%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2253%22%20y%3D%2220%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2217%22%20y%3D%2224%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3Crect%20x%3D%2241%22%20y%3D%2224%22%20width%3D%226%22%20height%3D%2210%22%20rx%3D%221%22/%3E%3C/g%3E%3Cg%20fill%3D%22%23ffb300%22%3E%3Cpath%20d%3D%22M8%2012c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M56%2012c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M20%2016c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3Cpath%20d%3D%22M44%2016c3%204%203%206%200%208c-3-2-3-4%200-8z%22/%3E%3C/g%3E%3Cg%20fill%3D%22%239ad7ff%22%20stroke%3D%22%234fa3d1%22%20stroke-width%3D%221%22%3E%3Cpath%20d%3D%22M14%2040l3%205-3%205-3-5z%22/%3E%3Cpath%20d%3D%22M32%2040l3%206-3%206-3-6z%22/%3E%3Cpath%20d%3D%22M50%2040l3%205-3%205-3-5z%22/%3E%3Cpath%20d%3D%22M23%2044l2%204-2%204-2-4z%22/%3E%3Cpath%20d%3D%22M41%2044l2%204-2%204-2-4z%22/%3E%3C/g%3E%3C/svg%3E"};
 function cp(c){if(CUSTOM_ICONS[c])return "";return c.split("-").map(function(h){return String.fromCodePoint(parseInt(h,16))}).join("")}
 function E(c){if(CUSTOM_ICONS[c])return '<img class="e" src="'+CUSTOM_ICONS[c]+'" alt="">';return '<img class="e" src="'+TW+c+'.svg" alt="'+cp(c)+'" onerror="this.outerHTML=this.alt">'}
-document.getElementById("tv").innerHTML=E("1f4fa");
-document.getElementById("brain").innerHTML=E("1f9e0");
-["sp1","sp2","sp3"].forEach(function(i){document.getElementById(i).innerHTML=E("2728")});
-document.getElementById("how").innerHTML=E("1f9f9")+E("1f455")+E("1f37d")+" &rarr; "+E("1f9e0")+E("1f4aa")+" &rarr; "+E("2b50")+" &rarr; "+E("1f4fa");
+document.getElementById("newsic").innerHTML=E("1f4f0");
 
 /* --- news feed: features, price changes, records, level-ups (newest first) --- */
 function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(function(x){return x.id===k})||{name:k})},CH=function(id){return S.config.chores.find(function(x){return x.id===id})||{name:id,icon:"2b50"}};
@@ -86,10 +89,27 @@ function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(functi
   Object.keys(S.records||{}).forEach(function(key){var R=S.records[key],c=CH(key.split("@")[0]),who=R.team?R.team.map(function(k){return KN(k).name}).join(" + "):KN(R.kid).name;
     out.push({ts:R.ts,icon:"1f947",text:who+" set the "+c.name+(R.size?" ("+R.size+"-person)":"")+" record: "+Math.floor(R.sec/60)+":"+("0"+R.sec%60).slice(-2)+"!",kind:"record"})});
   Object.keys(S.awards||{}).forEach(function(k){(S.awards[k]||[]).forEach(function(a){if(/^(lvl|jobs|earned|days):/.test(a.id||"")&&!/^jobs:1$/.test(a.id))out.push({ts:a.ts,icon:"2b06",text:KN(k).name+": "+a.title.replace("!","")+"!",kind:"level"})})});
+  (S.history||[]).forEach(function(h){if(h.type!=="report"||h.status!=="inspected"||!h.awarded||S.now-h.ts>86400)return;
+    var who=(h.team||[h.kid]).map(function(k){return KN(k).name}).join(" + ");
+    out.push({ts:h.ts,icon:h.chore_icon||"2705",text:who+" did "+(h.chore_name||"a job")+" · +"+h.awarded+" "+E("2b50"),kind:"done"})});
+  Object.keys(S.streak||{}).forEach(function(k){var x=S.streak[k];if(x&&x.current>=2)out.push({ts:S.now-3600,icon:"1f525",text:KN(k).name+": "+x.current+" days in a row!",kind:"streak"})});
   return out.sort(function(a,b){return b.ts-a.ts}).slice(0,12)}
-var NEWSI=0,NEWS=[];
-setInterval(function(){if(!NEWS.length)return;var n=NEWS[NEWSI%NEWS.length];NEWSI++;
-  document.getElementById("tvnews").innerHTML='<span class="ni">'+E(n.icon)+'</span><span><span class="nl">'+E("1f4f0")+' News</span><br>'+n.text+'</span>'},8000);
+function ago(S,t){var m=Math.max(0,Math.round((S.now-t)/60));return m<1?"just now":m<60?m+" min ago":m<1440?Math.round(m/60)+" h ago":Math.round(m/1440)+" d ago"}
+/* --- jobs open now, at the house the TVs are in: best paying first --- */
+function tvHouse(S,c){var H=S.households||[];if(!H.length)return true;var hh=c.household||H[0].id;return hh==="any"||hh===H[0].id}
+function openJobs(S){var busy={};Object.keys(S.active||{}).forEach(function(k){busy[S.active[k].chore]=1});var nk=S.config.kids.length;
+  return S.config.chores.filter(function(c){var b=S.board[c.id]||{};
+    if(c.hidden||c.closed||c.id==="other"||c.slot||!tvHouse(S,c)||b.clean_until)return false;
+    if(c.shared)return (b.done_today||[]).length<nk;
+    return !busy[c.id]&&!(b.pending_by||[]).length}).map(function(c){var b=S.board[c.id]||{};return {c:c,b:b,p:b.price!=null?b.price:c.points}})
+    .sort(function(x,y){return (y.b.bonus&&y.p>y.b.base?1:0)-(x.b.bonus&&x.p>x.b.base?1:0)||(y.p||0)-(x.p||0)}).slice(0,6)}
+function hhmm(t){var p=String(t).split(":"),h=+p[0];return (h%12||12)+":"+p[1]+(h<12?" AM":" PM")}
+var NEWSI=0,NEWS=[],SNOW=0;
+function drawNews(){var el=document.getElementById("newslist");if(!NEWS.length){el.innerHTML='<div class="none">Do a job to make the news!</div>';return}
+  var n=Math.min(3,NEWS.length),h="";for(var i=0;i<n;i++){var x=NEWS[(NEWSI+i)%NEWS.length];
+    h+='<div class="ni2"><span class="i">'+E(x.icon)+'</span><span>'+x.text+'<span class="ago">'+ago({now:SNOW},x.ts)+'</span></span></div>'}
+  el.innerHTML=h}
+setInterval(function(){if(NEWS.length>3){NEWSI=(NEWSI+1)%NEWS.length;drawNews()}},8000);
 function goalOf(S,k){var b=S.balance[k],rs=S.config.rewards.slice().sort(function(x,y){return x.cost-y.cost}),ch=(S.goals||{})[k];
   var r=ch&&rs.find(function(x){return x.id===ch});if(r)return r;var fav=(S.favorite||{})[k];r=fav&&rs.find(function(x){return x.id===fav});if(r)return r;
   return rs.find(function(x){return x.cost>b})||rs[rs.length-1]}
@@ -112,8 +132,19 @@ function load(){fetch("/api/state").then(function(r){return r.json()}).then(func
        b>=gc?'<div class="next buy">'+E("2705")+' Enough for '+E(G.icon)+'! Buy it on the Hub</div>':'<div class="next go">'+E("1f9f9")+' '+(gc-b)+' more '+E("2b50")+' to '+E(G.icon)+(p?' &middot; '+E("1f50d")+' +'+p+' waiting':'')+'</div>'))+
       (ac?'<div class="doing">'+E("23f1")+' Doing: '+E(ac.icon)+' '+ac.name+'</div>':'')+'</div>'});
   document.getElementById("kids").innerHTML=h;
-  var CMx=S.chore_mode||{};document.getElementById("title").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time "+E("1f31f"):"TV is resting &mdash; brain time!";
-  var first=!NEWS.length;NEWS=newsFeed(S).slice(0,6);if(first&&NEWS.length){var n=NEWS[0];NEWSI=1;document.getElementById("tvnews").innerHTML='<span class="ni">'+E(n.icon)+'</span><span><span class="nl">'+E("1f4f0")+' News</span><br>'+n.text+'</span>'}
+  var CMx=S.chore_mode||{},J=openJobs(S);
+  document.getElementById("jobshd").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time":E("2b50")+" Jobs open now";
+  document.getElementById("jobs").innerHTML=J.length?J.map(function(x){var c=x.c,b=x.b,hot=b.bonus&&x.p>b.base,t=[];
+      if(hot)t.push(E("1f525")+" extra messy +"+(x.p-b.base));
+      if(c.before)t.push(E("23f0")+" until "+hhmm(c.before));else if(c.daylight)t.push(E("2600")+" while it's light");
+      if(c.only)t.push(c.only.map(function(k){var kk=S.config.kids.find(function(z){return z.id===k});return kk?E(kk.icon):""}).join(""));
+      if(b.note)t.push(E("1f4dd")+" "+b.note);
+      return '<div class="job'+(hot?' hot':'')+'"><span class="jp">'+(x.p!=null?x.p:"?")+' '+E("2b50")+'</span><span class="ji">'+E(c.icon)+'</span>'+
+        '<div><div class="jn">'+c.name+'</div>'+(t.length?'<div class="jt">'+t.join(" · ")+'</div>':'')+'</div></div>'}).join(""):
+    '<div class="none">'+E("2728")+' Everything is clean right now!</div>';
+  SNOW=S.now;var shown={};J.forEach(function(x){shown[x.c.name]=1});   // prices already on a job tile aren't news
+  var NF=newsFeed(S).filter(function(x){return !(x.kind==="price"&&Object.keys(shown).some(function(nm){return x.text.indexOf(nm+" is worth")===0}))});
+  var sig=JSON.stringify(NF.map(function(x){return x.text}));NEWS=NF.slice(0,10);if(sig!==window._ns){window._ns=sig;NEWSI=0;drawNews()}
   var tl=S.tv&&S.tv.lock_until?new Date(S.tv.lock_until*1000):null;
   document.getElementById("foot").textContent=tl?"Chore time until "+tl.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
 }).catch(function(){})}

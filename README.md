@@ -40,8 +40,8 @@ It's one small Python server with no database and no build step. It runs on a Ra
 <tr>
 <td><img src="docs/img/hub-chore.png" alt="Chore dialog: Start, Together, I'm done"><br>
 <b>Start, team up, or say it's done.</b> Teams split the stars. <i>I did some of it</i> lets a grown-up pay for part of the job and leaves the rest for someone else.</td>
-<td><img src="docs/img/tv-lock.png" alt="TV lock screen: TV is resting, brain time"><br>
-<b>The TV lock screen.</b> A locked TV shows everyone's progress toward their next reward, who's watching where, and when a screen break ends.</td>
+<td><img src="docs/img/tv-lock.png" alt="TV lock screen: jobs open now, news, and each kid's progress"><br>
+<b>The TV lock screen.</b> A locked TV shows the jobs open right now (best paying first), the latest news (jobs done, records, streaks), and each kid's progress toward their next reward.</td>
 </tr>
 <tr>
 <td><img src="docs/img/hub-bedtime.png" alt="Bedtime screen"><br>
