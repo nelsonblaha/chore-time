@@ -793,7 +793,8 @@ def derive():
                 if active.get(m, {}).get("chore") == gone["chore"]:
                     active.pop(m, None)
             paused[e["kid"]] = {"chore": e["chore"], "elapsed": e["elapsed"], "team": e.get("team") or [e["kid"]],
-                                "notimer": e.get("notimer"), "ts": e["ts"], "until": e["until"]}
+                                "notimer": e.get("notimer"), "ts": e["ts"], "until": e["until"],
+                                **{k: gone[k] for k in ("split", "round", "rework") if gone.get(k)}}   # a sent-back team job keeps its deal
         elif e["type"] == "resume" and e["kid"] in paused:
             pz = paused.pop(e["kid"])
             for m in pz["team"]:
@@ -805,7 +806,8 @@ def derive():
                 active[m] = {"chore": e["chore"], "ts": e["ts"] - e["worked"], "team": list(e["team"]),
                              "notimer": not e.get("timed"), "rework": {"feedback": e.get("feedback"), "by": e["by"], "ref": e["ref"]},
                              "round": e.get("round", 2), **({"split": e["split"]} if e.get("split") else {})}
-                paused.pop(m, None)
+                if paused.get(m, {}).get("chore") == e["chore"]:   # only this job's pause: a teammate's other paused job stays
+                    paused.pop(m, None)
         elif e["type"] == "team_split" and e["kid"] in active:
             for m in active[e["kid"]].get("team") or [e["kid"]]:
                 if m in active:
@@ -1817,6 +1819,10 @@ class H(BaseHTTPRequestHandler):
             act = st["active"].get(b["kid"])
             if not act or act["chore"] != b["chore"]:   # moved on to another job but still on this one's team (a shared letter)
                 act = next((a for a in st["active"].values() if a["chore"] == b["chore"] and b["kid"] in (a.get("team") or [])), act)
+            if not act or act["chore"] != b["chore"]:   # finished a team job that was put off for later: the team still shares it
+                pz = next((z for z in st["paused"].values() if z["chore"] == b["chore"] and b["kid"] in (z.get("team") or [])), None)
+                if pz:
+                    act = dict(pz, notimer=True)
             if act and act["chore"] == b["chore"]:
                 if act.get("round"):
                     extra["round"] = act["round"]

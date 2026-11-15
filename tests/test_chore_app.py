@@ -1299,5 +1299,26 @@ class GrownUpFromHA(unittest.TestCase):
         self.assertIn('BK==="kids"&&HA_MODE?"/local/chore-kids.html"', (REPO / "static" / "inspect.html").read_text())
 
 
+class PausedTeamJobs(Case):
+    """A sent-back team job put off for later, and a teammate's other paused job."""
+
+    def test_report_after_finish_later_keeps_the_team_and_split(self):
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "organize"})[0], 200)
+        code, r = self.app.post("/api/team", {"kid": "max", "chore": "organize", "partners": ["ava"]})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(self.app.post("/api/pause", {"kid": "max"})[0], 200)
+        code, r = self.app.post("/api/report", {"kid": "max", "chore": "organize"})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(sorted(r["event"].get("team") or []), ["ava", "max"])
+
+    def test_sending_back_a_team_job_keeps_a_teammates_other_paused_job(self):
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "organize"})[0], 200)
+        self.assertEqual(self.app.post("/api/pause", {"kid": "ava"})[0], 200)
+        with open(self.app.dir / "ledger.jsonl", "a") as f:   # a grown-up sends a two-kid job back (what the parents' page writes)
+            f.write(json.dumps({"id": "rw1", "ts": time.time(), "type": "rework", "ref": "r1", "chore": "other",
+                                "team": ["max", "ava"], "worked": 0, "timed": False, "feedback": "", "by": "jordan", "round": 2}) + "\n")
+        self.assertEqual(self.app.state()["paused"].get("ava", {}).get("chore"), "organize")
+
+
 if __name__ == "__main__":
     unittest.main()
