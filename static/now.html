@@ -10,6 +10,13 @@ h1{margin:0;font-size:40px;font-weight:900;flex:1}
 #clock{font-size:40px;font-weight:800;opacity:.8}
 #adult{font-size:28px;font-weight:900;background:#455a64;color:#fff;border-radius:22px;padding:10px 22px;cursor:pointer;box-shadow:0 4px 0 rgba(0,0,0,.3)}
 #grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;padding:4px 24px}
+#grid.three{grid-template-columns:1fr 1fr 1fr}
+#house{display:flex;flex-direction:column;gap:12px}
+.hj{display:flex;align-items:center;gap:12px;background:#1c2540;border-radius:20px;padding:10px 16px;border-left:10px solid #607d8b}
+.hj.over{border-left-color:#e53935}.hj.here{background:#24305a}
+.hj .n{flex:1;font-size:24px;font-weight:900;min-width:0}.hj .d{font-size:19px;font-weight:800;opacity:.75;text-align:right;white-space:nowrap}
+.hj .pin{font-size:22px}
+.hjx{font-size:20px;font-weight:800;opacity:.65}
 @media (max-width:900px){#grid{grid-template-columns:1fr}}
 h2{margin:6px 0 10px;font-size:28px;font-weight:900;opacity:.85}
 #list,#chores{display:flex;flex-direction:column;gap:12px}
@@ -39,7 +46,7 @@ h2{margin:6px 0 10px;font-size:28px;font-weight:900;opacity:.85}
 img.e{width:1em;height:1em;vertical-align:-0.12em}
 </style></head><body>
 <header><h1>📺 Right now</h1><div id="clock"></div><div id="adult">👤 Grown-up</div></header>
-<div id="grid"><section><h2>📺 Screen time</h2><div id="list"></div></section><section><h2>🧹 Chores</h2><div id="chores"></div></section></div>
+<div id="grid"><section><h2>📺 Screen time</h2><div id="list"></div></section><section><h2>🧹 Chores</h2><div id="chores"></div></section><section id="housesec" style="display:none"><h2>🏠 House jobs</h2><div id="house"></div></section></div>
 <div class="modal" id="m"><div class="box" id="mbox"></div></div>
 <script>
 var S=null,TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
@@ -107,7 +114,19 @@ document.getElementById("adult").onclick=function(){
       if(st.status==="ok"){location.href="/inspect?hub=1&back=now&by="+(S&&S.lead_adult||"")+"&v="+Date.now();return}
       if(st.status==="no"||st.status==="timeout"){modal('<div class="big">🚫</div><div class="q">'+(st.status==="no"?adultName()+" said no.":"No answer.")+'</div><div class="btn" onclick="closeM()">OK</div>');return}
       if(++n<70)setTimeout(poll,2000)})})()})};
-load();setInterval(load,5000);setInterval(draw,1000);
+/* the grown-ups' house jobs (Grocy), ranked for this screen: ?display=<id> (default: the house's board screen) */
+function hdue(i){if(i.overdue)return "overdue";if(!i.due)return "";var d=new Date(i.due*1000),t=new Date();
+  return d.toDateString()===t.toDateString()?"today":d.toLocaleDateString([], {weekday:"short"})}
+function hesc(x){return String(x==null?"":x).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function loadHouse(){var q=(location.search.match(/[?&]display=([a-z_]+)/)||[])[1];
+  api("/api/house_jobs"+(q?"?display="+q:"")).then(function(h){if(!h||!h.on)return;
+    var items=h.items||[],priv=(h.private||[]).filter(function(p){return p.overdue||p.due_today});
+    document.getElementById("grid").classList.add("three");document.getElementById("housesec").style.display="";
+    document.getElementById("house").innerHTML=items.map(function(i){return '<div class="hj'+(i.overdue?' over':'')+(i.here?' here':'')+'">'+
+      (i.here?'<span class="pin">📍</span>':'')+'<div class="n">'+hesc(i.name)+'</div><div class="d">'+hdue(i)+'</div></div>'}).join("")+
+      priv.map(function(p){return '<div class="hjx">🔒 '+hesc(p.owner)+': '+(p.overdue+p.due_today)+' private due</div>'}).join("")+
+      (items.length||priv.length?'':'<div class="hjx">Nothing due 🎉</div>')})}
+load();setInterval(load,5000);setInterval(draw,1000);loadHouse();setInterval(loadHouse,60000);
 setTimeout(function(){if(!document.getElementById("m").classList.contains("on"))location.replace(location.pathname+"?v="+Date.now())},3600*1000);
 </script>
 </body></html>

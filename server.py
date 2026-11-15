@@ -1279,6 +1279,14 @@ class H(BaseHTTPRequestHandler):
                               for cid, b in st["board"].items()
                               if b["bonus"] and b["bonus_id"] and not b["clean_until"] and b["bonus_id"] not in acked]
             return self.send(200, st)
+        if p == "/api/house_jobs":   # the grown-ups' house jobs (Grocy), ranked for one screen or overall
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            disp = (q.get("display") or [(HOUSE.get("house_tasks") or {}).get("board_display", "")])[0]
+            shown = GUARD.get("house_tasks_displays", {}).get(disp) if disp else None
+            meta = GUARD.get("house_tasks_meta", {})
+            return self.send(200, {"items": shown if shown is not None else (GUARD.get("house_tasks") or [])[:20],
+                                   "private": meta.get("private", []), "to_review": meta.get("to_review", 0),
+                                   "on": "house_tasks" in GUARD})
         if p == "/health":
             return self.send(200, {"ok": True})
         self.send(404, {"error": "not found"})
@@ -1711,6 +1719,23 @@ class H(BaseHTTPRequestHandler):
                 CT_OVERRIDE.write_text(json.dumps({"state": not m.get("on"), "base_auto": bool(m.get("auto")), "by": b["by"], "ts": time.time()}))
                 ev = append({"type": "chore_mode", "override": True, "state": not m.get("on"), "by": b["by"]})
             GUARD["mode_dirty"] = True
+        elif p == "/api/house_done":   # a grown-up ticks off a house job (Grocy chore, task or battery)
+            if b.get("by") not in insp:
+                return self.send(400, {"error": "grown-ups only"})
+            kind, iid = b.get("kind"), int(b.get("id") or 0)
+            if not GROCY or kind not in ("chore", "task", "battery") or not iid:
+                return self.send(400, {"error": "bad job"})
+            from datetime import datetime
+            path = {"task": "/tasks/%d/complete", "chore": "/chores/%d/execute", "battery": "/batteries/%d/charge"}[kind] % iid
+            try:
+                gcall("POST", path, {"tracked_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")} if kind == "chore" else {})
+            except Exception as ex:  # noqa: BLE001
+                return self.send(502, {"error": "Grocy: " + str(ex)[:80]})
+            gone = lambda i: not (i.get("kind") == kind and i.get("id") == iid)
+            GUARD["house_tasks"] = [i for i in GUARD.get("house_tasks") or [] if gone(i)]
+            GUARD["house_tasks_displays"] = {d: [i for i in v if gone(i)] for d, v in (GUARD.get("house_tasks_displays") or {}).items()}
+            ilog({"src": "house", "action": "done", "kind": kind, "id": iid, "by": b["by"]})
+            return self.send(200, {"ok": True})
         elif p == "/api/bedtime":
             if b.get("by") not in insp:
                 return self.send(400, {"error": "grown-ups only"})

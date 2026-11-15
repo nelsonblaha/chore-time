@@ -779,6 +779,15 @@ class HouseTasks(unittest.TestCase):
         self.assertEqual([i["name"] for i in d["bedroom"]], ["Pay the plumber", "Fix bath fan", "Descale kettle"])
         self.assertTrue(d["kitchen"][1]["here"])
 
+    def test_a_floor_wide_screen_leads_with_its_floor(self):
+        self.g["HOUSE"]["house_tasks"] = {"floors": {"Down": ["Kitchen", "Hall"], "Up": ["Bath", "Bedroom"]},
+                                          "displays": {"up": "Up"}}
+        self.grocy["/objects/tasks"] = [{"id": 1, "name": "Descale kettle", "done": 0, "userfields": {"ctx_rooms": "Kitchen"}},
+                                        {"id": 2, "name": "Fix bath fan", "done": 0, "userfields": {"ctx_rooms": "Bath"}}]
+        self.H.HouseTasks(self.g).tick()
+        up = self.ha["sensor.house_tasks"]["attributes"]["displays"]["up"]
+        self.assertEqual([(i["name"], i["here"]) for i in up], [("Fix bath fan", True), ("Descale kettle", False)])
+
     def test_done_by_itself_once(self):
         self.grocy["/objects/tasks"] = [{"id": 3, "name": "Move the wash to the dryer", "done": 0,
                                          "userfields": {"ctx_done_when": "sensor.dryer = running"}}]
@@ -788,6 +797,24 @@ class HouseTasks(unittest.TestCase):
         h.tick()
         self.assertEqual(self.calls.count(("POST", "/tasks/3/complete")), 1)
 
+
+
+# ---------------------------------------------------------------- the grown-ups' house jobs on the screens
+class HouseJobsApi(Case):
+    def test_a_screen_gets_its_ranking_and_a_grown_up_ticks_one_off(self):
+        self.s.GUARD["house_tasks"] = [{"kind": "task", "id": 7, "name": "Descale kettle"}, {"kind": "chore", "id": 9, "name": "Oven"}]
+        self.s.GUARD["house_tasks_displays"] = {"kitchen": [{"kind": "chore", "id": 9, "name": "Oven", "here": True}]}
+        self.s.GUARD["house_tasks_meta"] = {"private": [{"owner": "Jordan", "open": 2}], "to_review": 5}
+        r = json.loads(urllib.request.urlopen(self.app.base + "/api/house_jobs?display=kitchen").read())
+        self.assertEqual(([i["name"] for i in r["items"]], r["to_review"], r["private"][0]["owner"]), (["Oven"], 5, "Jordan"))
+        calls = []
+        self.s.GROCY = {"url": "x"}
+        self.s.gcall = lambda m, p, b=None: calls.append((m, p)) or {}
+        self.assertEqual(self.app.post("/api/house_done", {"kind": "chore", "id": 9, "by": "max"})[0], 400)   # kids can't
+        self.assertEqual(self.app.post("/api/house_done", {"kind": "chore", "id": 9, "by": "jordan"})[0], 200)
+        self.assertEqual(calls, [("POST", "/chores/9/execute")])
+        self.assertEqual(self.s.GUARD["house_tasks_displays"]["kitchen"], [])
+        self.assertEqual([i["id"] for i in self.s.GUARD["house_tasks"]], [7])
 
 # ---------------------------------------------------------------- pages
 class Pages(unittest.TestCase):
