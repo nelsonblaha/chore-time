@@ -370,6 +370,11 @@ function houseName(k){var H=S.households||[],w=(S.kid_where||{})[k||kid],h=H.fin
 function goal(){return Math.max.apply(null,S.config.rewards.filter(function(r){return here(r)}).map(function(r){return r.cost}).concat([1]))}
 
 // what everyone is doing, on the login screen (otherwise you only see a kid's show time on their own screen)
+function letterSteps(A){   // a letter's steps, the current one big: write, print the envelope, fold it in, hand it over, a grown-up reads it
+  if(!(S.envelope&&S.envelope.chores.indexOf(A.chore)>=0))return "";
+  var pt=Math.max.apply(null,(A.team||[kid]).map(function(m){return (S.envelope.printed||{})[m]||0})),cur=pt>=A.ts?2:0;
+  return '<br><span style="font-size:18px;white-space:nowrap">'+[["270d","Write"],["1f5a8","Envelope"],["2709","Fold in"],["1f4ec","Hand over"],["1f50d","Grown-up reads"]].map(function(x,i){
+    return '<span style="'+(i===cur?'font-weight:900;background:#fff3c4;border-radius:10px;padding:0 6px':i<cur?'opacity:.45':'opacity:.7')+'">'+(i<cur?E("2705"):E(x[0]))+(i===cur?' '+x[1]:'')+'</span>'}).join(' › ')+'</span>'}
 function jobName(j,c){return j&&j.title?String(j.title).replace(/[<>&"]/g,function(x){return {"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[x]}):c.name}   // the kid's own name for the job, if they gave one
 function actLines(who){var out=[],now=Date.now()/1000,CH=function(id){return S.config.chores.find(function(c){return c.id===id})||{icon:"2b50",name:id}};
   Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(tid){var T=S.tv.tvs[tid];((T.grants)||[]).forEach(function(g){
@@ -448,9 +453,9 @@ function renderKid(){
   var A=(S.active||{})[kid];
   if(A){var ac=S.config.chores.find(function(x){return x.id===A.chore})||{name:A.chore,icon:"2b50"};
     var tsz=(A.team||[]).length,Tm=((S.typical||{})[A.chore]||{}).minutes||ac.est_minutes||10,REC=(S.records||{})[tsz>1?A.chore+"@"+tsz:A.chore];
-    var NT=!!A.notimer;
+    var NT=!!A.notimer,LS=letterSteps(A);
     var RW=A.rework;
-    $("doing").style.display="";$("doing").innerHTML='<span class="ic">'+E(ac.icon)+'</span><span>'+jobName(A,ac)+(RW?'<br><span style="font-size:18px;color:#c62828">'+E("1f501")+' '+E(insp(RW.by).icon)+' '+(RW.feedback?(function(){var ls=RW.feedback.split(/\n+/).filter(function(x){return x.trim()});return '"'+ls[0]+'"'+(ls.length>1?' +'+(ls.length-1)+' more':'')})():'Not yet — fix it up')+'</span>':'')+'</span>'+
+    $("doing").style.display="";$("doing").innerHTML='<span class="ic">'+E(ac.icon)+'</span><span>'+jobName(A,ac)+LS+(RW?'<br><span style="font-size:18px;color:'+(A.keep?'#6d4c00':'#c62828')+'">'+E(A.keep?"1f449":"1f501")+' '+E(insp(RW.by).icon)+' '+(RW.feedback?(function(){var ls=RW.feedback.split(/\n+/).filter(function(x){return x.trim()});return '"'+ls[0]+'"'+(ls.length>1?' +'+(ls.length-1)+' more':'')})():(A.keep?'Keep going!':'Not yet — fix it up'))+'</span>':'')+'</span>'+
       (NT?'<span style="flex:1"></span>':'<span>'+E("23f1")+' <span class="t cdu" data-since="'+A.ts+'"></span></span>'+
       chartBar(S,kid,A.chore,A.ts,A.team,true))+
       '<div class="btn" id="dotimer" style="background:#eceff1">'+E("23f1")+(NT?' On':' Off')+'</div>'+
@@ -459,7 +464,7 @@ function renderKid(){
       (((A.team||[]).length>1&&(A.team||[kid])[0]===kid)?'<div class="btn" id="doshare" style="background:#fff8e1">'+E("1f91d")+' Share</div>':'')+
       (A.chore!=="other"?'<div class="btn" id="doname" style="background:#fff3e0">'+E("270f")+(A.title?'':' Name it')+'</div>':'')+
       '<div class="btn" id="dolater" style="background:#ede7f6">'+E("23f8")+' Finish later</div>'+
-      '<div class="btn yes" id="dodone">'+(RW?E("1f50d")+' Inspect again':E("2611")+' I\'m done!')+'</div><div class="btn no" id="dostop">'+E("2716")+((A.team||[]).length>1?' Leave':' Stop')+'</div>';
+      '<div class="btn yes" id="dodone">'+(RW&&!A.keep?E("1f50d")+' Inspect again':E("2611")+' I\'m done!')+'</div><div class="btn no" id="dostop">'+E("2716")+((A.team||[]).length>1?' Leave':' Stop')+'</div>';
     $("dodone").onclick=function(){L("doing_done",{chore:A.chore});askChore(A.chore,true)};
     $("dostop").onclick=function(){L("doing_stop",{chore:A.chore,team:(A.team||[]).length});api((A.team||[]).length>1?"/api/leave_team":"/api/stop",{kid:kid}).then(function(r){if(r.ok){S=r.state;renderKid()}})};
     $("dolater").onclick=function(){L("finish_later_open",{chore:A.chore});
@@ -554,6 +559,7 @@ function renderKid(){
     if(r.type==="adjust"){hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.points<0?"1f6ab":"2b50")+'</span><span style="font-size:15px;font-weight:700;opacity:.7">'+(r.reason||"").replace(/^paper log: /,"")+'</span><span class="s">'+E(insp(r.by).icon)+' '+(r.points>0?"+":"")+r.points+'</span></div>';return}
     var s=r.status==="pending"&&r.inspecting?'<span class="s wait">'+E("1f50d")+E(insp(r.inspecting.by).icon)+'</span>':r.status==="pending"?'<span class="s wait">'+(r.priority?E("2b50"):"")+E("23f3")+'</span>':
       r.status==="inspected"?'<span class="s">'+E(insp(r.inspected_by).icon)+E("2705")+' +'+r.awarded+'</span>':
+      r.status==="returned"?'<span class="s">'+E(insp(r.inspected_by).icon)+E("1f501")+'</span>':
       '<span class="s">'+E(insp(r.inspected_by).icon)+E("274c")+'</span>';
     hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.chore_icon)+'</span><span style="font-size:16px;font-weight:800">'+r.chore_name+((r.team||[]).length>1?' '+teamIcons(r.team):'')+(r.feedback||r.leftover_note?' '+E("1f4dd"):'')+'</span>'+s+'</div>'});
   $("hist").innerHTML=hh||'<div style="font-size:40px;text-align:center;opacity:.5">'+E("1f4a4")+'</div>';
@@ -1088,6 +1094,10 @@ function jobModal(id){var r=S.history.find(function(h){return h.id===id});if(!r)
       (r.feedback?'<div class="q" style="font-size:26px">'+E("1f4dd")+' '+notes(r.feedback)+'</div>':'')+
       (restOpen(r)?'<div class="faces">'+restBtn()+'</div>':''));addOk();
     if($("dorest"))$("dorest").onclick=function(){L("do_rest",{chore:r.chore});closeModal();askChore(r.chore)};return}
+  if(r.status==="returned"){modal(head+'<div class="q">'+E(insp(r.inspected_by).icon)+' '+insp(r.inspected_by).name+': '+E("1f44d")+' Good start, keep going!</div>'+   // "keep working": not a fail
+    (r.feedback?'<div class="q" style="font-size:30px;background:#fff8e1;border-radius:16px;padding:8px 12px">'+E("1f449")+' '+notes(r.feedback)+'</div>':'')+
+    '<div class="faces"><div class="btn yes" id="again" style="font-size:36px;font-weight:900;padding:12px 26px">'+E("25b6")+' Keep going</div></div>');
+    $("again").onclick=function(){L("keep_going",{chore:r.chore});closeModal()};return}
   if(r.status==="rejected"){modal(head+'<div class="q">'+E(insp(r.inspected_by).icon)+' '+insp(r.inspected_by).name+': '+E("274c")+' Not done yet</div>'+
     (r.feedback?'<div class="q" style="font-size:30px;color:#c62828;background:#ffebee;border-radius:16px;padding:8px 12px">'+E("1f4dd")+' '+notes(r.feedback)+'</div>':'')+
     '<div class="faces"><div class="btn yes" id="again" style="font-size:36px;font-weight:900;padding:12px 26px">'+E("1f501")+' Try again</div></div>');

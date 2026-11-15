@@ -780,13 +780,18 @@ def derive():
         if e["type"] == "reteam" and e.get("ref") in reports:   # a grown-up corrected who did it
             reports[e["ref"]]["team"] = list(e["team"])
             reports[e["ref"]]["kid"] = e["team"][0]
+        if e["type"] == "reaward" and e.get("ref") in reports and reports[e["ref"]]["status"] == "inspected":   # a grown-up changed an award
+            r_ = reports[e["ref"]]
+            r_["team"], r_["kid"] = list(e["team"]), e["team"][0]
+            r_["split"], r_["awarded"] = dict(e["award"]), sum(e["award"].values())
+            r_["reawarded"] = e["ts"]
         if e["type"] == "priority" and e["ref"] in reports:
             reports[e["ref"]]["priority"] = e["ts"]
         if e["type"] == "refeel" and e["ref"] in reports:
             reports[e["ref"]]["feeling"] = e["feeling"]
         if e["type"] == "inspect" and e["ref"] in reports:
             r = reports[e["ref"]]
-            r["status"] = "inspected" if e.get("ok") else "rejected"
+            r["status"] = "inspected" if e.get("ok") else "returned" if e.get("keep") else "rejected"   # returned: "keep working", not a fail
             r["inspected_by"] = e.get("by")
             r["inspected_ts"] = e["ts"]
             r["awarded"] = e.get("points") if e.get("ok") else 0
@@ -864,7 +869,8 @@ def derive():
             for m in e["team"]:
                 active[m] = {"chore": e["chore"], "ts": e["ts"] - e["worked"], "team": list(e["team"]),
                              "notimer": not e.get("timed"), "rework": {"feedback": e.get("feedback"), "by": e["by"], "ref": e["ref"]},
-                             "round": e.get("round", 2), **({"split": e["split"]} if e.get("split") else {})}
+                             "round": e.get("round", 2), **({"split": e["split"]} if e.get("split") else {}),
+                             **({"keep": True} if e.get("keep") else {}), **({"title": e["title"]} if e.get("title") else {})}
                 unshelve(m, e["chore"])   # only this job's pause: a teammate's other saved job stays
         elif e["type"] == "team_split" and e["kid"] in active:
             for m in active[e["kid"]].get("team") or [e["kid"]]:
@@ -1249,7 +1255,7 @@ def push_state_sensor(state=None, last_result=None):
     state = state or derive()
     keep = ("id", "ts", "type", "kid", "chore", "chore_name", "chore_icon", "status", "points", "awarded",
             "feeling", "inspected_by", "inspect_id", "reason", "by", "reward", "reward_name", "reward_icon", "cost", "tv",
-            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered")
+            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered", "inspected_ts", "certified")
     hist = [{k: h[k] for k in keep if k in h} for h in state["history"][:40]]
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
@@ -1984,7 +1990,8 @@ class H(BaseHTTPRequestHandler):
                 extra["leftover_note"] = str(b.get("leftover_note") or "")[:600]
             ev = append({"type": "inspect", "ref": r["id"], "by": b["by"], "ok": ok,
                          "points": int(pts) if ok else 0, "label": str(b.get("label") or "")[:60], **extra,
-                         **({"feedback": str(b.get("feedback") or "")[:600]} if not ok else {})})
+                         **({"feedback": str(b.get("feedback") or "")[:600]} if not ok else {}),
+                         **({"keep": True} if not ok and b.get("keep") else {})})
             if r["chore"] == "get_dressed" and ok:
                 d_ = derive().get("dress") or {}
                 if d_.get("on") and all(v == "ready" for v in d_["kids"].values()):
@@ -1997,7 +2004,19 @@ class H(BaseHTTPRequestHandler):
                 worked = (r["ts"] - r["started"]) if r.get("started") else 0
                 append({"type": "rework", "ref": r["id"], "chore": r["chore"], "team": r.get("team") or [r["kid"]],
                         "worked": worked, "timed": bool(r.get("started")), "feedback": str(b.get("feedback") or "")[:600],
-                        "by": b["by"], "round": int(r.get("round") or 1) + 1, "split": r.get("split")})
+                        "by": b["by"], "round": int(r.get("round") or 1) + (0 if b.get("keep") else 1), "split": r.get("split"),
+                        **({"keep": True} if b.get("keep") else {}),
+                        **({"title": r["note"]} if r.get("note") and r["chore"] != "other" else {})})
+        elif p == "/api/reaward":   # change who got what for a job already passed (within a day), e.g. 2 and 2
+            r = next((h for h in st["history"] if h.get("id") == b.get("ref") and h.get("type") == "report"), None)
+            if not r or b.get("by") not in insp or not isinstance(b.get("award"), dict):
+                return self.send(400, {"error": "unknown report/inspector"})
+            if r["status"] != "inspected" or time.time() - (r.get("inspected_ts") or 0) > 86400:
+                return self.send(409, {"error": "only a job passed in the last day"})
+            award = {k: max(0, min(50, int(v or 0))) for k, v in b["award"].items() if k in kids}
+            order = [r["kid"]] + [k["id"] for k in c["kids"] if k["id"] != r["kid"]]
+            team = [k for k in order if award.get(k)] or [r["kid"]]
+            ev = append({"type": "reaward", "ref": r["id"], "team": team, "award": {k: award.get(k, 0) for k in team}, "by": b["by"]})
         elif p == "/api/adjust":
             if b.get("kid") not in kids or b.get("by") not in insp:
                 return self.send(400, {"error": "unknown kid/inspector"})

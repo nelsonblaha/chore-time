@@ -1449,5 +1449,40 @@ class CertifiedSlot(Case):
         self.assertEqual(nxt, date(2027, 1, 10))   # skips Dec 27 (calendar) and Jan 3 (off week, no calendar data)
 
 
+class LetterFixes(Case):
+    """Keep working (not a fail) and changing an award after passing it."""
+
+    def team_report(self):
+        a = self.app
+        a.post("/api/start", {"kid": "max", "chore": "organize"})
+        a.post("/api/team", {"kid": "max", "chore": "organize", "partners": ["ava"]})
+        code, r = a.post("/api/report", {"kid": "max", "chore": "organize"})
+        self.assertEqual(code, 200, r)
+        return r["event"]
+
+    def test_keep_working_goes_back_in_progress_with_the_same_team(self):
+        ev = self.team_report()
+        code, r = self.app.post("/api/inspect", {"ref": ev["id"], "by": "jordan", "ok": False, "keep": True, "points": 0,
+                                                 "feedback": "Fold it in"})
+        self.assertEqual(code, 200, r)
+        st = self.app.state()
+        rep = next(h for h in st["history"] if h.get("id") == ev["id"])
+        self.assertEqual(rep["status"], "returned")
+        self.assertEqual(sorted(st["active"]["max"]["team"]), ["ava", "max"])
+        self.assertTrue(st["active"]["ava"].get("keep"))
+        self.assertEqual(st["active"]["max"]["round"], 1)   # not a new "try again" round
+
+    def test_change_an_award_after_passing(self):
+        ev = self.team_report()
+        self.assertEqual(self.app.post("/api/inspect", {"ref": ev["id"], "by": "jordan", "ok": True, "points": 2})[0], 200)
+        self.assertEqual(self.app.state()["balance"], {"ava": 1, "max": 1, "zoe": 0})
+        code, r = self.app.post("/api/reaward", {"ref": ev["id"], "by": "jordan", "award": {"max": 2, "ava": 2}})
+        self.assertEqual(code, 200, r)
+        st = self.app.state()
+        self.assertEqual((st["balance"]["max"], st["balance"]["ava"]), (2, 2))
+        rep = next(h for h in st["history"] if h.get("id") == ev["id"])
+        self.assertEqual(rep["awarded"], 4)
+
+
 if __name__ == "__main__":
     unittest.main()
