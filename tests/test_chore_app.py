@@ -1368,11 +1368,11 @@ class ServiceSchedule(unittest.TestCase):
     ICS = "\r\n".join([
         "BEGIN:VCALENDAR",
         "BEGIN:VEVENT", "UID:a", "DTSTART;VALUE=DATE:20261111", "DTEND;VALUE=DATE:20261117",
-        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE", "SUMMARY:Ben", "END:VEVENT",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE", "SUMMARY:Home", "END:VEVENT",
         "BEGIN:VEVENT", "UID:a", "RECURRENCE-ID;VALUE=DATE:20261125", "DTSTART;VALUE=DATE:20261120",
-        "DTEND;VALUE=DATE:20261130", "SUMMARY:Ben - holiday", "END:VEVENT",
+        "DTEND;VALUE=DATE:20261130", "SUMMARY:Home - holiday", "END:VEVENT",
         "BEGIN:VEVENT", "UID:b", "DTSTART;VALUE=DATE:20261118", "DTEND;VALUE=DATE:20261121",
-        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE", "EXDATE;VALUE=DATE:20261202", "SUMMARY:Ben", "END:VEVENT",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE", "EXDATE;VALUE=DATE:20261202", "SUMMARY:Home", "END:VEVENT",
         "BEGIN:VEVENT", "UID:c", "DTSTART;VALUE=DATE:20261106", "DTEND;VALUE=DATE:20261111",
         "RRULE:FREQ=WEEKLY;INTERVAL=2", "SUMMARY:Other parent", "END:VEVENT",
         "END:VCALENDAR", ""])
@@ -1384,7 +1384,7 @@ class ServiceSchedule(unittest.TestCase):
 
     def test_recurring_blocks_moved_instances_and_exdates(self):
         from datetime import date
-        d = self.sc.days_here(self.ICS, "^Ben", start=date(2026, 11, 1), horizon_days=60)
+        d = self.sc.days_here(self.ICS, "^Home", start=date(2026, 11, 1), horizon_days=60)
         self.assertTrue(d["2026-11-15"])    # Wed 11th - Mon 16th
         self.assertFalse(d["2026-11-08"])   # the other parent's weekend
         self.assertTrue(d["2026-11-22"])    # the holiday block moved in (Fri 20th - Sun 29th)

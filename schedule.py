@@ -2,7 +2,7 @@
 
 house.json "kid_calendar" (all optional):
   ics_url   the calendar's private iCal address (e.g. Google Calendar > settings > "Secret address in iCal format")
-  with      regex an all-day event's title must match to mean "the kids are here" (default "^Ben"; e.g. "^Home")
+  with      regex an all-day event's title must match to mean "the kids are here" (default "^Home")
   every_hours  how often to re-read it (default 6)
 Days the calendar covers are cached in the data folder (kid_calendar.json: {"days": {"YYYY-MM-DD": true|false}}),
 so a slot chore can follow the real schedule (holidays, swaps) and fall back to its every-N-weeks rule elsewhere.
@@ -103,7 +103,7 @@ def occurrences(ev, until):
     return [d for d in out if d not in ev["exdates"]]
 
 
-def days_here(text, pattern="^Ben", start=None, horizon_days=120):
+def days_here(text, pattern="^Home", start=None, horizon_days=120):
     """{"YYYY-MM-DD": True|False} for each day from `start` for horizon_days: True if an all-day event matching
     `pattern` covers it. Moved instances (RECURRENCE-ID) replace the instance they move."""
     start = start or date.today() - timedelta(days=7)
@@ -134,7 +134,7 @@ def refresh(fetch=None):
         return False
     try:
         text = fetch(url) if fetch else urllib.request.urlopen(url, timeout=30).read().decode("utf-8", "replace")
-        days = days_here(text, CFG.get("with") or "^Ben")
+        days = days_here(text, CFG.get("with") or "^Home")
     except Exception:  # noqa: BLE001
         return False
     CACHE["days"].update(days)
