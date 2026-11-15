@@ -1,15 +1,15 @@
 """Explicit map requests use normal vacancy rules and survive a restart."""
 import unittest
-from test_chore_app import Vacuum as Fixture
+import test_chore_app as fixture
 
 class RoomRequests(unittest.TestCase):
-    tearDown=Fixture.tearDown
-    S=Fixture.S
-    tick=Fixture.tick
-    status=Fixture.status
+    tearDown=fixture.Vacuum.tearDown
+    S=fixture.Vacuum.S
+    tick=fixture.Vacuum.tick
+    status=fixture.Vacuum.status
     # Reuse the isolated robot fixture, not the inherited unrelated suite.
     def setUp(self):
-        Fixture.setUp(self)
+        fixture.Vacuum.setUp(self)
         self.va.REQUESTS='input_text.room_requests'
         for seg in self.va.SEGMENTS:self.p.D['visits'][seg]=self.now[0]-60
         for d in self.board.values():d['last_clean']=0
