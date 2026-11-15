@@ -13,7 +13,8 @@ and batteries that need replacing. Each item can carry context (Grocy userfields
                  up a lot, one on the same floor a little.
 
 Conditions: "<entity> <op> <value>" joined by "and"; op is one of = != > < >= <=. Besides Home Assistant entities,
-now.hour, now.weekday (0 = Monday), now.month and now.day test the clock, e.g. "now.hour >= 17" or "now.weekday >= 5". A due item whose ctx_done_when
+now.hour, now.weekday (0 = Monday), now.month and now.day test the clock, e.g. "now.hour >= 17" or "now.weekday >= 5",
+and task.<id> = done / open waits on another Grocy task ("after the garage is cleared", "until it is"). A due item whose ctx_done_when
 comes true is completed in Grocy (once). Batteries (Grocy batteries with userfields ha_entity: one or more battery
 sensors of the device, comma separated, the newest reading counts; ha_low: the level that means replace) become
 "Replace the battery" items while the Home Assistant level is at or below ha_low, and are tracked as replaced in
@@ -155,6 +156,10 @@ class HouseTasks:
     def get(self, ent):
         if ent.startswith("now."):                                    # clock conditions, no Home Assistant needed
             return {"state": now_value(ent)}
+        if ent.startswith("task."):                                   # another Grocy task: task.12 = done / open
+            tid = ent.split(".", 1)[1]
+            known = getattr(self, "task_state", {})
+            return {"state": known.get(tid, "done" if known else None)}   # a deleted task counts as done
         return self.g["ha_get"](ent, self.tok)
 
     def gc(self, method, path, body=None):
@@ -248,7 +253,9 @@ class HouseTasks:
         inbox = str((self.g["HOUSE"].get("grocy") or {}).get("review_category") or "").strip().lower()
         inbox_ids = {c["id"] for c in (self.gc("GET", "/objects/task_categories") or []) if inbox and c["name"].lower() == inbox}
         self.to_review = 0
-        for t in self.gc("GET", "/objects/tasks") or []:
+        all_tasks = self.gc("GET", "/objects/tasks") or []
+        self.task_state = {str(t["id"]): ("done" if str(t.get("done")) == "1" else "open") for t in all_tasks}
+        for t in all_tasks:
             if str(t.get("done")) == "1":
                 continue
             if t.get("category_id") in inbox_ids:                     # imported, not yet sorted: counted, not listed

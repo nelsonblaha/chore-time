@@ -700,6 +700,19 @@ class HouseTasks(unittest.TestCase):
         self.assertIsNone(self.H.check("sensor.nothing = on", get))             # unknown: neither show nor auto-complete
         self.assertIsNone(self.H.check("person.jordan > home", get))            # no ordering on words
 
+    def test_a_job_can_wait_on_another_task(self):
+        """'Garage door on scooter departure' only once the garage is cleared of cardboard; the clearing chore until then."""
+        self.grocy["/objects/tasks"] = [
+            {"id": 70, "name": "Clear the garage cardboard", "done": 0, "userfields": {}},
+            {"id": 62, "name": "Garage door on scooter departure", "done": 0, "userfields": {"ctx_show_when": "task.70 = done"}},
+            {"id": 71, "name": "Cardboard into the blue bin", "done": 0, "userfields": {"ctx_show_when": "task.70 = open"}}]
+        self.H.HouseTasks(self.g).tick()
+        names = lambda: sorted(i["name"] for i in self.ha["sensor.house_tasks"]["attributes"]["items"])
+        self.assertEqual(names(), ["Cardboard into the blue bin", "Clear the garage cardboard"])
+        self.grocy["/objects/tasks"][0]["done"] = 1
+        self.H.HouseTasks(self.g).tick()
+        self.assertEqual(names(), ["Garage door on scooter departure"])
+
     def test_clock_conditions(self):
         """'Evenings only' and 'weekends only' without a Home Assistant helper entity."""
         sat_evening = datetime(2026, 1, 3, 18, 30)
