@@ -436,7 +436,7 @@ function render(){
     bl+='<div class="card" style="border-top:5px solid '+k.color+'"><div class="big">'+E(k.icon)+'</div><div class="n">'+b+'</div><div class="mute">'+k.name+(S.pending_points[k.id]?' · +'+S.pending_points[k.id]+' waiting':'')+'</div>'+
       '<div style="margin-top:6px;font-size:14px">🎯 '+E(G.r.icon)+' '+esc(G.r.name)+' · '+Math.min(b,G.r.cost)+'/'+G.r.cost+(b>=G.r.cost?' ✅':'')+'</div>'+   // their goal, as their own screen shows it
       '<div style="height:8px;background:#0002;border-radius:4px;overflow:hidden;margin:3px 0"><div style="height:100%;width:'+gp+'%;background:'+k.color+'"></div></div>'+
-      '<div class="mute" style="font-size:12px">'+(G.auto?(G.fav?'auto (their favorite)':'auto (next one they can afford)'):'they chose it')+(gs?' · picked '+ago(gs):'')+'</div></div>'});
+      '<div class="mute" style="font-size:12px">'+(G.auto?(G.fav?'auto (their favorite)':'auto (next one they can afford)'):'they chose it')+(gs?(G.auto?' · set to Auto ':' · picked ')+ago(gs):'')+'</div></div>'});
   $("bal").innerHTML=bl;$("balsum").textContent=S.config.kids.map(function(k){return k.name+" "+S.balance[k.id]}).join(" · ");
   // pending
   var pend=S.history.filter(function(h){return h.type==="report"&&h.status==="pending"}).reverse();
