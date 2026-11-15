@@ -365,6 +365,18 @@ class SonyInputs(Case):
         self.assertEqual(self.act("com.netflix.ninja"), "stream")
 
 
+    def test_explicit_display_loading_can_precede_cast_metadata(self):
+        self.t.update(external_display_entity='sensor.explicit_display',external_display_app_id='custom-display')
+        self.app.set('sensor.explicit_display','loading',lease_until=time.time()+40)
+        self.app.set(self.t['remote'],'on',current_activity='com.google.android.apps.mediashell')
+        players=[{'state':'idle','attributes':{'app_id':self.s.DASHCAST_APP_ID}}]
+        self.assertTrue(self.s.external_display_active(self.t,players,'x'))
+        self.app.set(self.t['remote'],'on',current_activity='com.sony.dtv.tvx')
+        self.assertFalse(self.s.external_display_active(self.t,players,'x'))
+        self.app.set(self.t['remote'],'on',current_activity='com.google.android.apps.mediashell')
+        self.app.set('sensor.explicit_display','loading',lease_until=time.time()-1)
+        self.assertFalse(self.s.external_display_active(self.t,players,'x'))
+
     def test_explicit_display_lease_expires_and_native_playback_wins(self):
         self.t.update(external_display_entity='sensor.explicit_display',external_display_app_id='custom-display')
         self.app.set('sensor.explicit_display','active',lease_until=time.time()+40)

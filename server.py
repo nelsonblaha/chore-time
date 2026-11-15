@@ -2580,7 +2580,7 @@ def ha_call(svc, data, tok):
 
 
 def external_display_active(t, players, tok):
-    """Honor a bounded, renewable display claim only while its receiver is visible.
+    """Honor an explicit display while its receiver loads or is visible.
 
     Optional per-TV config: external_display_entity and external_display_app_id.
     Stale state, an overlong lease or a native app in front never exempts playback.
@@ -2600,6 +2600,10 @@ def external_display_active(t, players, tok):
         activity=(ha_get(t["remote"],tok).get("attributes") or {}).get("current_activity")
         if activity != "com.google.android.apps.mediashell":
             return False
+    # HA Cast metadata can lag launch. A fresh loading lease protects that
+    # handoff; the display controller withdraws it after its 75-second deadline.
+    if st.get("state")=="loading":
+        return True
     return any(p.get("attributes",{}).get("app_id")==t["external_display_app_id"] for p in players)
 
 
