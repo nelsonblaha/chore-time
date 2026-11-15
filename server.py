@@ -358,6 +358,62 @@ def next_slot(ch):
     return (d + timedelta(days=days)).replace(hour=hh, minute=mm, second=0, microsecond=0).timestamp()
 
 
+# Fields a grown-up can set on a chart chore from the parents' page (the full chore form). Only keys present in the
+# request change; an empty/false value removes the key so chores.json stays tidy.
+CHORE_FLAGS = ("once", "each_daily", "on_demand", "daylight")
+
+
+def chore_fields(ch, c):
+    import re as _re
+    out = {}
+    if "desc" in ch:
+        out["desc"] = str(ch.get("desc") or "").strip()[:200]
+    for k in CHORE_FLAGS:
+        if k in ch:
+            out[k] = bool(ch.get(k))
+    if "cooldown_h" in ch:
+        try:
+            out["cooldown_h"] = max(0.0, min(8760.0, float(ch.get("cooldown_h") or 0)))
+        except (TypeError, ValueError):
+            pass
+    if "where" in ch:
+        where = str(ch.get("where") or "").strip()[:60]
+        out["where"] = where
+        floors = (HOUSE.get("house_tasks") or {}).get("floors") or {}
+        floor = next((f for f, rooms in floors.items() if where in rooms), "")
+        out["floor"] = str(ch.get("floor") or floor or ("Other" if where else ""))[:30]
+        known = {m for x in c.get("chores", []) for m in x.get("map_rooms") or []}
+        slug = _re.sub(r"[^a-z0-9]+", "_", where.lower().replace("'", "")).strip("_")
+        out["map_rooms"] = [slug] if slug in known else []
+    if "only" in ch:
+        kid_ids = [k["id"] for k in c.get("kids", [])]
+        only = [k for k in (ch.get("only") or []) if k in kid_ids]
+        out["only"] = only if 0 < len(only) < len(kid_ids) else []
+    if "household" in ch:
+        ids = [h["id"] for h in c.get("households") or []]
+        hh = ch.get("household") or ""
+        out["household"] = hh if hh == "any" or (hh in ids and ids and hh != ids[0]) else ""
+    for k, pat in (("from", r"\d{4}-\d{2}-\d{2}"), ("until", r"\d{4}-\d{2}-\d{2}"), ("after", r"\d{1,2}:\d{2}"), ("before", r"\d{1,2}:\d{2}")):
+        if k in ch:
+            v = str(ch.get(k) or "").strip()
+            out[k] = v if _re.fullmatch(pat, v) else ""
+    if "est_minutes" in ch:
+        try:
+            out["est_minutes"] = max(1, min(600, int(ch.get("est_minutes")))) if ch.get("est_minutes") not in (None, "") else 0
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def apply_chore_fields(x, more):
+    for k, v in more.items():
+        if v in ("", [], False, 0) and k != "cooldown_h":
+            x.pop(k, None)
+        else:
+            x[k] = v
+    return x
+
+
 def chore_closed(ch, board):
     """why a chore is unavailable right now (None = open): daylight-only after dark, one-time already done,
     outside its from/until dates (e.g. cleaning the car only in daylight; a one-time job)"""
@@ -836,7 +892,8 @@ def derive():
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
-            "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]}}
+            "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
+            "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}}
 
 
 def push_ha(state):
@@ -1597,13 +1654,15 @@ class H(BaseHTTPRequestHandler):
             with LOCK:
                 c = cfg()
                 cur = [x for x in c["chores"] if x["id"] == cid]
+                more = chore_fields(ch, c)
                 if b.get("remove"):
                     c["chores"] = [x for x in c["chores"] if x["id"] != cid]
                 elif cur:
                     cur[0].update({"name": name, "points": pts, "icon": ch.get("icon") or cur[0]["icon"]})
+                    apply_chore_fields(cur[0], more)
                 else:
                     c["chores"].insert(-1 if c["chores"] and c["chores"][-1]["id"] == "other" else len(c["chores"]),
-                                       {"id": cid, "name": name, "icon": ch.get("icon") or "2b50", "points": pts})
+                                       apply_chore_fields({"id": cid, "name": name, "icon": ch.get("icon") or "2b50", "points": pts}, more))
                 save_cfg(c)
             try:   # Grocy is the master list: mirror the edit there (a removed chore just leaves the kids' screens)
                 cur_ = cur[0] if cur else next((x for x in cfg()["chores"] if x["id"] == cid), {})
@@ -1612,10 +1671,10 @@ class H(BaseHTTPRequestHandler):
                     if gid:
                         gcall("PUT", "/userfields/chores/%d" % gid, {"kids": "0"})
                 elif gid:
-                    gcall("PUT", "/objects/chores/%d" % gid, {"name": name})
+                    gcall("PUT", "/objects/chores/%d" % gid, {"name": name, **({"description": cur_.get("desc", "")} if "desc" in more else {})})
                     gcall("PUT", "/userfields/chores/%d" % gid, {"kid_points": "" if pts is None else str(pts), "kid_icon": cur_.get("icon", "")})
                 elif cid not in SYSTEM_CHORES:
-                    gid = int(gcall("POST", "/objects/chores", {"name": name, "period_type": "manually", "track_date_only": 0, "rollover": 0, "start_date": "2026-11-01 00:00:00"})["created_object_id"])
+                    gid = int(gcall("POST", "/objects/chores", {"name": name, "description": cur_.get("desc", ""), "period_type": "manually", "track_date_only": 0, "rollover": 0, "start_date": "2026-11-01 00:00:00"})["created_object_id"])
                     gcall("PUT", "/userfields/chores/%d" % gid, {"kids": "1", "kid_key": cid, "kid_points": "" if pts is None else str(pts),
                                                                   "kid_icon": cur_.get("icon", "2b50")})
             except Exception as ex:  # noqa: BLE001

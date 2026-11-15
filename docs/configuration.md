@@ -59,6 +59,8 @@ The reward ids `show`, `movie` and `games` unlock TVs: streaming/casting, stream
 | `household` | for two-home families: the household id it belongs to, or `"any"` (homework, brush teeth). Default: the first household |
 | `hidden` | resting, not shown |
 
+Most of these can be set without editing JSON: **＋ New chore** and **Edit** on the parents' page open a form for the name, subtitle (`desc`), icon, stars, how it repeats (one time, back after N days, once a day per kid, any time, or only when a grown-up opens it), where, which kids, which house, and the dates, times, daylight and length. The "Where" list comes from `house_tasks.floors` in house.json; picking a room also fills `floor`, and `map_rooms` when a robot-map room of that name is already in use.
+
 ### Two households
 
 A child who lives in two homes can use Chore Time in both. Add `households` (the first is the default home of every job

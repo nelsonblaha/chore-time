@@ -980,5 +980,35 @@ class Pages(unittest.TestCase):
                     self.fail("%s:%d string + IIFE || alt (wrap the alternatives in parentheses)" % (f.name, n))
 
 
+
+class ChoreForm(Case):
+    """The parents' full chore form: subtitle, one-time, a room (floor + robot-map id), who, which house, times."""
+    config = two_houses()
+
+    def test_new_one_time_chore_with_subtitle_room_and_kids(self):
+        self.s.HOUSE.setdefault("house_tasks", {})["floors"] = {"Downstairs": ["Living Room", "Kitchen"]}
+        c = self.s.cfg(); c["chores"][0]["map_rooms"] = ["living_room"]; self.s.save_cfg(c)
+        code, r = self.app.post("/api/chore", {"by": "jordan", "chore": {
+            "name": "Plug things in", "points": 2, "icon": "1f50c", "desc": "Everything at the outlet by the speaker",
+            "once": True, "each_daily": False, "on_demand": False, "cooldown_h": 0, "where": "Living Room",
+            "only": ["ava", "max"], "household": "any", "after": "07:30", "before": "bad", "from": "", "until": "2026-12-01",
+            "daylight": False, "est_minutes": 5}})
+        self.assertEqual(code, 200, r)
+        ch = next(x for x in self.s.cfg()["chores"] if x["name"] == "Plug things in")
+        self.assertEqual((ch["desc"], ch["once"], ch["where"], ch["floor"], ch["map_rooms"]),
+                         ("Everything at the outlet by the speaker", True, "Living Room", "Downstairs", ["living_room"]))
+        self.assertEqual((ch["only"], ch["household"], ch["after"], ch["until"], ch["est_minutes"]), (["ava", "max"], "any", "07:30", "2026-12-01", 5))
+        for gone in ("before", "from", "daylight", "each_daily", "on_demand"):
+            self.assertNotIn(gone, ch)
+        self.assertIn("Living Room", self.app.state()["room_choices"]["Downstairs"])
+        # edit: every kid = no "only"; first house = default (no key); comes back every 2 days
+        code, r = self.app.post("/api/chore", {"by": "jordan", "chore": {"id": ch["id"], "name": "Plug things in", "points": 2,
+                                "once": False, "cooldown_h": 48, "only": ["ava", "max", "zoe"], "household": "", "desc": ""}})
+        ch = next(x for x in self.s.cfg()["chores"] if x["id"] == ch["id"])
+        self.assertEqual(ch["cooldown_h"], 48.0)
+        for gone in ("once", "only", "household", "desc"):
+            self.assertNotIn(gone, ch)
+        self.assertEqual(ch["where"], "Living Room")   # untouched fields stay
+
 if __name__ == "__main__":
     unittest.main()
