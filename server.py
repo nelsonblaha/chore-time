@@ -30,7 +30,7 @@ def _load_house():
 
 HOUSE = _load_house()
 import envelopes  # noqa: E402
-envelopes.configure(HOUSE.get("envelopes"))
+envelopes.configure(HOUSE.get("envelopes"), str(DATA / "envelopes_printed.json"))
 HA = HOUSE.get("home_assistant") or {}   # empty = no Home Assistant: TV locks, Hubs, lights, vacuum, watch login all off
 
 
@@ -583,6 +583,8 @@ def derive():
             reports[e["ref"]]["inspecting"] = {"by": e["by"], "ts": e["ts"]}
         if e["type"] == "split" and e.get("ref") in reports:
             reports[e["ref"]]["split"] = dict(e["split"])
+        if e["type"] == "delivered" and e.get("ref") in reports:   # a letter handed over after its report
+            reports[e["ref"]]["delivered"] = e["ts"]
         if e["type"] == "reteam" and e.get("ref") in reports:   # a grown-up corrected who did it
             reports[e["ref"]]["team"] = list(e["team"])
             reports[e["ref"]]["kid"] = e["team"][0]
@@ -1481,7 +1483,19 @@ class H(BaseHTTPRequestHandler):
                 ilog({"src": "envelope", "kid": b.get("kid"), "from": b.get("from"), "to": b.get("to"), "error": str(ex)})
                 return self.send(409, {"error": str(ex)})
             ilog({"src": "envelope", "kid": b.get("kid"), "from": b.get("from"), "to": b.get("to"), "job": job})
+            act_ = st["active"].get(b["kid"]) or {}
+            envelopes.mark_printed(set([b["kid"], str(b.get("from") or "")] + list(act_.get("team") or [])) & kids,
+                                   {"from": b.get("from"), "to": b.get("to"), "job": job, "by": b["kid"]})
             return self.send(200, {"ok": True, "job": job})
+        if p == "/api/envelope_delivered":   # the letter is in its envelope and handed over: the grown-up can inspect
+            r_ = next((r for r in st["history"] if r.get("type") == "report" and r.get("status") == "pending"
+                       and r.get("chore") == b.get("chore") and b.get("kid") in (r.get("team") or [r["kid"]])), None)
+            if not r_:
+                return self.send(409, {"error": "nothing waiting"})
+            ev = append({"type": "delivered", "ref": r_["id"], "kid": b["kid"]})
+            after_change()
+            ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
+            return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/spend" and b.get("kid") and b.get("reward") in rewards and not is_here(rewards[b["reward"]], c, b["kid"]):
             return self.send(409, {"error": "that reward is at the other house"})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \
@@ -1615,6 +1629,8 @@ class H(BaseHTTPRequestHandler):
                          "old_toy_name": str(b.get("old_toy_name") or "")[:40]}
             if b.get("note"):
                 extra["note"] = " ".join(str(b["note"]).split())[:40]
+            if b.get("delivered"):
+                extra["delivered"] = time.time()   # a letter already handed over when it was reported
             if b.get("ask") is not None and (b["chore"] == "toy_out" or ch_.get("propose")):
                 extra["ask"] = max(0, min(20, int(b.get("ask") or 0)))
             if b["chore"] == "toy_out":

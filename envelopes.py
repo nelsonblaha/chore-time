@@ -10,9 +10,12 @@ house.json "envelopes" (all optional except the addresses):
   recipients     [{"id", "label" (on the button), "name" (printed), "icon", "address": [lines] (optional)}]
   to_address     lines under the recipient's name when a recipient has no address of its own
   load_photo     an image in the data folder showing how to put the envelope in the printer
+  handoff        the last instruction once the envelope is printed (default: give it to a grown-up)
+  handoff_done   the kid's button once they've done it (default: "I gave it to a grown-up!")
   printer_uri    the printer's own IPP address (e.g. ipp://192.168.0.20/ipp/print): lets the kids' screen see a jam
 A one-page PDF is written with the built-in Helvetica font (no extra libraries) and sent to lp.
 """
+import json
 import re
 import subprocess
 import tempfile
@@ -21,12 +24,42 @@ import time
 CFG = {}
 LAST = {"ts": 0.0}
 JOBS = set()     # print jobs this app sent (only these can be checked or cancelled)
+PRINTED = {}     # kid -> when an envelope was last printed for them (so coming back skips straight to "deliver it")
 MIN_GAP_S = 20   # a double tap must not print two envelopes
 
 
-def configure(cfg):
+STATE = {"file": None}
+
+
+def configure(cfg, state_file=None):
     CFG.clear()
     CFG.update(cfg or {})
+    STATE["file"] = state_file
+    PRINTED.clear()
+    LASTPRINT.clear()
+    try:
+        saved = json.loads(open(state_file).read()) if state_file else {}
+    except (OSError, ValueError):
+        saved = {}
+    LASTPRINT.update(saved.pop("_last", None) or {})
+    PRINTED.update({k: v for k, v in saved.items() if isinstance(v, (int, float))})
+
+
+LASTPRINT = {}   # the newest envelope: {"ts", "from", "to", "job"} (for the grown-ups' checklist)
+
+
+def mark_printed(kids_, info=None):
+    for k in kids_:
+        PRINTED[k] = time.time()
+    if info:
+        LASTPRINT.clear()
+        LASTPRINT.update(info, ts=time.time())
+    if STATE["file"]:
+        try:
+            with open(STATE["file"], "w") as f:
+                json.dump(dict(PRINTED, _last=LASTPRINT), f)
+        except OSError:
+            pass
 
 
 def enabled():
@@ -40,7 +73,13 @@ def public():
     return {"chores": list(CFG.get("chores") or []), "senders": list(CFG["senders"]),
             "recipients": [{"id": r["id"], "label": r.get("label") or r["name"], "icon": r.get("icon") or "1f48c"}
                            for r in CFG["recipients"]],
-            "photo": bool(CFG.get("load_photo"))}
+            "photo": bool(CFG.get("load_photo")),
+            "handoff": CFG.get("handoff") or "Fold your letter and put it in the envelope, but don't seal it! Then give it to a grown-up.",
+            "handoff_done": CFG.get("handoff_done") or "I gave it to a grown-up!",
+            "printed": {k: t for k, t in PRINTED.items() if time.time() - t < 12 * 3600},
+            "last": ({"ts": LASTPRINT["ts"], "from": LASTPRINT.get("from"), "job": LASTPRINT.get("job"),
+                      "to": next((r.get("label") or r["name"] for r in CFG["recipients"] if r["id"] == LASTPRINT.get("to")), LASTPRINT.get("to"))}
+                     if LASTPRINT.get("ts") and time.time() - LASTPRINT["ts"] < 12 * 3600 else None)}
 
 
 def _esc(t):

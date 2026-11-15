@@ -165,7 +165,7 @@ function cp(c){if(CUSTOM_ICONS[c])return "";return c.split("-").map(function(h){
 function E(c){if(c&&CUSTOM_ICONS[c])return '<img class="e" src="'+CUSTOM_ICONS[c]+'" alt="">';return c?'<img class="e" src="'+TW+c+'.svg" alt="'+cp(c)+'" onerror="this.outerHTML=this.alt">':""}
 function $(i){return document.getElementById(i)}
 function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
-var S=null,me=null,adjKid=null,adjPts=null;
+var S=null,me=null,adjKid=null,adjPts=null,TSEL={};   // TSEL: per-kid stars picked on a team job, kept across refreshes
 try{me=localStorage.getItem("inspector")}catch(e){}
 function api(p,b){return fetch(p,{method:b?"POST":"GET",headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
 
@@ -304,6 +304,36 @@ function renderFixJob(){var r=S.history.find(function(h){return h.id===FIXJOB});
     post("/api/undo",{ref:r.id},"Report removed").then(closePM)};
   $("fxgo").onclick=function(){var aw={};document.querySelectorAll(".fxv").forEach(function(x){var v=Math.max(0,+x.value||0);if(v)aw[x.dataset.k]=v});
     post("/api/inspect",{ref:r.id,ok:true,award:aw,points:0,label:$("fxlbl").value.trim()},"Passed: "+(Object.keys(aw).map(function(k){return kidOf(k).name+" "+aw[k]}).join(", ")||"no stars")).then(closePM)}}
+// An in-progress job (or a letter waiting for inspection): every detail, and for letters the whole checklist.
+var ACTJOB=null,ACTSIG=null;
+function renderActJob(){var a=ACTJOB.kid?(S.active||{})[ACTJOB.kid]:null,r=ACTJOB.ref?S.history.find(function(h){return h.id===ACTJOB.ref}):null;
+  if(!a&&ACTJOB.kid){r=S.history.find(function(h){return h.type==="report"&&(h.team||[h.kid]).indexOf(ACTJOB.kid)>=0});if(r&&S.now-r.ts<600)ACTJOB={ref:r.id};else{closePM();return}}
+  if(!a&&!r){closePM();return}
+  var cid=a?a.chore:r.chore,c=choreOf(cid),team=a?(a.team||[ACTJOB.kid]):(r.team||[r.kid]),split=a?a.split:r.split,EV=S.envelope;
+  var tm=function(t){return new Date(t*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})};
+  var sig=JSON.stringify([a,r&&[r.status,r.delivered,r.awarded],EV&&EV.printed,EV&&EV.last]);if(sig===ACTSIG&&$("actjobbox"))return;ACTSIG=sig;
+  var rows=[["Who",team.map(function(m){return E(kidOf(m).icon)+' '+esc(kidOf(m).name)}).join(" + ")]];
+  if(a){rows.push(["Started",tm(a.ts)+' · <span class="cdu2" data-since="'+a.ts+'"></span> so far'+(a.notimer?' · timer off':'')]);
+    var ex=expectFor(S,team[0],cid,team);if(ex)rows.push(["Expected","about "+Math.round(ex)+" min"]);if(a.round)rows.push(["Round",a.round]);
+    if(a.rework&&a.rework.feedback)rows.push(["Sent back","🔁 “"+esc(a.rework.feedback)+"”"])}
+  if(r)rows.push(["Reported",tm(r.ts)+' by '+esc(kidOf(r.kid).name)+(r.ask!=null?' · asks '+r.ask+' ⭐':'')+' · '+(r.status==="pending"?"waiting for you":r.status)]);
+  rows.push(["Stars",split&&Object.keys(split).length?"deal: "+Object.keys(split).map(function(m){return esc(kidOf(m).name)+" "+split[m]}).join(" + "):(c.points==null?"you set them at inspection":c.points+" ⭐")]);
+  if(c.desc)rows.push(["About",esc(c.desc)]);
+  var h='<h2 class="h2b">'+team.map(function(m){return E(kidOf(m).icon)}).join("")+' '+E(c.icon)+' '+esc(c.name)+'</h2><div id="actjobbox"><table style="width:100%;border-collapse:collapse">'+
+    rows.map(function(x){return '<tr><td class="mute" style="padding:4px 10px 4px 0;vertical-align:top;white-space:nowrap">'+x[0]+'</td><td style="padding:4px 0">'+x[1]+'</td></tr>'}).join("")+'</table>';
+  if(EV&&EV.chores.indexOf(cid)>=0){
+    var start=a?a.ts:(r.started||r.ts-3600),pt=Math.max.apply(null,team.map(function(m){return (EV.printed||{})[m]||0})),printed=pt>=start-60,L=EV.last&&EV.last.ts>=start-60?EV.last:null,
+        delivered=r&&(r.delivered||r.status!=="pending"),judged=r&&r.status!=="pending";
+    var step=function(done,now,icon,title,detail){return '<div class="card row" style="align-items:flex-start;margin:6px 0;'+(now?'border:2px solid var(--acc,#326f69)':'')+'"><span style="font-size:22px">'+(done?"✅":now?"👉":"⬜")+'</span>'+
+      '<div style="flex:1"><b>'+icon+' '+title+'</b>'+(detail?'<div class="mute">'+detail+'</div>':'')+'</div></div>'};
+    var cur=!printed?1:!delivered?3:!judged?5:6;
+    h+='<h2 class="h2b" style="margin-top:14px">📋 Letter checklist</h2>'+
+      step(printed||!!r,cur===1&&!printed,"✍️","Write the letter",a?"started "+tm(a.ts):"")+
+      step(printed,cur===1,"🖨️","Print the envelope",printed?tm(pt)+(L?" · "+esc(kidOf(L.from).name)+" → "+esc(L.to||"")+(L.job?" · job "+esc(String(L.job).split("-").pop()):""):""):"on the kids' Hub: I'm done → Print the envelope")+
+      step(delivered,cur===3,"✉️","Fold the letter into the envelope, unsealed","so you can read it")+
+      step(delivered,cur===3,"📬","Hand it over",delivered?(r.delivered?"“"+esc(EV.handoff_done)+"” · "+tm(r.delivered):"reported before this step existed"):"a kid taps “"+esc(EV.handoff_done)+"” once it's there")+
+      step(judged,cur===5,"🔍","You read it and give the stars",judged?(r.status==="inspected"?"passed · "+(r.awarded||0)+" ⭐":r.status):(split&&Object.keys(split).length?"deal: "+Object.keys(split).map(function(m){return esc(kidOf(m).name)+" "+split[m]}).join(" + "):""))}
+  $("pmbody").innerHTML=h+'</div>'}
 function renderMostly(){var r=S.history.find(function(h){return h.id===MOSTLY});if(!r){closePM();return}var k=kidOf(r.kid);
   if($("mnow"))return;  // keep what the parent is typing
   $("pmbody").innerHTML='<h2 class="h2b">🧩 Mostly done</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><span class="mute">full job '+r.points+' ⭐</span></div>'+
@@ -399,16 +429,22 @@ function render(){
     var team=(r.team||[]).length>1?r.team:null,tn=team?team.map(function(x){return kidOf(x).name}).join(" + "):k.name;
     if(r.partial)took=' <span class="tag" style="background:#ede7f6;color:#4527a0">🙋 partly done — full job is '+(r.full_price==null?'?':r.full_price)+'⭐; it stays available</span>'+(r.worked?' · worked '+Math.round(r.worked/60)+' min':'');
     var split=team?' <span class="tag">👥 '+(r.split&&Object.keys(r.split).length?'deal: '+Object.keys(r.split).map(function(m){return kidOf(m).name+" "+r.split[m]}).join(", ")+', rest to the others':'shared equally')+'</span> <a href="#" data-split="'+r.id+'">edit split</a>':'';
-    ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
+    ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?(r.delivered?' <span class="tag clean">📬 handed over</span>':' <span class="tag warn">✉️ not handed over yet</span>'):'')+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
       (other?'<div class="row" style="margin-top:8px"><input class="lbl" placeholder="What did they do?" value="'+esc(r.note?r.note.charAt(0)+r.note.slice(1).toLowerCase():"")+'" style="flex:1"></div>':'')+
       (r.ask!=null?'<div class="mute" style="margin-top:4px">🙋 asks <b>'+r.ask+' ⭐</b> — go look, then settle</div>':'')+
+      (team?(function(){var sel=TSEL[r.id]=TSEL[r.id]||(function(){var o={},tot=fixed?(r.points||0):(r.ask||0);
+          team.forEach(function(m,i){o[m]=r.split&&r.split[m]!=null?+r.split[m]:Math.floor(tot/team.length)+(i<tot%team.length?1:0)});return o})();
+        return team.map(function(m){return '<div class="chips tsel" data-m="'+m+'"><span style="min-width:90px;display:inline-block">'+E(kidOf(m).icon)+' '+esc(kidOf(m).name)+'</span>'+
+            [0,1,2,3,4,5,6,8,10].map(function(n){return '<button class="'+(sel[m]===n?"ok":"")+'" data-tp="'+n+'">'+(sel[m]===n?"✓ ":"")+n+'</button>'}).join("")+'</div>'}).join("")+
+          '<div class="chips"><button class="ok" data-tpass="1">✓ Pass: '+team.map(function(m){return esc(kidOf(m).name)+' '+sel[m]}).join(' + ')+'</button><button class="no" data-x="1">Not yet…</button></div>'})():
       '<div class="chips">'+[0,1,2,3,4,5,6,8,10].map(function(n){var on=(fixed&&n===r.points)||(r.ask!=null&&n===r.ask);return'<button class="'+(on?"ok":"")+'" data-p="'+n+'">'+(on?"✓ ":"")+n+'</button>'}).join("")+
-      '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>'+
+      '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>')+
       (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
-      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
+      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
   $("pcount").textContent=pend.length;$("pendwrap").style.display=pend.length?"":"none";
   $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
   document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
+  document.querySelectorAll("[data-chk]").forEach(function(b){b.onclick=function(){ACTJOB={ref:b.dataset.chk};openPM("actjob")}});
   document.querySelectorAll("[data-split]").forEach(function(a){a.onclick=function(e){e.preventDefault();var r=S.history.find(function(h){return h.id===a.dataset.split});if(!r)return;
     var sp={};(r.team||[]).forEach(function(m){var v=prompt("Points for "+kidOf(m).name+" (blank = share the rest)",r.split&&r.split[m]!=null?r.split[m]:"");if(v!==null&&v!=="")sp[m]=+v});
     post("/api/split",{ref:r.id,split:sp},"Split saved")}});
@@ -422,7 +458,12 @@ function render(){
   document.querySelectorAll('#pending .card:not([data-swap])').forEach(function(c){var id=c.dataset.r;
     c.querySelectorAll("[data-p]").forEach(function(b){b.onclick=function(){var l=c.querySelector(".lbl");
       post("/api/inspect",{ref:id,ok:true,points:+b.dataset.p,label:l?l.value:""},"Inspected ✓ +"+b.dataset.p)}});
-    c.querySelector(".cus").onkeydown=function(e){if(e.key==="Enter"&&this.value!==""){var l=c.querySelector(".lbl");post("/api/inspect",{ref:id,ok:true,points:+this.value,label:l?l.value:""},"Inspected ✓")}};
+    c.querySelectorAll(".tsel [data-tp]").forEach(function(b){b.onclick=function(){var m=b.parentNode.dataset.m,sel=TSEL[id];sel[m]=+b.dataset.tp;
+      b.parentNode.querySelectorAll("[data-tp]").forEach(function(x){var on=+x.dataset.tp===sel[m];x.className=on?"ok":"";x.textContent=(on?"✓ ":"")+x.dataset.tp});
+      var pb=c.querySelector("[data-tpass]");pb.textContent="✓ Pass: "+Object.keys(sel).map(function(k){return kidOf(k).name+" "+sel[k]}).join(" + ")}});
+    if(c.querySelector("[data-tpass]"))c.querySelector("[data-tpass]").onclick=function(){var sel=TSEL[id],l=c.querySelector(".lbl");
+      post("/api/inspect",{ref:id,ok:true,points:0,award:sel,label:l?l.value:""},"Passed: "+Object.keys(sel).map(function(k){return kidOf(k).name+" "+sel[k]}).join(", ")).then(function(){delete TSEL[id]})};
+    if(c.querySelector(".cus"))c.querySelector(".cus").onkeydown=function(e){if(e.key==="Enter"&&this.value!==""){var l=c.querySelector(".lbl");post("/api/inspect",{ref:id,ok:true,points:+this.value,label:l?l.value:""},"Inspected ✓")}};
     c.querySelector("[data-x]").onclick=function(){NOTYET=id;openPM("notyet")}});
   document.querySelectorAll("[data-mostly]").forEach(function(b){b.onclick=function(){MOSTLY=b.dataset.mostly;openPM("mostly")}});
   // adjust
@@ -457,6 +498,7 @@ function render(){
   if(PM==="noteform")renderNoteForm();
   if(PM==="chform")renderChoreForm();
   if(PM==="fixjob")renderFixJob();
+  if(PM==="actjob")renderActJob();
   if(PM==="notyet")renderNotYet();
   if(PM==="tour"&&!(document.activeElement&&document.activeElement.id==="tsl")&&!$("tsl"))renderTour();
   if(PM==="ct"){var hrs=[1,1.5,2,3,4];
@@ -544,11 +586,13 @@ function render(){
   var AC=S.active||{},seenA={},ah="";
   Object.keys(AC).forEach(function(k){var a=AC[k],team=a.team||[k],key=a.chore+":"+team.join(",");if(seenA[key])return;seenA[key]=1;
     var c=choreOf(a.chore),T=((S.typical||{})[a.chore]||{}).minutes||c.est_minutes,R=(S.records||{})[team.length>1?a.chore+"@"+team.length:a.chore];
-    ah+='<div class="card"><div class="row"><span class="big">'+team.map(function(x){return E(kidOf(x).icon)}).join("")+E(c.icon)+'</span><div style="flex:1"><b>'+team.map(function(x){return esc(kidOf(x).name)}).join(" + ")+'</b> · '+esc(c.name)+
-      (a.round?' <span class="tag">round '+a.round+'</span>':'')+(a.split&&Object.keys(a.split).length?' <span class="tag">deal: '+Object.keys(a.split).map(function(m){return esc(kidOf(m).name)+" "+a.split[m]}).join(", ")+'</span>':'')+
+    ah+='<div class="card actcard" data-act="'+k+'" style="cursor:pointer"><div class="row"><span class="big">'+team.map(function(x){return E(kidOf(x).icon)}).join("")+E(c.icon)+'</span><div style="flex:1"><b>'+team.map(function(x){return esc(kidOf(x).name)}).join(" + ")+'</b> · '+esc(c.name)+
+      (a.round?' <span class="tag">round '+a.round+'</span>':'')+(S.envelope&&S.envelope.chores.indexOf(a.chore)>=0?(function(){var pt=Math.max.apply(null,team.map(function(m){return (S.envelope.printed||{})[m]||0}));
+        return pt>=a.ts?' <span class="tag clean">🖨️ envelope printed '+new Date(pt*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'</span> <span class="tag warn">✉️ not handed over yet</span>':' <span class="tag warn">✍️ writing · envelope not printed yet</span>'})():'')+(a.split&&Object.keys(a.split).length?' <span class="tag">deal: '+Object.keys(a.split).map(function(m){return esc(kidOf(m).name)+" "+a.split[m]}).join(", ")+'</span>':'')+
       '<div class="mute">'+(a.notimer?'timer off':'⏱ <span class="cdu2" data-since="'+a.ts+'"></span>')+' · expected ~'+Math.round(expectFor(S,team[0],a.chore,team))+' min'+
       (a.rework&&a.rework.feedback?' · 🔁 "'+esc(a.rework.feedback)+'"':'')+'</div></div></div>'+(a.notimer?'':chartBar(S,team[0],a.chore,a.ts,team,false))+'</div>'});
   $("actbox").innerHTML=ah?'<h2 class="h2b">⏱ In progress</h2>'+ah:'';
+  document.querySelectorAll("#actbox .actcard").forEach(function(n){n.onclick=function(){ACTJOB={kid:n.dataset.act};openPM("actjob")}});
   var PZ=S.paused||{},pz="";
   Object.keys(PZ).forEach(function(k){var z=PZ[k],c=choreOf(z.chore),tm=(z.team||[k]).map(function(x){return E(kidOf(x).icon)+" "+esc(kidOf(x).name)}).join(" + ");
     pz+='<div class="card"><div class="row"><span class="big">'+E(c.icon)+'</span><div><b>'+tm+'</b> · '+esc(c.name)+' <span class="tag">⏸ partly done</span><div class="mute">saved '+ago(z.ts)+(z.notimer?'':' · worked '+Math.round(z.elapsed/60)+' min')+' · held until '+new Date(z.until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</div></div></div>'+

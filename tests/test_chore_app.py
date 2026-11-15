@@ -1186,5 +1186,20 @@ class Envelopes(Case):
         answers["job"] = "completed"
         self.assertEqual(self.e.status("Office-9", run), {"state": "done", "problem": None})
 
+
+    def test_a_letter_is_handed_over_after_its_report(self):
+        c = self.s.cfg(); c["chores"].append({"id": "letter", "name": "Letter", "icon": "1f48c", "points": 2, "shared": True})
+        self.s.save_cfg(c)
+        self.assertEqual(self.app.post("/api/envelope_delivered", {"kid": "max", "chore": "letter"})[0], 409)   # nothing waiting
+        code, r = self.app.post("/api/report", {"kid": "max", "chore": "letter", "feeling": "ok"})
+        self.assertNotIn("delivered", r["event"])
+        code, d = self.app.post("/api/envelope_delivered", {"kid": "max", "chore": "letter"})
+        self.assertEqual(code, 200, d)
+        rep = next(h for h in d["state"]["history"] if h.get("id") == r["event"]["id"])
+        self.assertTrue(rep["delivered"])
+        code, r2 = self.app.post("/api/report", {"kid": "ava", "chore": "letter", "feeling": "ok", "delivered": True})
+        self.assertTrue(r2["event"]["delivered"])                    # handed over before reporting
+        self.assertIn("handoff_done", self.app.state()["envelope"])
+
 if __name__ == "__main__":
     unittest.main()
