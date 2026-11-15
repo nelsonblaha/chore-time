@@ -258,7 +258,10 @@
       "from": "17:00",
       "until": "20:30",
       "min_block_min": 45,
-      "merge_gap_s": 180
+      "merge_gap_s": 180,
+      "reopens": [
+        "kitchen"
+      ]
     },
     "segment_lights": {
       "Kitchen": [

@@ -414,6 +414,29 @@ class Pilot:
                 self.log("return_lights_off", modes=D["ret_lit"])
             D["ret_since"], D["ret_lit"], D["ret_busy"] = 0, [], []
 
+    def dinner_reopens(self):
+        """A detected dinner (see dinner_eaten) makes the chosen jobs dirty that evening, e.g. the dining table,
+        so a kid can earn stars clearing up after it (vacuum.dinner.reopens). Once per evening."""
+        jobs = DINNER.get("reopens") or []
+        if not jobs:
+            return
+        n = datetime.fromtimestamp(time.time())
+        f_ = DINNER.get("from", "17:00")
+        start = n.replace(hour=int(f_[:2]), minute=int(f_[3:]), second=0, microsecond=0) + \
+            timedelta(minutes=float(DINNER.get("min_block_min", 20)))
+        key = n.strftime("%Y-%m-%d")
+        done = self.D.setdefault("dinner_reopened", {})
+        if n < start or done.get(key) or not self.dinner_eaten(n):
+            return
+        board = self.g["derive"]()["board"]
+        for cid in jobs:
+            if (board.get(cid) or {}).get("clean_until"):
+                self.g["append"]({"type": "reopen", "chore": cid, "by": "dinner", "note": "Dinner was eaten here tonight"})
+        done[key] = True
+        for k in sorted(done)[:-10]:
+            done.pop(k)
+        self.log("dinner_reopen", jobs=jobs)
+
     def night_carpet(self):
         """Carpet Boost (full suction on rugs) off at night, back on by day. Not an official integration entity:
         sent as the robot's own set_carpet_mode command, once per change (vacuum.night_carpet_boost_off)."""
@@ -458,6 +481,7 @@ class Pilot:
         incl = self.get(IN_CLEAN).get("state")
         self.track(vs, room, now)
         self.return_lights(vs, now)
+        self.dinner_reopens()
         ph = D["phase"]
         info = {}
         if ph == "idle":

@@ -525,6 +525,20 @@ class Vacuum(unittest.TestCase):
         self.assertFalse(va.dinner_from_rows(rows((T(16, 1), T(16, 51))), *args))                     # too early
         self.assertFalse(va.dinner_from_rows(rows(*[(T(17, m), T(17, m + 4)) for m in range(0, 60, 10)]), *args))  # blips
 
+    def test_a_detected_dinner_makes_the_table_dirty_once(self):
+        va, appended = self.va, []
+        va.DINNER = dict(va.DINNER, reopens=["dining_table"], **{"from": "17:00", "min_block_min": 45})
+        self.p.g["append"] = appended.append
+        self.board["dining_table"] = {"clean_until": 1, "last_clean": 1}
+        self.p.dinner_eaten = lambda ref: True
+        self.at(17, 30)
+        self.p.dinner_reopens()
+        self.assertEqual(appended, [])                                   # a 45-min dinner can't be over yet
+        self.at(19, 0)
+        self.p.dinner_reopens()
+        self.p.dinner_reopens()
+        self.assertEqual([e["chore"] for e in appended], ["dining_table"])   # once per evening
+
     def test_a_passed_tidy_still_triggers_a_clean(self):
         self.p.D["visits"]["Family Room"] = self.now[0] - 3600
         self.board["family_room"] = {"clean_until": 1, "last_clean": self.now[0] - 60}
