@@ -3751,6 +3751,9 @@ def watch_grocy():
         time.sleep(600)
 
 
+RELAY_PASS = ("nonce", "status")   # small answers an HA-served page needs back (the grown-up watch check)
+
+
 def watch_ha_actions():
     """HA-served inspection page writes {"a":..,"n":nonce,...} into input_text.chore_action."""
     try:
@@ -3788,7 +3791,8 @@ def watch_ha_actions():
                                                  method="POST")
                     try:
                         res = json.loads(urllib.request.urlopen(req, timeout=10).read())
-                        GLOBAL_LAST["r"] = {"n": n, "ok": bool(res.get("ok")), "error": res.get("error")}
+                        GLOBAL_LAST["r"] = {"n": n, "ok": bool(res.get("ok")), "error": res.get("error"),
+                                            **{k: res[k] for k in RELAY_PASS if k in res}}
                     except urllib.error.HTTPError as e:
                         GLOBAL_LAST["r"] = {"n": n, "ok": False, "error": json.loads(e.read() or b"{}").get("error", str(e.code))}
                     ilog({"src": "ha_page", "action": a, "body": msg, "ha_user": user, "result": GLOBAL_LAST["r"]})

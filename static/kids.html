@@ -325,7 +325,7 @@ if(HA_MODE){
     var n=Math.random().toString(36).slice(2,9),v=JSON.stringify(Object.assign({a:path.replace("/api/",""),n:n},body));
     function send1(val,nn){return hass().callService("input_text","set_value",{entity_id:"input_text.chore_action",value:val}).then(function(){
       return new Promise(function(res){var t=0;(function w(){var h=hass(),a=h&&h.states["sensor.chore_state"]&&h.states["sensor.chore_state"].attributes;
-        if(a&&a.last_result&&a.last_result.n===nn){var st=haState();return res({ok:a.last_result.ok,error:a.last_result.error,state:st})}
+        if(a&&a.last_result&&a.last_result.n===nn){var st=haState(),lr=a.last_result;return res({ok:lr.ok,error:lr.error,state:st,nonce:lr.nonce,status:lr.status})}
         if(++t>60)return res({ok:false,error:"no answer"});setTimeout(w,250)})()})})}
     if(v.length<=255)return send1(v,n);
     var parts=[],rest=v;while(rest.length){var k=Math.min(rest.length,200),pp;
@@ -338,7 +338,7 @@ if(HA_MODE){
 }
 if(LOCKED)document.documentElement.classList.add("locked");
 var lastSig=null;
-function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");location.href="/inspect?hub=1&by="+s.adult_go+"&v="+Date.now();return}   // approved on the watch, even if this page reloaded meanwhile
+function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");location.href=adultPage(s.adult_go);return}   // approved on the watch, even if this page reloaded meanwhile
   var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
   if(inspModalRef){var ir=S.history.find(function(h){return h.id===inspModalRef});
     if(!ir||ir.status!=="pending"){inspModalRef=null;if($("m").classList.contains("on"))closeModal()}}
@@ -860,11 +860,13 @@ function pickGoal(){L("goal_open");var ch=(S.goals||{})[kid],b=S.balance[kid];
 function TVL(){var T=(S&&S.tv&&S.tv.tvs)||{};return Object.keys(T).map(function(id){return {id:id,name:T[id].short||T[id].name,icon:T[id].icon||"1f4fa"}})}
 function tvShort(id){var t=((S&&S.tv&&S.tv.tvs)||{})[id];return t?(t.short||t.name):id}
 function lead(){var I=(S&&S.config.inspectors)||[];return I.find(function(i){return i.id===S.lead_adult})||I[0]||{name:"Grown-up",icon:"1f9d1"}}
+function adultPage(by){   // the grown-ups' page: the Hub's own, or (inside Home Assistant) the HA copy, which comes back to this tab
+  return (HA_MODE?"/local/chore-inspect.html?back=kids&":"/inspect?")+"hub=1&by="+by+"&v="+Date.now()}
 function adultRequest(){L("adult_request");
   modal('<div class="big">'+E("231a")+'</div><div class="q">'+lead().name+', check your watch!</div><div class="q" style="font-size:24px;opacity:.7" id="adst">Waiting for "It\'s me"…</div>');
   api("/api/adult_request",{}).then(function(r){if(!r.ok){$("adst").textContent="Could not reach the watch";return}var n=0;
     (function poll(){if(!$("m").classList.contains("on"))return;api("/api/adult_status",{nonce:r.nonce}).then(function(st){
-      if(st.status==="ok"){L("adult_ok");location.href="/inspect?hub=1&by="+(S.lead_adult||"")+"&v="+Date.now();return}
+      if(st.status==="ok"){L("adult_ok");location.href=adultPage(S.lead_adult||"");return}
       if(st.status==="no"||st.status==="timeout"){L("adult_"+st.status);modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(st.status==="no"?lead().name+" said no.":"No answer.")+'</div>');addOk();return}
       if(++n<70)setTimeout(poll,2000)})})()})}
 /* --- partly done: a grown-up decides the points, the chore stays available --- */

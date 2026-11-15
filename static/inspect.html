@@ -201,7 +201,8 @@ if(HA_MODE){
 }
 if(ON_HUB){if(qby)me=qby;
   document.addEventListener("DOMContentLoaded",function(){});
-  var BACK=((location.search.match(/[?&]back=([a-z]+)/)||[])[1]==="now")?"/now":"/";   // the kitchen Hub's grown-up board comes back to itself
+  var BK=(location.search.match(/[?&]back=([a-z]+)/)||[])[1];
+  var BACK=BK==="now"?"/now":BK==="kids"&&HA_MODE?"/local/chore-kids.html":"/";   // the kitchen Hub's grown-up board comes back to itself; HA's Kids tab too
   var hubIdle=null;function hubPoke(){clearTimeout(hubIdle);hubIdle=setTimeout(function(){location.href=BACK+"?v="+Date.now()},300000)}
   document.addEventListener("click",hubPoke,true);document.addEventListener("touchstart",hubPoke,{passive:true});hubPoke();
   setTimeout(function(){var d=document.createElement("button");d.textContent=BACK==="/now"?"✅ Done":"✅ Done — back to kids";d.className="ok";

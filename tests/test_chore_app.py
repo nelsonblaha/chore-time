@@ -1281,5 +1281,23 @@ class PutOnClothes(Case):
         self.assertEqual(self.app.post("/api/close_od", {"chore": "wash", "by": "jordan"})[0], 200)
         self.assertFalse(self.app.state()["board"]["wash"]["opened"])
 
+
+class GrownUpFromHA(unittest.TestCase):
+    """The grown-up watch check from the kids' page inside Home Assistant (a parent's own phone or tablet)."""
+
+    def test_relay_hands_back_the_request_id(self):
+        src = (REPO / "server.py").read_text()
+        self.assertIn('RELAY_PASS = ("nonce", "status")', src)
+        self.assertIn("for k in RELAY_PASS if k in res", src)
+        kids = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("nonce:lr.nonce,status:lr.status", kids)
+
+    def test_approval_opens_the_ha_copy_and_comes_back(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        self.assertIn('HA_MODE?"/local/chore-inspect.html?back=kids&"', kids)
+        self.assertNotIn('location.href="/inspect?', kids)
+        self.assertIn('BK==="kids"&&HA_MODE?"/local/chore-kids.html"', (REPO / "static" / "inspect.html").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
