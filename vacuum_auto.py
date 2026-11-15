@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 
 # Filled from house.json "vacuum" by configure(); see example-config/house.json.
 VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = ACTIVE = UPSTAIRS = CLEAN_SCRIPT = None
+REQUESTS = None
 MAP_FLAG = 0
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
@@ -32,6 +33,8 @@ def configure(v):
     ENABLE, ACTIVE = v["enable"], v["active"]
     UPSTAIRS = v.get("nobody_upstairs")      # "people on the other floor" sensor (off = nobody there 30 min)
     CLEAN_SCRIPT, MAP_FLAG = v.get("clean_script", "script.vacuum_clean_rooms"), v.get("map_flag", 0)
+    global REQUESTS
+    REQUESTS = v.get("room_requests")
     # a segment may span several jobs ("chores": [...]): it goes only when ALL are presumed clean
     SEG_CHORE = {seg: (x.get("chores") or [x["chore"]]) for seg, x in (v.get("segments") or {}).items() if x.get("chore") or x.get("chores")}
     global SEGMENTS
@@ -235,6 +238,24 @@ class Pilot:
     def eligible(self):
         return [seg for seg, d in self.segment_status().items() if d["eligible"]]
 
+    def room_requests(self):
+        """A persisted, explicit request is satisfied only by a later real visit.
+
+        HA owns the small request helper. We never clear it here, avoiding a
+        read/clear race with a person queuing another room during this tick.
+        """
+        if not REQUESTS:
+            return {}
+        try:
+            values = json.loads(self.get(REQUESTS).get("state") or "{}")
+            if not isinstance(values, dict):
+                return {}
+            return {seg: ts for seg, ts in values.items() if seg in SEGMENTS
+                    and type(ts) in (int, float) and 0 < ts <= time.time() + 5
+                    and self.D["visits"].get(seg, 0) < ts}
+        except (TypeError, ValueError):
+            return {}
+
     def segment_status(self):
         """Per robot segment: the autopilot's real decision and why (for dashboards).
         Goals (house.json vacuum.schedule): some rooms nightly (after a time; optionally only if dinner was eaten
@@ -246,6 +267,7 @@ class Pilot:
         chs = {c["id"]: c for c in st.get("config", {}).get("chores", [])}
         busy = {a.get("chore") for a in st["active"].values()} | {z.get("chore") for z in st["paused"].values()}
         now = time.time()
+        requests = self.room_requests()
         out = {}
         for seg in list(dict.fromkeys(SEGMENTS + list(SEG_CHORE) + list(SCHEDULE))):
             cids = list(SEG_CHORE.get(seg) or [])
@@ -255,6 +277,8 @@ class Pilot:
             last = self.D["visits"].get(seg, 0)
             sch = SCHEDULE.get(seg) or {}
             d = {"chores": cids, "rooms": rooms, "last_robot": last, "mop": seg in MOP, "eligible": False}
+            d["requested"] = seg in requests
+            d["blocked"] = False
             xs = [b.get(c) or {} for c in cids]
             tidied = max([x.get("last_clean") or 0 for x in xs] or [0])
             d["tidied"] = tidied
@@ -262,6 +286,9 @@ class Pilot:
             d["next_due"] = last + every if last else now
             if any(c in busy for c in cids) or any(x.get("pending_by") for x in xs):
                 d["why"] = "a kid's job here is in progress or waiting for a check"
+                d["blocked"] = True
+            elif seg in requests:
+                d["eligible"], d["why"] = True, "requested: clean when vacant"
             elif sch.get("nightly_after") and self.nightly_due(sch, last):
                 d["eligible"], d["why"] = True, "nightly" + (" (dinner was eaten here)" if sch.get("needs_dinner") else "")
             elif not last or now - last >= every:
@@ -591,6 +618,7 @@ class Pilot:
     def publish(self, info, vs, room):
         D = self.D
         attrs = {"friendly_name": "Vacuum autopilot", "icon": "mdi:robot-vacuum",
+                 "vacuum_entity": VAC, "map_flag": MAP_FLAG, "room_request_entity": REQUESTS,
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
                  "visits": {k: datetime.fromtimestamp(t).strftime("%a %H:%M") for k, t in D["visits"].items()},
