@@ -911,6 +911,64 @@ class HouseJobsApi(Case):
         self.assertEqual(sent[0][2]["name"], "Fix the gate")
         self.assertEqual(self.s.GUARD["house_tasks"][0]["name"], "Fix the gate")
 
+
+# ---------------------------------------------------------------- two households
+def two_houses():
+    c = base_config()
+    c["households"] = [{"id": "dad", "name": "Dad's house"}, {"id": "mom", "name": "Mom's house"}]
+    c["kids"][2]["where"] = {"entity": "input_boolean.casey_home", "on": "dad", "off": "mom"}
+    c["chores"] += [{"id": "homework", "name": "Homework", "icon": "1f4da", "points": 3, "household": "any", "only": ["zoe"]},
+                    {"id": "mom_dishes", "name": "Dishes", "icon": "1f37d", "points": 2, "household": "mom"}]
+    c["rewards"] += [{"id": "mom_movie", "name": "Movie night at Mom's", "icon": "1f3ac", "cost": 4, "household": "mom"}]
+    return c
+
+
+class TwoHouseholds(Case):
+    """A child who lives in two homes: her board follows where she is; one star balance across both."""
+    config = two_houses()
+
+    def at(self, house):
+        self.s.GUARD["kid_where"] = {"zoe": house}
+
+    def test_jobs_and_rewards_follow_the_house_she_is_at(self):
+        self.at("mom")
+        st = self.app.state()
+        self.assertEqual(st["kid_where"]["zoe"], "mom")
+        self.assertEqual(st["kid_where"]["ava"], "dad")                      # no 'where': the default (first) house
+        self.assertEqual(self.app.post("/api/start", {"kid": "zoe", "chore": "kitchen"})[0], 409)   # Dad's kitchen
+        self.assertEqual(self.app.post("/api/start", {"kid": "zoe", "chore": "mom_dishes"})[0], 200)
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "mom_dishes"})[0], 409)  # Ava is at Dad's
+
+    def test_homework_counts_at_either_house_and_stars_are_one_balance(self):
+        for house in ("mom", "dad"):
+            self.at(house)
+            self.app.pass_report("zoe", "homework", points=3)
+        self.assertEqual(self.app.state()["balance"]["zoe"], 6)
+        self.at("mom")
+        self.assertEqual(self.app.post("/api/spend", {"kid": "zoe", "reward": "show"})[0], 409)       # Dad's TVs
+        self.assertEqual(self.app.post("/api/spend", {"kid": "zoe", "reward": "mom_movie"})[0], 200)
+
+    def test_a_parents_ha_login_acts_only_for_her_own_child(self):
+        self.s.HA["user_kids"] = {"casey-ha-user": ["zoe"]}
+        self.at("mom")
+
+        def as_casey(path, body):
+            req = urllib.request.Request(self.app.base + path, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "X-HA-User": "casey-ha-user"})
+            try:
+                return urllib.request.urlopen(req, timeout=10).status
+            except urllib.error.HTTPError as e:
+                return e.code
+        self.assertEqual(as_casey("/api/start", {"kid": "max", "chore": "kitchen"}), 403)
+        self.assertEqual(as_casey("/api/start", {"kid": "zoe", "chore": "mom_dishes"}), 200)
+        self.s.HA.pop("user_kids")
+
+    def test_where_comes_from_home_assistant(self):
+        zoe = self.s.cfg()["kids"][2]
+        for state, house in (("on", "dad"), ("off", "mom"), ("unavailable", None)):
+            self.app.set("input_boolean.casey_home", state)
+            self.assertEqual(self.s.where_of(zoe, "t"), house)
+
 # ---------------------------------------------------------------- pages
 class Pages(unittest.TestCase):
     def test_no_unwrapped_string_plus_or(self):

@@ -392,6 +392,46 @@ def live_cfg(c, board):
     return dict(c, chores=out)
 
 
+def home_of(c):
+    """Households (optional, chores.json "households"): the first is the default home of every job and reward."""
+    hh = c.get("households") or []
+    return hh[0]["id"] if hh else None
+
+
+def kid_where(c, kid):
+    """Which household a kid is at now: kids[].where = {"entity", "on": household, "off": household} (Home Assistant),
+    refreshed by watch_kid_where; without it, the default household."""
+    return ((GUARD.get("kid_where") or {}) if "GUARD" in globals() else {}).get(kid) or home_of(c)
+
+
+def is_here(item, c, kid):
+    """A job or reward belongs to one household ("household": id, default the first) or to "any" (homework...)."""
+    if not c.get("households"):
+        return True
+    hh = item.get("household") or home_of(c)
+    return hh == "any" or hh == kid_where(c, kid)
+
+
+def where_of(k, tok):
+    """kids[].where = {"entity", "on": household, "off": household}; unknown/unavailable -> None (the default)."""
+    w = k.get("where") or {}
+    st = (ha_get(w["entity"], tok) or {}).get("state")
+    return w.get("on") if st in ("on", "home", "true") else w.get("off") if st in ("off", "not_home", "false") else None
+
+
+def watch_kid_where():
+    while True:
+        try:
+            c, tok = cfg(), ha_token()
+            out = {k["id"]: where_of(k, tok) for k in c["kids"] if (k.get("where") or {}).get("entity")}
+            if out != GUARD.get("kid_where"):
+                GUARD["kid_where"] = out
+                after_change()
+        except Exception as ex:  # noqa: BLE001
+            print("kid where error", ex, flush=True)
+        time.sleep(30)
+
+
 BED_END_H = int((HOUSE.get("hours") or {}).get("bed_end", 6))   # bedtime holds until then; jobs held at bedtime resume
 
 
@@ -795,7 +835,8 @@ def derive():
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
-            "history": history[:200], "now": time.time()}
+            "history": history[:200], "now": time.time(),
+            "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]}}
 
 
 def push_ha(state):
@@ -876,7 +917,11 @@ def push_state_sensor(state=None, last_result=None):
              "achievements": state.get("achievements"), "streak": state.get("streak"), "chore_mode": state.get("chore_mode"),
              "pending_points": state["pending_points"], "board": state["board"], "history": hist,
              "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"),
-             "reward_ready": state.get("reward_ready"), "timers": state.get("timers")}
+             "reward_ready": state.get("reward_ready"), "timers": state.get("timers"),
+             # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
+             "awards": state.get("awards"), "goals": state.get("goals"), "favorite": state.get("favorite"),
+             "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "version": state.get("version"),
+             "households": state.get("households"), "kid_where": state.get("kid_where")}
     if last_result is not None:
         attrs["last_result"] = last_result
     elif GLOBAL_LAST.get("r"):
@@ -1306,6 +1351,16 @@ class H(BaseHTTPRequestHandler):
         insp = {x["id"] for x in c["inspectors"]}
         p = self.path
         st = derive()
+        allowed_kids = (HA.get("user_kids") or {}).get(self.headers.get("X-HA-User") or "")
+        if allowed_kids is not None and p != "/api/log":   # e.g. a parent's HA login may act only for their own child
+            acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
+            if any(k and k not in allowed_kids for k in acting):
+                return self.send(403, {"error": "not your kid"})
+        if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
+                and not is_here(chores[b["chore"]], c, b["kid"]):
+            return self.send(409, {"error": "that one is at the other house"})
+        if p == "/api/spend" and b.get("kid") and b.get("reward") in rewards and not is_here(rewards[b["reward"]], c, b["kid"]):
+            return self.send(409, {"error": "that reward is at the other house"})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \
                 and not (chores.get(b.get("chore") or (st["paused"].get(b.get("kid")) or {}).get("chore")) or {}).get("bedtime_ok"):
             # after bedtime only tooth-brushing; jobs and rewards wait for the morning (6 AM)
@@ -3390,6 +3445,8 @@ def start_modules():
         go("ha-actions", watch_ha_actions)        # parent actions from HA dashboards (input_text relay)
         go("ha-events", watch_ha_events)          # phone/watch notification buttons
         go("home-days", watch_home_days)          # streaks skip days a kid was away
+        if any(k.get("where") for k in cfg()["kids"]):
+            go("kid-where", watch_kid_where)      # which household each kid is at (two-household families)
         if TVS or HUBS:
             go("tv-guard", watch_tvs)             # chore time, TV locks, Hub keeper, bedtime holds
         if LAUNCHERS:

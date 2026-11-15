@@ -222,6 +222,7 @@ canvas#fx{position:absolute;inset:0;pointer-events:none;z-index:30}
   .kidcard .face{font-size:96px}#pick .row{flex-direction:column}
   .chores{grid-template-columns:repeat(3,1fr)}
 }
+html.locked #exit,html.locked #home{display:none!important}
 </style></head>
 <body>
 <div id="bed" style="display:none;position:fixed;inset:0;z-index:60;background:radial-gradient(circle at 50% 30%,#1b2a5e,#070b1f);color:#fff;text-align:center;flex-direction:column;align-items:center;justify-content:center;gap:2vh"></div>
@@ -307,6 +308,32 @@ hydrate();
 var S=null,kid=null,idleT=null,seen={},busy=false,page=0;
 function $(id){return document.getElementById(id)}
 function api(path,body){return fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json()})}
+/* Inside Home Assistant (served from /local/, e.g. a child's own tab at their other home): state comes from
+   sensor.chore_state and actions go through the input_text relay, signed by the viewer's HA login; the server only
+   lets that login act for the children it is allowed (home_assistant.user_kids). ?kid=<id> locks the screen to one child. */
+var HA_MODE=location.pathname.indexOf("/local/")===0,LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search);
+if(HA_MODE){
+  var hass=function(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}};
+  var haState=function(){var h=hass(),st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));
+    a.whatsnew=null;a.whatsnew_all=[];a.news_unseen=false;a.announce=[];a.announce_all=[];a.kid_open=a.kid_open||{};a.news_seen_kids={};a.ann_seen_kids={};
+    return a};
+  api=function(path,body){
+    if(!body)return new Promise(function(res,rej){var t=0;(function w(){var st=haState();if(st)return res(st);if(++t>40)return rej("no sensor.chore_state");setTimeout(w,250)})()});
+    var n=Math.random().toString(36).slice(2,9),v=JSON.stringify(Object.assign({a:path.replace("/api/",""),n:n},body));
+    function send1(val,nn){return hass().callService("input_text","set_value",{entity_id:"input_text.chore_action",value:val}).then(function(){
+      return new Promise(function(res){var t=0;(function w(){var h=hass(),a=h&&h.states["sensor.chore_state"]&&h.states["sensor.chore_state"].attributes;
+        if(a&&a.last_result&&a.last_result.n===nn){var st=haState();return res({ok:a.last_result.ok,error:a.last_result.error,state:st})}
+        if(++t>60)return res({ok:false,error:"no answer"});setTimeout(w,250)})()})})}
+    if(v.length<=255)return send1(v,n);
+    var parts=[],rest=v;while(rest.length){var k=Math.min(rest.length,200),pp;
+      while(true){pp=JSON.stringify({a:"_part",n:"",id:n,i:parts.length,of:0,d:rest.slice(0,k)});if(pp.length<=240||k<10)break;k=Math.floor(k*0.8)}
+      parts.push(rest.slice(0,k));rest=rest.slice(k)}
+    var chain=Promise.resolve({ok:true});parts.forEach(function(d,i){chain=chain.then(function(r){if(!r.ok)return r;var nn=i===parts.length-1?n:n+"p"+i;
+      return send1(JSON.stringify({a:"_part",n:nn,id:n,i:i,of:parts.length,d:d}),nn)})});
+    return chain};
+  flushL=function(){_q=[]};                                            // usage logs are for the Hubs
+}
+if(LOCKED)document.documentElement.classList.add("locked");
 var lastSig=null;
 function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");location.href="/inspect?hub=1&by="+s.adult_go+"&v="+Date.now();return}   // approved on the watch, even if this page reloaded meanwhile
   var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
@@ -334,7 +361,9 @@ function notes(t){ // a grown-up's multi-line note -> one bullet per line (kids 
 function stars(n){if(n==null)return E("2753");if(n>5)return '<span style="font-size:22px;font-weight:900;letter-spacing:0">'+n+'</span> '+E("2b50");var s="";for(var i=0;i<n;i++)s+=E("2b50");return s}
 function inTeam(h,k){return h.kid===k||(h.team||[]).indexOf(k)>=0}
 function reports(k){return S.history.filter(function(h){return h.type==="report"&&inTeam(h,k)})}
-function goal(){return Math.max.apply(null,S.config.rewards.map(function(r){return r.cost}))}
+function here(x,k){var H=S.households||[];if(!H.length)return true;var hh=x.household||H[0].id;return hh==="any"||hh===(S.kid_where||{})[k||kid]}   // two-household families
+function houseName(k){var H=S.households||[],w=(S.kid_where||{})[k||kid],h=H.find(function(x){return x.id===w});return h&&H.length>1&&w!==H[0].id?h.name:""}
+function goal(){return Math.max.apply(null,S.config.rewards.filter(function(r){return here(r)}).map(function(r){return r.cost}).concat([1]))}
 
 // what everyone is doing, on the login screen (otherwise you only see a kid's show time on their own screen)
 function actLines(who){var out=[],now=Date.now()/1000,CH=function(id){return S.config.chores.find(function(c){return c.id===id})||{icon:"2b50",name:id}};
@@ -390,7 +419,7 @@ function render(){
 
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
-  $("kface").innerHTML=E(k.icon);$("kname").innerHTML=k.name+" "+trophies(kid);
+  $("kface").innerHTML=E(k.icon);$("kname").innerHTML=k.name+" "+trophies(kid)+(houseName()?'<span style="font-size:.55em;opacity:.75;margin-left:8px">'+E("1f3e0")+' '+houseName()+'</span>':'');
   $("newsbtn").innerHTML=E("1f4f0");$("newsbtn").onclick=openNews;
   var SK=(S.streak||{})[kid]||{current:0};
   $("streak").innerHTML=E("1f525")+' <b>'+(SK.current||0)+'</b>'+(SK.today?'':'<span class="sk2">Do a job today!</span>');$("streak").className="streak"+(SK.today?"":" atrisk")+(SK.current?"":" cold");
@@ -435,7 +464,7 @@ function renderKid(){
   var busyNow=!!(S.active||{})[kid];
   $("chores").classList.toggle("two",busyNow);$("barlbl").style.display=busyNow?"none":"";
   // don't show chores a kid can't do right now (presumed clean, someone else waiting on it, someone else's claim)
-  var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.hidden||(c.only&&c.only.indexOf(kid)<0))return false;
+  var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.hidden||(c.only&&c.only.indexOf(kid)<0)||!here(c))return false;
     if(bd.clean_until)return false;
     if((bd.pending_by||[]).length&&!c.shared&&bd.pending_by.indexOf(kid)<0)return false;
     if(c.slot&&bd.claimed_by&&bd.claimed_by!==kid)return false;
@@ -486,7 +515,7 @@ function renderKid(){
         return '<span class="cdk" data-ready="'+m.g.until+'">'+Math.floor(lft/60)+":"+("0"+Math.floor(lft%60)).slice(-2)+'</span> left<div class="cbar"><div class="cfill drain" data-ready="'+m.g.until+'" data-tot="'+tot+'" style="width:'+Math.min(100,100*lft/tot).toFixed(1)+'%"></div></div>'})())+'</div>'+
       '<div class="btn" data-mv="'+m.g.id+'" data-from="'+m.tid+'" style="font-size:20px;font-weight:900;padding:8px 12px">'+E("1f504")+' Switch TV</div></div>'});
 
-  var rw="";S.config.rewards.forEach(function(r){var pc=Math.min(100,Math.max(0,b/r.cost*100));
+  var rw="";S.config.rewards.filter(function(r){return here(r)}).forEach(function(r){var pc=Math.min(100,Math.max(0,b/r.cost*100));
     if(RR[r.id]&&RR[r.id]>S.now){var tot=((r.minutes||0)+(r.break_min||0))*60||1800;
       var lft=Math.max(0,RR[r.id]-Date.now()/1000),pct=Math.min(100,100*(1-lft/tot)).toFixed(1);
       rw+='<div class="rw cool" data-r="'+r.id+'"><div class="ic" style="opacity:.6">'+E(r.icon)+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.15">'+E("1f512")+' '+r.name+
@@ -1015,7 +1044,8 @@ function addOk(after){ // every message waits for a tap: kids read slowly
   $("okbtn").onclick=function(e){e.stopPropagation();closeModal();if(after)after()}}
 function modal(h){$("mbox").innerHTML='<div class="mx" id="mx" aria-label="Close">&times;</div>'+h;$("mx").onclick=function(e){e.stopPropagation();closeModal()};$("m").classList.add("on");poke()}
 function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.chores:[]).forEach(function(c){delete c._note});$("m").classList.remove("on")}
-function goHome(why){L("go_home",{why:typeof why==="string"?why:"tap"});$("awards").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
+function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
+  L("go_home",{why:typeof why==="string"?why:"tap"});$("awards").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
 $("exit").onclick=function(){L("hub_exit");$("exit").style.background="#ffe082";$("exit").innerHTML=E("1f44b")+" Bye!";api("/api/exit",{})};
 var IDLE_MS=300000; // back to "Who are you?" after 5 min untouched
