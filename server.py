@@ -363,6 +363,9 @@ def shares(r, total):
     return {m: out.get(m, 0) for m in team}
 
 
+PAUSE_DAYS = 7   # "finish later" keeps a job this many days (kids may be at the other house in between)
+
+
 def next_slot(ch):
     """the upcoming service this slot chore is for (epoch); the service day counts until midnight"""
     from datetime import datetime, timedelta
@@ -776,10 +779,17 @@ def derive():
             for m, v in shares(r, r.get("points")).items():
                 if m in pend:
                     pend[m] += v
-    active, paused = {}, {}
+    active, shelf = {}, {}   # shelf: each kid's jobs saved for later, newest last (starting another job keeps them)
+
+    def unshelve(k, chore=None):   # drop a kid's saved job: the newest, or the one for this chore
+        st_ = shelf.get(k) or []
+        hit = next((z for z in reversed(st_) if chore is None or z["chore"] == chore), None)
+        if hit:
+            st_.remove(hit)
+        return hit
     for e in evs:
         if e["type"] == "start":
-            paused.pop(e["kid"], None)
+            unshelve(e["kid"], e["chore"])
             active[e["kid"]] = {"chore": e["chore"], "ts": e["ts"], "team": [e["kid"]]}
         elif e["type"] == "team":
             lead = next((m for m in e["members"] if active.get(m, {}).get("chore") == e["chore"]), None)
@@ -792,22 +802,38 @@ def derive():
             for m in gone.get("team") or [e["kid"]]:
                 if active.get(m, {}).get("chore") == gone["chore"]:
                     active.pop(m, None)
-            paused[e["kid"]] = {"chore": e["chore"], "elapsed": e["elapsed"], "team": e.get("team") or [e["kid"]],
-                                "notimer": e.get("notimer"), "ts": e["ts"], "until": e["until"],
-                                **{k: gone[k] for k in ("split", "round", "rework") if gone.get(k)}}   # a sent-back team job keeps its deal
-        elif e["type"] == "resume" and e["kid"] in paused:
-            pz = paused.pop(e["kid"])
+            unshelve(e["kid"], e["chore"])
+            shelf.setdefault(e["kid"], []).append(
+                {"chore": e["chore"], "elapsed": e["elapsed"], "team": e.get("team") or [e["kid"]],
+                 "notimer": e.get("notimer"), "ts": e["ts"], "until": e["until"],
+                 **{k: gone[k] for k in ("split", "round", "rework", "title") if gone.get(k)}})   # a sent-back team job keeps its deal
+        elif e["type"] == "resume" and shelf.get(e["kid"]):
+            pz = unshelve(e["kid"])
             for m in pz["team"]:
-                active[m] = {"chore": pz["chore"], "ts": e["ts"] - pz["elapsed"], "team": list(pz["team"]), "notimer": pz.get("notimer")}
+                active[m] = {"chore": pz["chore"], "ts": e["ts"] - pz["elapsed"], "team": list(pz["team"]), "notimer": pz.get("notimer"),
+                             **({"title": pz["title"]} if pz.get("title") else {})}
         elif e["type"] == "release":
-            paused.pop(e["kid"], None)
+            unshelve(e["kid"], e.get("chore"))
+        elif e["type"] == "title":   # a kid names their job ("organizing rocks"), at the start or any time after
+            a = active.get(e["kid"])
+            if a and a["chore"] == e["chore"]:
+                for m in a.get("team") or [e["kid"]]:
+                    if active.get(m, {}).get("chore") == e["chore"]:
+                        active[m]["title"] = e["title"]
+            else:
+                z = next((z for z in reversed(shelf.get(e["kid"]) or []) if z["chore"] == e["chore"]), None)
+                if z:
+                    z["title"] = e["title"]
+        elif e["type"] == "keep":   # a grown-up keeps a saved job longer (e.g. over days at the other house)
+            z = next((z for z in reversed(shelf.get(e["kid"]) or []) if z["chore"] == e["chore"]), None)
+            if z:
+                z["until"] = e["until"]
         elif e["type"] == "rework":
             for m in e["team"]:
                 active[m] = {"chore": e["chore"], "ts": e["ts"] - e["worked"], "team": list(e["team"]),
                              "notimer": not e.get("timed"), "rework": {"feedback": e.get("feedback"), "by": e["by"], "ref": e["ref"]},
                              "round": e.get("round", 2), **({"split": e["split"]} if e.get("split") else {})}
-                if paused.get(m, {}).get("chore") == e["chore"]:   # only this job's pause: a teammate's other paused job stays
-                    paused.pop(m, None)
+                unshelve(m, e["chore"])   # only this job's pause: a teammate's other saved job stays
         elif e["type"] == "team_split" and e["kid"] in active:
             for m in active[e["kid"]].get("team") or [e["kid"]]:
                 if m in active:
@@ -832,10 +858,10 @@ def derive():
                 for m in a.get("team", [e["kid"]]):
                     if active.get(m, {}).get("chore") == e["chore"]:
                         active.pop(m, None)
-    for e in evs:
-        if e["type"] == "report" and paused.get(e.get("kid"), {}).get("chore") == e.get("chore"):
-            paused.pop(e["kid"], None)
-    paused = {k: v for k, v in paused.items() if v["until"] > time.time()}
+            if e.get("kid") in shelf:
+                unshelve(e["kid"], e.get("chore"))
+    shelf = {k: [z for z in v if z["until"] > time.time()] for k, v in shelf.items()}
+    paused = {k: v[-1] for k, v in shelf.items() if v}   # the one a kid's screen shows; older ones come back after it
     durs = {}
     for r in reports.values():
         if r.get("started") and r["status"] != "rejected" and not r.get("partial"):
@@ -1764,8 +1790,9 @@ class H(BaseHTTPRequestHandler):
                     append({"type": "stop", "kid": b["kid"], "chore": b["chore"]})
                 if pz_.get("chore") == b["chore"]:
                     append({"type": "release", "kid": b["kid"], "by": "kid"})
+                ttl_ = (act_ if act_.get("chore") == b["chore"] else pz_ if pz_.get("chore") == b["chore"] else {}).get("title")
                 ev = append({"type": "report", "kid": b["kid"], "chore": b["chore"], "points": None, "partial": True,
-                             "feeling": b.get("feeling"), "full_price": bd.get("price"),
+                             "feeling": b.get("feeling"), "full_price": bd.get("price"), **({"note": ttl_} if ttl_ else {}),
                              **({"worked": time.time() - started_} if started_ else {})})
                 after_change()
                 ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
@@ -1804,6 +1831,10 @@ class H(BaseHTTPRequestHandler):
                          "old_toy_name": str(b.get("old_toy_name") or "")[:40]}
             if b.get("note"):
                 extra["note"] = " ".join(str(b["note"]).split())[:40]
+            named = (st["active"].get(b["kid"]) or {}) if (st["active"].get(b["kid"]) or {}).get("chore") == b["chore"] else \
+                (st["paused"].get(b["kid"]) or {}) if (st["paused"].get(b["kid"]) or {}).get("chore") == b["chore"] else {}
+            if named.get("title") and not extra.get("note"):
+                extra["note"] = named["title"]   # the kid's name for it ("organizing rocks") goes to the grown-up
             if b.get("delivered"):
                 extra["delivered"] = time.time()   # a letter already handed over when it was reported
             if b.get("ask") is not None and (b["chore"] == "toy_out" or ch_.get("propose")):
@@ -2031,9 +2062,20 @@ class H(BaseHTTPRequestHandler):
             if not act:
                 return self.send(400, {"error": "not doing a chore"})
             from datetime import datetime, timedelta
-            eod = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.max.time()).timestamp()
+            eod = datetime.combine((datetime.now() + timedelta(days=PAUSE_DAYS)).date(), datetime.max.time()).timestamp()
             ev = append({"type": "pause", "kid": b["kid"], "chore": act["chore"], "elapsed": time.time() - act["ts"],
                          "team": act.get("team") or [b["kid"]], "notimer": bool(act.get("notimer")), "until": eod})
+        elif p == "/api/title":   # a kid names the job they're on (or one they saved for later)
+            t = " ".join(str(b.get("title") or "").split())[:40]
+            act = st["active"].get(b.get("kid")) or st["paused"].get(b.get("kid"))
+            if b.get("kid") not in kids or not act:
+                return self.send(400, {"error": "not doing a chore"})
+            ev = append({"type": "title", "kid": b["kid"], "chore": act["chore"], "title": t})
+        elif p == "/api/keep":   # a grown-up keeps a kid's saved job longer
+            if b.get("by") not in insp or b.get("kid") not in st["paused"]:
+                return self.send(400, {"error": "unknown inspector / nothing saved"})
+            ev = append({"type": "keep", "kid": b["kid"], "chore": b.get("chore") or st["paused"][b["kid"]]["chore"],
+                         "until": float(b.get("until") or time.time() + PAUSE_DAYS * 86400), "by": b["by"]})
         elif p == "/api/resume":
             pz = st["paused"].get(b.get("kid"))
             if not pz:

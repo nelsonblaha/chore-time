@@ -1320,5 +1320,47 @@ class PausedTeamJobs(Case):
         self.assertEqual(self.app.state()["paused"].get("ava", {}).get("chore"), "organize")
 
 
+class SavedJobsAndNames(Case):
+    """Finish later keeps a job even if the kid starts something else; kids can name their job."""
+
+    def test_starting_another_job_keeps_the_saved_one(self):
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "organize"})[0], 200)
+        self.assertEqual(self.app.post("/api/pause", {"kid": "ava"})[0], 200)
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 200)
+        self.assertEqual(self.app.state()["paused"]["ava"]["chore"], "organize")
+        self.assertEqual(self.app.post("/api/report", {"kid": "ava", "chore": "kitchen"})[0], 200)
+        self.assertEqual(self.app.state()["paused"]["ava"]["chore"], "organize")
+
+    def test_a_second_saved_job_comes_back_after_the_first(self):
+        self.app.post("/api/start", {"kid": "ava", "chore": "organize"})
+        self.app.post("/api/pause", {"kid": "ava"})
+        self.app.post("/api/start", {"kid": "ava", "chore": "kitchen"})
+        self.app.post("/api/pause", {"kid": "ava"})
+        self.assertEqual(self.app.state()["paused"]["ava"]["chore"], "kitchen")
+        self.assertEqual(self.app.post("/api/resume", {"kid": "ava"})[0], 200)
+        self.assertEqual(self.app.post("/api/report", {"kid": "ava", "chore": "kitchen"})[0], 200)
+        self.assertEqual(self.app.state()["paused"]["ava"]["chore"], "organize")
+
+    def test_a_named_job_keeps_its_name_through_later_and_reaches_the_grown_up(self):
+        self.app.post("/api/start", {"kid": "ava", "chore": "organize"})
+        self.assertEqual(self.app.post("/api/title", {"kid": "ava", "title": "ORGANIZING  ROCKS"})[0], 200)
+        self.assertEqual(self.app.state()["active"]["ava"]["title"], "ORGANIZING ROCKS")
+        self.app.post("/api/pause", {"kid": "ava"})
+        self.assertEqual(self.app.state()["paused"]["ava"]["title"], "ORGANIZING ROCKS")
+        self.app.post("/api/resume", {"kid": "ava"})
+        code, r = self.app.post("/api/report", {"kid": "ava", "chore": "organize"})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(r["event"]["note"], "ORGANIZING ROCKS")
+
+    def test_a_saved_job_can_be_named_and_kept_longer(self):
+        self.app.post("/api/start", {"kid": "ava", "chore": "organize"})
+        self.app.post("/api/pause", {"kid": "ava"})
+        self.assertEqual(self.app.post("/api/title", {"kid": "ava", "title": "ROCKS"})[0], 200)
+        until = time.time() + 30 * 86400
+        self.assertEqual(self.app.post("/api/keep", {"kid": "ava", "by": "jordan", "until": until})[0], 200)
+        z = self.app.state()["paused"]["ava"]
+        self.assertEqual((z["title"], round(z["until"])), ("ROCKS", round(until)))
+
+
 if __name__ == "__main__":
     unittest.main()
