@@ -37,6 +37,8 @@ def configure(v):
     global ENTRY_SENSORS, ENTRY_DOORS
     ENTRY_SENSORS, ENTRY_DOORS = set(v.get("entry_sensors") or []), set(v.get("entry_doors") or [])
     NIGHT = (int(v.get("night_from_h", 20)), int(v.get("night_until_h", 7)))
+    global RESUME_QUIET_S
+    RESUME_QUIET_S = int(v.get("resume_quiet_s", 20))
 
 
 # A PERSON coming onto this floor vs the robot tripping sensors: the robot sets off random sensors one at a time;
@@ -45,7 +47,8 @@ ENTRY_SENSORS = set()   # motion at the ways onto this floor (house.json vacuum.
 ENTRY_DOORS = set()     # door contacts: opened = a person, always (vacuum.entry_doors)
 PATH_WINDOW_S = 90      # 2+ different non-robot rooms tripping within this = someone walking through
 START_QUIET_S = 20 * 60      # Q6
-RESUME_QUIET_S = 3 * 60      # Q6
+RESUME_QUIET_S = 20         # motion sensors only go "off" after ~4 min without movement, so "all off" already IS quiet;
+                            # this is just a debounce (house.json vacuum.resume_quiet_s)
 PARK_DOCK_S = 10 * 60        # Q5
 DWELL_S = 120                # a room counts as robot-cleaned after this long in it while cleaning
 PREV_GRACE_S = 90            # sensors of the room it just left still belong to the robot

@@ -530,7 +530,7 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.stairs_motion", "on")
         self.assertNotIn("vacuum.pause", self.tick())
 
-    def test_person_pauses_resumes_after_three_quiet_minutes(self):
+    def test_person_pauses_and_it_resumes_once_every_sensor_is_off(self):
         self.run_into_living_room()
         self.S("binary_sensor.stairs_motion", "on")
         self.tick()
@@ -539,8 +539,8 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.kitchen_motion", "off", 0)
         self.S(self.va.VAC, "paused")
         self.S("binary_sensor.stairs_motion", "off", 0)
-        self.assertNotIn("vacuum.send_command", self.tick(60))
-        self.assertIn("vacuum.send_command", self.tick(130))
+        self.assertNotIn("vacuum.send_command", self.tick(10))   # sensors only just went off
+        self.assertIn("vacuum.send_command", self.tick(15))      # all off (= ~4 min without movement) + debounce
 
     def test_a_lone_trip_elsewhere_is_the_robot_not_a_person(self):
         # the robot sets off random sensors one at a time; that must not pause it
