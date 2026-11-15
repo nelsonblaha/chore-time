@@ -158,6 +158,7 @@ function load(){fetch("/api/state").then(function(r){return r.json()}).then(func
   document.getElementById("jobshd").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time":E("2b50")+" Jobs open now";
   document.getElementById("jobs").innerHTML=J.length?J.map(function(x){var c=x.c,b=x.b,hot=b.bonus&&x.p>b.base,t=[];
       if(hot)t.push(E("1f525")+" extra messy +"+(x.p-b.base));
+      if(hot&&Math.floor(Date.now()/20000)%3===0)t.push(E("1f9e9")+" or do part of it for a few "+E("2b50"));   // a third of the time: a piece of a big job still pays
       if(c.before)t.push(E("23f0")+" until "+hhmm(c.before));else if(c.daylight)t.push(E("2600")+" while it's light");
       if(c.only)t.push(c.only.map(function(k){var kk=S.config.kids.find(function(z){return z.id===k});return kk?E(kk.icon):""}).join(""));
       if(b.note)t.push(E("1f4dd")+" "+b.note);

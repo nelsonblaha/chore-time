@@ -1243,6 +1243,7 @@ function showAnnounce(list,done){
     return '<div class="newscard'+(down?' calm':'')+'"><div style="font-size:120px;line-height:1.05">'+E(c.icon)+'</div>'+
       '<div style="font-size:38px;font-weight:900">'+c.name+'</div><div class="newsprice">'+(a.base!=null&&a.price!==a.base?'<s style="opacity:.45;font-size:44px">'+a.base+'</s> ':'')+(a.price==null?"?":a.price)+' '+E("2b50")+'</div>'+
       '<div style="font-size:19px;font-weight:700">'+(up?"Extra messy! It is worth more this time.":down?"Almost clean! It is worth less this time.":"New price, just this one time.")+'</div>'+
+      (up&&!c.slot&&c.id!=="other"&&Math.random()<0.4?'<div class="annwho" style="background:#ede7f6">'+E("1f9e9")+' Too big? Do <b>part</b> of it for a few '+E("2b50")+'. Start it, then tap '+E("23f8")+' Finish later › '+E("1f64b")+' I did some.</div>':'')+   // sometimes: a piece of a big job still pays
       (function(){var KI=function(k){return S.config.kids.find(function(x){return x.id===k})||{icon:"2753",name:k}};
         var doers=Object.keys(S.active||{}).filter(function(k){return S.active[k].chore===a.chore}),bd=S.board[a.chore]||{};
         if(doers.length)return '<div class="annwho">'+doers.map(function(k){return E(KI(k).icon)+" "+KI(k).name}).join(", ")+' is doing it now!</div>';

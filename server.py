@@ -915,10 +915,11 @@ def derive():
             xs = [x for x in xs if q1 - 1.5 * iqr <= x <= q3 + 1.5 * iqr] or xs
         med = xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2
         typical[cid] = {"minutes": round(med, 1), "n": len(xs)}
-    goals, likes = {}, {}
+    goals, likes, goal_since = {}, {}, {}
     for e in evs:
         if e["type"] == "goal":
             goals[e["kid"]] = e.get("reward")
+            goal_since[e["kid"]] = e["ts"]   # when they last picked (or went back to Auto)
         # learn what each kid likes: what they buy and what they pick as a goal (newest wins ties)
         if (e["type"] == "spend" and e.get("by") in (None, e.get("kid"))) or (e["type"] == "goal" and e.get("reward")):
             d = likes.setdefault(e["kid"], {})
@@ -1174,7 +1175,7 @@ def derive():
     return {"version": ver, "ver_tv": ver_tv, "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(read_events()), "screen_break": screen_break, "bedtime": bedtime_state(c, evs),
-            "config": live_cfg(c, board), "balance": bal, "earned": earned, "goals": goals, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
+            "config": live_cfg(c, board), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
@@ -1266,7 +1267,7 @@ def push_state_sensor(state=None, last_result=None):
              "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"),
              "reward_ready": state.get("reward_ready"), "timers": state.get("timers"),
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
-             "awards": state.get("awards"), "goals": state.get("goals"), "favorite": state.get("favorite"),
+             "awards": state.get("awards"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
              "dress": state.get("dress"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}

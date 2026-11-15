@@ -293,6 +293,10 @@ function agreedDeal(r){   // the team (and split) this job had lately, from an e
   S.history.forEach(function(h){if(h.type==="report"&&h.id!==r.id&&h.chore===r.chore&&h.ts>=since&&h.ts<=r.ts&&(h.team||[]).length>1&&(h.team.indexOf(r.kid)>=0||h.kid===r.kid))best={team:h.team.slice(),split:h.split||null}});
   [S.active||{},S.paused||{}].forEach(function(M){Object.keys(M).forEach(function(k){var a=M[k];if(a.chore===r.chore&&(a.team||[]).length>1&&a.team.indexOf(r.kid)>=0)best={team:a.team.slice(),split:a.split||null}})});
   return best}
+function kidGoal(k){   // same rule as the kids' screen: their pick, else their favorite, else the next reward they can't afford yet
+  var b=S.balance[k],rs=S.config.rewards.slice().sort(function(x,y){return x.cost-y.cost}),ch=(S.goals||{})[k],r=ch&&rs.find(function(x){return x.id===ch});
+  if(r)return{r:r,auto:false};var fav=(S.favorite||{})[k];r=fav&&rs.find(function(x){return x.id===fav});if(r)return{r:r,auto:true,fav:true};
+  return{r:rs.find(function(x){return x.cost>b})||rs[rs.length-1],auto:true}}
 function renderFixJob(){var r=S.history.find(function(h){return h.id===FIXJOB}),DONE=r&&r.status==="inspected"&&Date.now()/1000-(r.inspected_ts||0)<86400;   // a passed job can be re-awarded for a day
   if(!r||(r.status!=="pending"&&!DONE)){closePM();return}
   if($("fxgo"))return;
@@ -428,7 +432,11 @@ function render(){
   var w="";if(!(HA_MODE&&haUserMe)){S.config.inspectors.forEach(function(i){w+='<button class="'+(me===i.id?"on":"")+'" data-i="'+i.id+'">'+E(i.icon)+' '+i.name+'</button>'})}
   $("who").innerHTML=w;$("hicon").innerHTML=me?E(inspOf(me).icon):E("1f50d");
   document.querySelectorAll("#who button").forEach(function(b){b.onclick=function(){me=b.dataset.i;try{localStorage.setItem("inspector",me)}catch(e){}render()}});
-  var bl="";S.config.kids.forEach(function(k){bl+='<div class="card" style="border-top:5px solid '+k.color+'"><div class="big">'+E(k.icon)+'</div><div class="n">'+S.balance[k.id]+'</div><div class="mute">'+k.name+(S.pending_points[k.id]?' · +'+S.pending_points[k.id]+' waiting':'')+'</div></div>'});
+  var bl="";S.config.kids.forEach(function(k){var G=kidGoal(k.id),b=S.balance[k.id],gp=Math.min(100,Math.round(100*b/Math.max(1,G.r.cost))),gs=(S.goal_since||{})[k.id];
+    bl+='<div class="card" style="border-top:5px solid '+k.color+'"><div class="big">'+E(k.icon)+'</div><div class="n">'+b+'</div><div class="mute">'+k.name+(S.pending_points[k.id]?' · +'+S.pending_points[k.id]+' waiting':'')+'</div>'+
+      '<div style="margin-top:6px;font-size:14px">🎯 '+E(G.r.icon)+' '+esc(G.r.name)+' · '+Math.min(b,G.r.cost)+'/'+G.r.cost+(b>=G.r.cost?' ✅':'')+'</div>'+   // their goal, as their own screen shows it
+      '<div style="height:8px;background:#0002;border-radius:4px;overflow:hidden;margin:3px 0"><div style="height:100%;width:'+gp+'%;background:'+k.color+'"></div></div>'+
+      '<div class="mute" style="font-size:12px">'+(G.auto?(G.fav?'auto (their favorite)':'auto (next one they can afford)'):'they chose it')+(gs?' · picked '+ago(gs):'')+'</div></div>'});
   $("bal").innerHTML=bl;$("balsum").textContent=S.config.kids.map(function(k){return k.name+" "+S.balance[k.id]}).join(" · ");
   // pending
   var pend=S.history.filter(function(h){return h.type==="report"&&h.status==="pending"}).reverse();
