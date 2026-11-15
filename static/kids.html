@@ -499,7 +499,7 @@ function renderKid(){
     else if(Object.keys(S.paused||{}).some(function(k){return S.paused[k].chore===c.id}))badge+='<div class="ktag" style="background:#ede7f6">'+E("23f8")+Object.keys(S.paused).filter(function(k){return S.paused[k].chore===c.id}).map(function(k){return E(KI(k).icon)}).join("")+'</div>';
     else if(bd.pending_by&&bd.pending_by.length)badge+='<div class="ktag">'+E("1f50d")+bd.pending_by.map(function(k){return E(KI(k).icon)}).join("")+'</div>';
     else if(bd.clean_until&&bd.clean_by)badge+='<div class="ktag">'+E("2728")+E(KI(bd.clean_by).icon)+'</div>';
-    ch+='<div class="'+cls+'" data-c="'+c.id+'">'+badge+'<div class="ic">'+E(c.icon)+'</div><div class="tn">'+c.name+'</div><div class="st">'+(bd.note?E("1f4dd"):"")+(bd.part_paid||bd.is_rest?E("1f9e9"):upP?E("1f525"):downP?'<s style="opacity:.5;font-size:18px">'+bd.base+'</s>'+E("2b07"):"")+stars(bd.price)+'</div></div>'});
+    ch+='<div class="'+cls+'" data-c="'+c.id+'">'+badge+'<div class="ic">'+E(c.icon)+'</div><div class="tn">'+c.name+(c.slot&&bd.slot?'<div style="font-size:15px;font-weight:800;opacity:.8">'+E("1f4c5")+' '+(bd.days_until?"in "+bd.days_until+" day"+(bd.days_until>1?"s":""):"today")+'</div>':'')+'</div><div class="st">'+(bd.note?E("1f4dd"):"")+(bd.part_paid||bd.is_rest?E("1f9e9"):upP?E("1f525"):downP?'<s style="opacity:.5;font-size:18px">'+bd.base+'</s>'+E("2b07"):"")+stars(bd.price)+'</div></div>'});
   $("chores").innerHTML=ch;
   $("pgdots").innerHTML=Array.apply(null,Array(pages)).map(function(_,i){return '<span class="'+(i===page?"on":"")+'"></span>'}).join("");
   $("pgprev").className="pg"+(page>0?"":" off");$("pgnext").className="pg"+(page<pages-1?"":" off");
@@ -585,12 +585,15 @@ function revealQueue(list){L("reveal",{n:list.length});
 }
 
 /* --- report a chore --- */
-function slotWhen(t){var d=new Date(t*1000),day=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][d.getDay()];
-  return (new Date().toDateString()===d.toDateString()?"today":day)+" at "+hm(t)}
+function slotWhen(t){var d=new Date(t*1000),day=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][d.getDay()],
+    n=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(new Date().toDateString()))/864e5);
+  if(n<=0)return "today at "+hm(t);if(n===1)return "tomorrow at "+hm(t);
+  return day+" "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]+" "+d.getDate()+" at "+hm(t)+' <span style="white-space:nowrap">(in '+n+' days)</span>'}
 function slotBtns(c,bd){var me=bd.claimed_by===kid,BIG='font-size:36px;font-weight:900;padding:12px 24px;';
   if(bd.claimed_by&&!me)return '<div class="q">'+E(KI2(bd.claimed_by).icon)+' '+KI2(bd.claimed_by).name+' has it '+slotWhen(bd.slot)+'</div>';
   if(!bd.claimed_by)return '<div class="faces"><div class="btn" id="claim" style="'+BIG+'background:#fff3c4;border:5px solid #f5b400">'+E("1f64b")+' Claim '+slotWhen(bd.slot)+'</div></div>';
   if(Date.now()/1000<bd.slot-1800)return '<div class="q" style="color:#2e7d32">'+E("1f64c")+" It's yours "+slotWhen(bd.slot)+'!</div><div class="faces"><div class="btn" id="unclaim" style="font-size:22px;padding:6px 16px;opacity:.7">Give it back</div></div>';
+  if(bd.certify_at)return '<div class="q" style="color:#2e7d32">'+E(c.icon)+' '+(Date.now()/1000<bd.slot+3600?"Do it now!":"Done?")+'</div><div class="q" style="font-size:26px;opacity:.85">'+E("1f50d")+' A grown-up checks it after '+hm(bd.certify_at)+' and gives your stars.</div>';   // the grown-up certifies it, no kid "done" button
   return '<div class="faces"><div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I\'m done!</div></div>'}
 function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))return;
   var c=S.config.chores.find(function(x){return x.id===cid}),bd=S.board[cid]||{price:c.points},A=(S.active||{})[kid],T=(S.typical||{})[cid]||(c.est_minutes?{minutes:c.est_minutes}:null);

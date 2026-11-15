@@ -50,7 +50,8 @@ The reward ids `show`, `movie` and `games` unlock TVs: streaming/casting, stream
 | `on_demand` | hidden until a grown-up opens it (a button on the parents' page), e.g. laundry after running the machines; hidden again once it passes |
 | `from`, `until` | ISO dates when it's available |
 | `price_dates` | `{"2026-12-24": 8}`: a different price on one day |
-| `slot` | `{"dow": 5, "time": "10:00"}`: one kid claims each week's slot ahead of time |
+| `slot` | `{"dow": 5, "time": "10:00"}`: one kid claims each week's slot ahead of time. Add `"every_weeks": 2, "anchor": "YYYY-MM-DD"` for every other week (the shared calendar below overrides it), and `"certify_after": "12:00"` so a grown-up confirms it happened instead of the kid reporting it |
+| `ask_title` | `true`: starting it asks the kid to name it ("organizing rocks"); any job can be named with ✏️ while doing it |
 | `bundle` | ids of rooms. Priced as the sum of those still dirty. `points` makes it a fixed price, and `together` means team only |
 | `boost` | `{"pct": 25, "min": 3}`: a bundle is worth 25% more with 3+ dirty rooms |
 | `propose`, `propose_max` | the kid suggests their own price |
@@ -74,6 +75,12 @@ writes a one-page PDF and sends it to CUPS with `lp`. See the docstring at the t
   "recipients": [{"id": "gran", "label": "Granny", "name": "Ann Example", "icon": "1f475"}],
   "to_address": ["2 Elm St", "Shelbyville"], "load_photo": "envelope-load.jpg"}
 ```
+
+### Kids' calendar (which weekends they're here)
+
+house.json `"kid_calendar": {"ics_url": "<private iCal address>", "with": "^Home"}`: an all-day event whose title
+matches `with` means the kids are here that day. Slot chores (e.g. reading at a weekly service) follow it where it
+has data, and their `every_weeks` rule elsewhere. Read every 6 hours into `kid_calendar.json` in the data folder.
 
 ### Two households
 

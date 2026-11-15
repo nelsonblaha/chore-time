@@ -448,8 +448,16 @@ function render(){
       '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>')+
       (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
       '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
-  $("pcount").textContent=pend.length;$("pendwrap").style.display=pend.length?"":"none";
+  var cert=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};return c.slot&&bd.certify_at&&bd.claimed_by&&bd.certified==null&&Date.now()/1000>=bd.certify_at});
+  cert.forEach(function(c){var bd=S.board[c.id],k=kidOf(bd.claimed_by),when=new Date(bd.slot*1000);   // e.g. church reading: the grown-up says whether it happened
+    ph='<div class="card"><div class="row"><span class="big">'+E(k.icon)+E(c.icon)+'</span><div style="flex:1"><b>Did '+esc(k.name)+' do it?</b> · '+esc(c.name)+
+      '<div class="mute">'+when.toLocaleDateString([], {weekday:"long",month:"short",day:"numeric"})+' at '+when.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+' · claimed by '+esc(k.name)+'</div>'+
+      (bd.home_that_day===false?'<div class="tag warn">⚠️ '+esc(k.name)+'\'s home switch was never on that day</div>':'')+'</div></div>'+
+      '<div class="chips"><button class="ok" data-cert="'+c.id+'" data-ok="1">✅ Yes: +'+(bd.price==null?"?":bd.price)+'⭐</button><button class="no" data-cert="'+c.id+'" data-ok="0">❌ It didn\'t happen</button></div></div>'+ph});
+  $("pcount").textContent=pend.length+cert.length;$("pendwrap").style.display=pend.length+cert.length?"":"none";
   $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
+  document.querySelectorAll("[data-cert]").forEach(function(b){b.onclick=function(){var ok=b.dataset.ok==="1";
+    post("/api/certify",{chore:b.dataset.cert,ok:ok},ok?"Stars given":"Marked as not done")}});
   document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
   document.querySelectorAll("[data-chk]").forEach(function(b){b.onclick=function(){ACTJOB={ref:b.dataset.chk};openPM("actjob")}});
   document.querySelectorAll("[data-split]").forEach(function(a){a.onclick=function(e){e.preventDefault();var r=S.history.find(function(h){return h.id===a.dataset.split});if(!r)return;

@@ -1362,5 +1362,92 @@ class SavedJobsAndNames(Case):
         self.assertEqual((z["title"], round(z["until"])), ("ROCKS", round(until)))
 
 
+class ServiceSchedule(unittest.TestCase):
+    """Which Sundays a church-style slot chore happens: every other week, unless the shared calendar says otherwise."""
+
+    ICS = "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "BEGIN:VEVENT", "UID:a", "DTSTART;VALUE=DATE:20261111", "DTEND;VALUE=DATE:20261117",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE", "SUMMARY:Ben", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:a", "RECURRENCE-ID;VALUE=DATE:20261125", "DTSTART;VALUE=DATE:20261120",
+        "DTEND;VALUE=DATE:20261130", "SUMMARY:Ben - holiday", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:b", "DTSTART;VALUE=DATE:20261118", "DTEND;VALUE=DATE:20261121",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE", "EXDATE;VALUE=DATE:20261202", "SUMMARY:Ben", "END:VEVENT",
+        "BEGIN:VEVENT", "UID:c", "DTSTART;VALUE=DATE:20261106", "DTEND;VALUE=DATE:20261111",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2", "SUMMARY:Other parent", "END:VEVENT",
+        "END:VCALENDAR", ""])
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO))
+        import schedule
+        self.sc = schedule
+
+    def test_recurring_blocks_moved_instances_and_exdates(self):
+        from datetime import date
+        d = self.sc.days_here(self.ICS, "^Ben", start=date(2026, 11, 1), horizon_days=60)
+        self.assertTrue(d["2026-11-15"])    # Wed 11th - Mon 16th
+        self.assertFalse(d["2026-11-08"])   # the other parent's weekend
+        self.assertTrue(d["2026-11-22"])    # the holiday block moved in (Fri 20th - Sun 29th)
+        self.assertTrue(d["2026-11-29"])
+        self.assertFalse(d["2026-11-30"])   # the regular Nov 25 - Dec 1 instance it replaced is gone
+        self.assertFalse(d["2026-12-03"])   # EXDATE drops that midweek block
+        self.assertTrue(d["2026-12-13"])    # the regular rhythm again (Wed 9th - Mon 14th)
+
+
+class CertifiedSlot(Case):
+    """Church reading: kids claim a Sunday; a grown-up confirms it after the service; weeks away are skipped."""
+
+    @staticmethod
+    def config():
+        from datetime import datetime, timedelta
+        c = base_config()
+        y = datetime.now() - timedelta(days=1)
+        c["chores"].append({"id": "church", "name": "Read at church", "icon": "26ea", "points": 3, "cooldown_h": 0,
+                            "slot": {"dow": y.weekday(), "time": "11:00", "certify_after": "12:00"}})
+        return c
+
+    def setUp(self):
+        self.app = App(self.config())
+
+    def last_service(self):
+        from datetime import datetime, timedelta
+        return (datetime.now() - timedelta(days=1)).replace(hour=11, minute=0, second=0, microsecond=0).timestamp()
+
+    def test_grown_up_certifies_after_the_service(self):
+        a = self.app
+        a.event(type="claim", kid="ava", chore="church", slot=self.last_service())
+        b = a.state()["board"]["church"]
+        self.assertEqual((b["slot"], b["claimed_by"], b["certified"]), (self.last_service(), "ava", None))
+        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "church"})[0], 409)   # kids don't report it
+        code, r = a.post("/api/certify", {"chore": "church", "by": "jordan", "ok": True})
+        self.assertEqual(code, 200, r)
+        st = a.state()
+        self.assertEqual(st["balance"]["ava"], 3)
+        self.assertGreater(st["board"]["church"]["slot"], time.time())   # on to the next service
+        self.assertIsNone(st["board"]["church"]["claimed_by"])
+
+    def test_it_didnt_happen(self):
+        a = self.app
+        a.event(type="claim", kid="ava", chore="church", slot=self.last_service())
+        self.assertEqual(a.post("/api/certify", {"chore": "church", "by": "jordan", "ok": False})[0], 200)
+        st = a.state()
+        self.assertEqual(st["balance"]["ava"], 0)
+        self.assertGreater(st["board"]["church"]["slot"], time.time())
+
+    def test_every_other_week_and_the_calendar_wins(self):
+        from datetime import datetime, timedelta
+        s = self.app.s
+        ch = {"slot": {"dow": 6, "time": "11:00", "every_weeks": 2, "anchor": "2026-11-15"}}
+        from datetime import date
+        self.assertTrue(s.slot_on(ch, date(2026, 11, 29)))
+        self.assertFalse(s.slot_on(ch, date(2026, 11, 22)))
+        s.schedule.CACHE["days"]["2026-11-22"] = True    # a holiday weekend with the kids
+        s.schedule.CACHE["days"]["2026-12-27"] = False   # and one away that the rhythm would have kept
+        self.assertTrue(s.slot_on(ch, date(2026, 11, 22)))
+        self.assertFalse(s.slot_on(ch, date(2026, 12, 27)))
+        nxt = datetime.fromtimestamp(s.next_slot(ch, after=datetime(2026, 12, 21).timestamp())).date()
+        self.assertEqual(nxt, date(2027, 1, 10))   # skips Dec 27 (calendar) and Jan 3 (off week, no calendar data)
+
+
 if __name__ == "__main__":
     unittest.main()

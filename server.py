@@ -31,6 +31,8 @@ def _load_house():
 HOUSE = _load_house()
 import envelopes  # noqa: E402
 envelopes.configure(HOUSE.get("envelopes"), str(DATA / "envelopes_printed.json"))
+import schedule  # noqa: E402
+schedule.configure(HOUSE.get("kid_calendar"), str(DATA / "kid_calendar.json"))
 HA = HOUSE.get("home_assistant") or {}   # empty = no Home Assistant: TV locks, Hubs, lights, vacuum, watch login all off
 
 
@@ -366,14 +368,44 @@ def shares(r, total):
 PAUSE_DAYS = 7   # "finish later" keeps a job this many days (kids may be at the other house in between)
 
 
-def next_slot(ch):
-    """the upcoming service this slot chore is for (epoch); the service day counts until midnight"""
+def slot_on(ch, d):
+    """is there a service on this date for the kids here? The shared calendar decides when it covers the day
+    (holidays, swaps); otherwise the chore's every-N-weeks rule from its anchor date (default: every week)."""
+    from datetime import date as _date
+    cal = schedule.here_on(d)
+    if cal is not None:
+        return cal
+    sl = ch.get("slot") or {}
+    ew, anchor = int(sl.get("every_weeks") or 1), sl.get("anchor")
+    if ew <= 1 or not anchor:
+        return True
+    return ((d - _date.fromisoformat(anchor)).days // 7) % ew == 0
+
+
+def next_slot(ch, after=None):
+    """the upcoming service this slot chore is for (epoch); the service day counts until midnight.
+    Weeks the kids aren't here (every other week, or the calendar says so) are skipped."""
     from datetime import datetime, timedelta
     sl = ch.get("slot") or {}
     hh, mm = (int(x) for x in str(sl.get("time", "11:00")).split(":"))
-    d = datetime.now()
+    d = datetime.fromtimestamp(after) if after else datetime.now()
     days = (int(sl.get("dow", 6)) - d.weekday()) % 7
-    return (d + timedelta(days=days)).replace(hour=hh, minute=mm, second=0, microsecond=0).timestamp()
+    first = (d + timedelta(days=days)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+    for w in range(27):
+        cand = first + timedelta(weeks=w)
+        if slot_on(ch, cand.date()):
+            return cand.timestamp()
+    return first.timestamp()
+
+
+def certify_at(ch, slot):
+    """when a grown-up may confirm a certified slot chore happened (e.g. noon, after church); None = kids report it"""
+    from datetime import datetime
+    ca = (ch.get("slot") or {}).get("certify_after")
+    if not ca:
+        return None
+    hh, mm = (int(x) for x in str(ca).split(":"))
+    return datetime.fromtimestamp(slot).replace(hour=hh, minute=mm, second=0, microsecond=0).timestamp()
 
 
 # Fields a grown-up can set on a chart chore from the parents' page (the full chore form). Only keys present in the
@@ -994,14 +1026,34 @@ def derive():
     for cid, ch in chores.items():
         if not ch.get("slot") or cid not in board:
             continue
+        def claimant(sl_):
+            w_ = None
+            for e in evs:
+                if e["type"] == "claim" and e.get("chore") == cid and e.get("slot") == sl_:
+                    w_ = None if e.get("release") else e["kid"]
+            return w_
+
+        def checked(sl_):   # a grown-up's answer for that service: True / False / None
+            v_ = None
+            for e in evs:
+                if e["type"] == "certify" and e.get("chore") == cid and e.get("slot") == sl_:
+                    v_ = bool(e.get("ok"))
+            return v_
         slot = next_slot(ch)
-        who = None
-        for e in evs:
-            if e["type"] == "claim" and e.get("chore") == cid and e.get("slot") == slot:
-                who = None if e.get("release") else e["kid"]
+        if certify_at(ch, slot) is not None:   # last service still waiting for the grown-up's OK: keep showing it
+            prev = next_slot(ch, after=time.time() - 6 * 86400)
+            if prev < slot and prev < time.time() and claimant(prev) and checked(prev) is None:
+                slot = prev
+        who = claimant(slot)
         done = [r for r in reports.values() if r["chore"] == cid and r["ts"] > slot - 6 * 86400
                 and r["status"] in ("pending", "inspected") and not r.get("partial")]
-        board[cid].update(slot=slot, claimed_by=who, claim_done=bool(done), slot_done_by=done[-1]["kid"] if done else None)
+        ca_ = certify_at(ch, slot)
+        board[cid].update(slot=slot, claimed_by=who, claim_done=bool(done) or checked(slot) is not None,
+                          slot_done_by=done[-1]["kid"] if done else None, certify_at=ca_, certified=checked(slot),
+                          days_until=max(0, (_dt.fromtimestamp(slot).date() - _dt.now().date()).days))
+        if who and ca_ and time.time() >= slot:   # the kid's HA "home" switch never on that day: probably not here for it
+            hd_ = (GUARD.get("home_days") or load_home_days()).get(who)
+            board[cid]["home_that_day"] = None if hd_ is None else _dt.fromtimestamp(slot).date().isoformat() in hd_
     toys = {}
     named = {}
     for e in evs:
@@ -1805,6 +1857,8 @@ class H(BaseHTTPRequestHandler):
             if (ch_.get("after") or ch_.get("before")) and chore_closed(ch_, st["board"]) in ("later", "over"):
                 return self.send(409, {"error": "not now: %s-%s" % (ch_.get("after") or "", ch_.get("before") or "")})
             if ch_.get("slot"):
+                if bd.get("certify_at"):
+                    return self.send(409, {"error": "a grown-up checks this one afterwards"})
                 if bd.get("claim_done"):
                     return self.send(409, {"error": "already done this week"})
                 if bd.get("claimed_by") and bd["claimed_by"] != b["kid"]:
@@ -2094,6 +2148,22 @@ class H(BaseHTTPRequestHandler):
             if b.get("kid") not in kids:
                 return self.send(400, {"error": "unknown kid"})
             ev = append({"type": "leave_team", "kid": b["kid"]})
+        elif p == "/api/certify":   # a grown-up confirms (or not) that the kid who claimed it did it, e.g. read at church
+            ch_ = chores.get(b.get("chore")) or {}
+            bd = st["board"].get(b.get("chore")) or {}
+            if b.get("by") not in insp or not bd.get("certify_at"):
+                return self.send(400, {"error": "unknown inspector / nothing to certify"})
+            if time.time() < bd["certify_at"]:
+                return self.send(409, {"error": "not until after it happens"})
+            if not bd.get("claimed_by") or bd.get("certified") is not None:
+                return self.send(409, {"error": "nothing waiting"})
+            ok = bool(b.get("ok"))
+            ev = append({"type": "certify", "chore": b["chore"], "slot": bd["slot"], "kid": bd["claimed_by"], "ok": ok, "by": b["by"]})
+            if ok:
+                pts = int(b["points"]) if b.get("points") is not None else bd.get("price")
+                rep = append({"type": "report", "kid": bd["claimed_by"], "chore": b["chore"], "feeling": None,
+                              "points": pts, "certified": b["by"]})
+                append({"type": "inspect", "ref": rep["id"], "by": b["by"], "ok": True, "points": pts, "label": ""})
         elif p == "/api/claim":
             ch_ = chores.get(b.get("chore")) or {}
             if b.get("kid") not in kids or not ch_.get("slot"):
@@ -3882,6 +3952,8 @@ def start_modules():
     def go(name, fn, *args):
         threading.Thread(target=fn, args=args, daemon=True, name=name).start()
         on.append(name)
+    if (HOUSE.get("kid_calendar") or {}).get("ics_url"):
+        go("kid-calendar", schedule.watch)        # which weekends the kids are here (church-style slot chores)
     if HA_URL:
         push_ha(derive())
         go("ha-sensors", push_state_sensor)
