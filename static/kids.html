@@ -614,7 +614,11 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});
   if($("go"))$("go").onclick=function(){L("chore_start",{chore:cid});api("/api/start",{kid:kid,chore:cid}).then(function(r){if(r.ok){S=r.state;renderKid()}
     modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+E("25b6")+' Go! '+c.name+'</div><div class="q" style="font-size:24px;opacity:.75">Tap I\'m done! when you finish.</div>');chime([523,659]);addOk()})};
   if($("fin"))$("fin").onclick=function(){L("finished_tap",{chore:cid});
-    modal('<div class="big">'+E(c.icon)+'</div><div class="q">Did you really finish<br>'+c.name+'?</div>'+
+    var envJob=S.envelope&&S.envelope.chores.indexOf(cid)>=0;
+    if(envJob)modal('<div class="big">'+E(c.icon)+E("2728")+'</div><div class="q">You\'re almost there!</div>'+
+      '<div class="q" style="font-size:28px">Last step: print the envelope '+E("2709")+'<br>then show your letter to a grown-up.</div>'+
+      '<div class="faces"><div class="btn yes" id="ry" style="font-size:34px;font-weight:900;padding:12px 30px">'+E("1f5a8")+' Print the envelope</div><div class="btn no" id="rn" style="font-size:24px;padding:8px 20px">Not done writing</div></div>');
+    else modal('<div class="big">'+E(c.icon)+'</div><div class="q">Did you really finish<br>'+c.name+'?</div>'+
       '<div class="faces"><div class="btn yes" id="ry">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="rn">'+E("274c")+'<span class="lbl">No</span></div></div>');
     $("rn").onclick=function(){L("really_no",{chore:cid});closeModal()};
     var afterYes=function(){L("really_yes",{chore:cid});
