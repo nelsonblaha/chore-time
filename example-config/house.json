@@ -198,19 +198,35 @@
     "segments": {
       "Kitchen": {
         "chore": "kitchen",
-        "mop": true
+        "mop": true,
+        "rooms": [
+          "kitchen"
+        ]
       },
       "Living Room": {
-        "chore": "living_room"
+        "chore": "living_room",
+        "rooms": [
+          "living_room"
+        ]
       },
       "Family Room": {
-        "chore": "family_room"
+        "chore": "family_room",
+        "rooms": [
+          "family_room"
+        ]
       },
       "Entry": {
         "chore": "front_hall",
-        "mop": true
+        "mop": true,
+        "rooms": [
+          "front_hall"
+        ]
       },
-      "Hall": {}
+      "Hall": {
+        "rooms": [
+          "hall"
+        ]
+      }
     },
     "sensors": {
       "binary_sensor.kitchen_motion": "Kitchen",

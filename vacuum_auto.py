@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = ACTIVE = UPSTAIRS = CLEAN_SCRIPT = None
 MAP_FLAG = 0
 SEGMENTS = []
+SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
 MOP = set()      # segments that get vacuum + mop; the rest vacuum only
 SENSORS = {}     # person-evidence sensor -> the segment it sits in (the robot trips its own room's sensors)
@@ -33,6 +34,8 @@ def configure(v):
     SEG_CHORE = {seg: (x.get("chores") or [x["chore"]]) for seg, x in (v.get("segments") or {}).items() if x.get("chore") or x.get("chores")}
     global SEGMENTS
     SEGMENTS = list(v.get("segments") or {})   # every robot room gets the every_h goal
+    global SEG_ROOMS
+    SEG_ROOMS = {seg: list(x["rooms"]) for seg, x in (v.get("segments") or {}).items() if x.get("rooms")}
     MOP = {seg for seg, x in (v.get("segments") or {}).items() if x.get("mop")}
     SENSORS = dict(v.get("sensors") or {})
     global VOICE, NIGHT
@@ -242,7 +245,9 @@ class Pilot:
         out = {}
         for seg in list(dict.fromkeys(SEGMENTS + list(SEG_CHORE) + list(SCHEDULE))):
             cids = list(SEG_CHORE.get(seg) or [])
-            rooms = sorted({r for c in cids for r in (chs.get(c, {}).get("map_rooms") or [])})
+            # the map rooms this robot area really covers: explicit in house.json (a kids' job can span several robot
+            # areas, e.g. "front hall + dining"), else derived from its jobs
+            rooms = SEG_ROOMS.get(seg) or sorted({r for c in cids for r in (chs.get(c, {}).get("map_rooms") or [])})
             last = self.D["visits"].get(seg, 0)
             sch = SCHEDULE.get(seg) or {}
             d = {"chores": cids, "rooms": rooms, "last_robot": last, "mop": seg in MOP, "eligible": False}
