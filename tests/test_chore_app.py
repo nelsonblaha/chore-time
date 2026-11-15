@@ -779,6 +779,16 @@ class HouseTasks(unittest.TestCase):
         self.assertEqual([i["name"] for i in d["bedroom"]], ["Pay the plumber", "Fix bath fan", "Descale kettle"])
         self.assertTrue(d["kitchen"][1]["here"])
 
+    def test_high_priority_comes_first_everywhere(self):
+        self.g["HOUSE"]["house_tasks"] = {"floors": {"Down": ["Kitchen"], "Out": ["Yard"]}, "displays": {"kitchen": "Kitchen"}}
+        self.grocy["/objects/tasks"] = [
+            {"id": 1, "name": "Pay the plumber", "done": 0, "due_date": "2000-01-01", "userfields": {"ctx_rooms": "Kitchen"}},
+            {"id": 2, "name": "Turn off the sprinkler", "done": 0, "userfields": {"ctx_rooms": "Yard", "ctx_priority": "High"}}]
+        self.H.HouseTasks(self.g).tick()
+        a = self.ha["sensor.house_tasks"]["attributes"]
+        self.assertEqual(a["items"][0]["name"], "Turn off the sprinkler")
+        self.assertEqual(a["displays"]["kitchen"][0]["name"], "Turn off the sprinkler")
+
     def test_a_floor_wide_screen_leads_with_its_floor(self):
         self.g["HOUSE"]["house_tasks"] = {"floors": {"Down": ["Kitchen", "Hall"], "Up": ["Bath", "Bedroom"]},
                                           "displays": {"up": "Up"}}

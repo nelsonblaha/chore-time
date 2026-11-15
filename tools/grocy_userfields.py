@@ -35,6 +35,7 @@ FIELDS = [
 HOUSE_ROOMS = "\n".join(r for rooms in ((json.loads((DATA / "house.json").read_text()).get("house_tasks") or {}).get("floors") or {}).values()
                         for r in rooms) if (DATA / "house.json").exists() else ""
 CONTEXT = [
+    ("ctx_priority", "Priority", "preset-list", "High\nNormal\nLow", 18),
     ("ctx_rooms", "Rooms (where it's done)", "preset-checklist" if HOUSE_ROOMS else "text-single-line", HOUSE_ROOMS or None, 19),
     ("ctx_show_on", "Show on (displays, comma separated; empty = everywhere)", "text-single-line", None, 20),
     ("ctx_show_when", "Show only when (HA condition or now.hour / now.weekday, e.g. person.jordan = home)", "text-single-line", None, 21),

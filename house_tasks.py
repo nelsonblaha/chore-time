@@ -6,6 +6,7 @@ and batteries that need replacing. Each item can carry context (Grocy userfields
   ctx_show_on    displays it belongs on, comma list (empty = everywhere)
   ctx_show_when  only show while this Home Assistant condition holds, e.g.  person.ben = home
   ctx_done_when  done by itself when this holds, e.g.  binary_sensor.washer_running = off and sensor.x > 50
+  ctx_priority   High / Normal / Low: High comes first everywhere
   ctx_rooms      where it's done, comma list of rooms. Each screen in house.json "house_tasks": {"displays":
                  {"kitchen": "Kitchen", "upstairs": "Upstairs"}, "floors": {"Downstairs": ["Kitchen", …]}} gets its own ranking: overdue, then
                  due today, then undated; a job in the screen's room (or anywhere on its floor, for a floor-wide screen) ranks
@@ -62,6 +63,7 @@ def score(item, room, floor_of, now):
         s = 70
     else:
         s = 30                                                        # an open one-off with no date
+    s += {"high": 200, "low": -25}.get(item.get("priority"), 0)    # high outranks even long-overdue routine jobs
     rooms = item.get("rooms") or []
     floors = {floor_of.get(r) for r in rooms}
     if room in rooms or room in floors:                              # a screen can stand for a room or a whole floor
@@ -281,6 +283,7 @@ class HouseTasks:
             uf = it.pop("uf")
             it["show_on"] = [x.strip() for x in str(uf.get("ctx_show_on") or "").split(",") if x.strip()]
             it["rooms"] = [x.strip() for x in str(uf.get("ctx_rooms") or "").split(",") if x.strip()]
+            it["priority"] = str(uf.get("ctx_priority") or "").strip().lower() or "normal"
             sw = check(uf.get("ctx_show_when"), self.get)
             it["visible"] = sw is not False
             dw = uf.get("ctx_done_when")
@@ -294,7 +297,7 @@ class HouseTasks:
                     self.g["ilog"]({"src": "house", "action": "auto_done", "item": key, "name": it["name"], "when": dw})
                     continue
             shown.append(it)
-        shown.sort(key=lambda i: (not i["overdue"], i["due"] or 9e12, i["name"]))
+        shown.sort(key=lambda i: (i.get("priority") != "high", not i["overdue"], i["due"] or 9e12, i["name"]))
         due = [i for i in shown if i["visible"] and (i["kind"] != "chore" or (i["due"] and i["due"] <= now + 86400))]
         cfg = self.g["HOUSE"].get("house_tasks") or {}
         floor_of = {room: floor for floor, rooms in (cfg.get("floors") or {}).items() for room in rooms}
