@@ -1126,5 +1126,48 @@ class ChoreForm(Case):
         ch = next(x for x in self.s.cfg()["chores"] if x["id"] == ch["id"])
         self.assertEqual((ch.get("cooldown_h"), ch.get("room"), ch.get("once"), ch.get("where")), (72, None, None, "Living Room"))
 
+
+class Envelopes(Case):
+    """A kid prints the envelope for a letter: from a kid, to a listed relative, through lp; never twice in a row."""
+    CFG = {"printer": "Office", "lp_options": {"PageSize": "Env10", "InputSlot": "Manual"}, "chores": ["letter"],
+           "return_address": ["1 Main St", "Town"], "senders": {"max": "Max Example"},
+           "recipients": [{"id": "gran", "label": "Granny", "name": "Ann Example", "address": ["2 Elm St", "City"]}]}
+
+    def setUp(self):
+        super().setUp()
+        import envelopes
+        self.e = envelopes
+        envelopes.configure(self.CFG)
+        envelopes.LAST["ts"] = 0
+        self.cmds = []
+        real = envelopes.print_envelope
+        envelopes.print_envelope = lambda f, t, run=None: real(f, t, run=self.fake_lp)
+        self.addCleanup(setattr, envelopes, "print_envelope", real)
+        self.addCleanup(envelopes.configure, {})
+
+    def fake_lp(self, cmd, **kw):
+        self.cmds.append(cmd)
+        self.pdf = open(cmd[-1], "rb").read()
+        return type("R", (), {"returncode": 0, "stdout": "request id is Office-7 (1 file(s))", "stderr": ""})()
+
+    def test_kids_screen_gets_labels_not_addresses(self):
+        env = self.app.state()["envelope"]
+        self.assertEqual((env["chores"], env["senders"], env["recipients"][0]["label"]), (["letter"], ["max"], "Granny"))
+        self.assertNotIn("2 Elm St", json.dumps(env))
+
+    def test_print_sends_a_pdf_with_both_addresses_to_lp(self):
+        code, r = self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "gran"})
+        self.assertEqual(code, 200, r)
+        cmd = self.cmds[0]
+        self.assertEqual(cmd[:3], ["lp", "-d", "Office"])
+        self.assertIn("PageSize=Env10", cmd)
+        self.assertTrue(self.pdf.startswith(b"%PDF") and b"(Max Example) Tj" in self.pdf and b"(2 Elm St) Tj" in self.pdf)
+        self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "gran"})[0], 409)   # double tap
+
+    def test_unknown_sender_or_recipient_is_refused(self):
+        self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "ava", "to": "gran"})[0], 409)
+        self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "nobody"})[0], 409)
+        self.assertEqual(self.cmds, [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,8 @@ def _load_house():
 
 
 HOUSE = _load_house()
+import envelopes  # noqa: E402
+envelopes.configure(HOUSE.get("envelopes"))
 HA = HOUSE.get("home_assistant") or {}   # empty = no Home Assistant: TV locks, Hubs, lights, vacuum, watch login all off
 
 
@@ -932,7 +934,7 @@ def derive():
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}}
+            "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public()}
 
 
 def push_ha(state):
@@ -1399,6 +1401,11 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, (HERE / "static/now.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/inspect":
             return self.send(200, (HERE / "static/inspect.html").read_bytes(), "text/html; charset=utf-8")
+        if p == "/api/envelope_photo":   # how to put an envelope in the printer (a photo in the data folder)
+            f = DATA / str(envelopes.CFG.get("load_photo") or "-")
+            if not envelopes.CFG.get("load_photo") or not f.is_file() or f.resolve().parent != DATA.resolve():
+                return self.send(404, {"error": "no photo"})
+            return self.send(200, f.read_bytes(), "image/jpeg")
         if p == "/api/state":
             st = derive()
             try:
@@ -1455,6 +1462,16 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})
+        if p == "/api/envelope":   # a kid prints the envelope for their letter (not a ledger event)
+            if b.get("kid") not in kids or not envelopes.enabled():
+                return self.send(400, {"error": "no envelopes here"})
+            try:
+                job = envelopes.print_envelope(str(b.get("from") or ""), str(b.get("to") or ""))
+            except Exception as ex:  # noqa: BLE001
+                ilog({"src": "envelope", "kid": b.get("kid"), "from": b.get("from"), "to": b.get("to"), "error": str(ex)})
+                return self.send(409, {"error": str(ex)})
+            ilog({"src": "envelope", "kid": b.get("kid"), "from": b.get("from"), "to": b.get("to"), "job": job})
+            return self.send(200, {"ok": True, "job": job})
         if p == "/api/spend" and b.get("kid") and b.get("reward") in rewards and not is_here(rewards[b["reward"]], c, b["kid"]):
             return self.send(409, {"error": "that reward is at the other house"})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \

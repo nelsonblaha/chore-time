@@ -619,6 +619,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});
     $("rn").onclick=function(){L("really_no",{chore:cid});closeModal()};
     var afterYes=function(){L("really_yes",{chore:cid});
       if(cid==="other"&&!c._note){kbd("What did you do?","2728",function(t){c._note=t;afterYes()});return}
+      if(S.envelope&&S.envelope.chores.indexOf(cid)>=0&&!c._env){envFlow(c,function(){c._env=true;afterYes()});return}
       if(c.propose&&c._ask==null){var ask=2,mx=c.propose_max||8;
         (function draw(){modal('<div class="big">'+E(c.icon)+'</div><div class="q">How many stars is your work worth?</div>'+
           '<div class="faces" style="align-items:center"><div class="btn" id="pm2" style="font-size:44px;padding:0 26px">&minus;</div><b style="font-size:60px;min-width:120px">'+ask+' '+E("2b50")+'</b><div class="btn" id="pp2" style="font-size:44px;padding:0 26px">+</div></div>'+
@@ -629,11 +630,42 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});
       var W={fun:"Fun",ok:"Fine",hard:"Hard"},f="";
       S.config.feelings.forEach(function(x){f+='<div data-f="'+x.id+'">'+E(x.icon)+'<span class="lbl">'+(W[x.id]||"")+'</span></div>'});
       modal('<div class="big">'+E(c.icon)+'</div><div class="q">How did it feel?</div><div class="faces">'+f+'</div>');
-      document.querySelectorAll("#mbox [data-f]").forEach(function(n){n.onclick=function(){var note=c._note,ask=c._ask;delete c._note;delete c._ask;doReport(c,n.dataset.f,n,note,ask)}});
+      document.querySelectorAll("#mbox [data-f]").forEach(function(n){n.onclick=function(){var note=c._note,ask=c._ask;delete c._note;delete c._ask;delete c._env;doReport(c,n.dataset.f,n,note,ask)}});
     };
     $("ry").onclick=afterYes;
   };
 }
+/* Letters: print the envelope before the job is done. From (a kid), to (a cousin...), put the envelope in, Print. */
+function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){return ks.find(function(k){return k.id===id})||{name:id,icon:"1f642"}};
+  var st={from:EV.senders.indexOf(kid)>=0?kid:EV.senders[0],to:null},big='font-size:30px;font-weight:800;padding:10px 22px;margin:6px';
+  function from(){modal('<div class="big">'+E("2709")+'</div><div class="q">Who is the letter from?</div><div class="faces" style="flex-wrap:wrap">'+
+      EV.senders.map(function(id){var k=KK(id);return '<div class="btn" data-fr="'+id+'" style="'+big+(id===st.from?';border:5px solid #43a047':'')+'">'+E(k.icon)+' '+k.name+'</div>'}).join("")+'</div>');
+    document.querySelectorAll("#mbox [data-fr]").forEach(function(n){n.onclick=function(){st.from=n.dataset.fr;L("env_from",{from:st.from});to()}})}
+  function to(){modal('<div class="q">'+E(KK(st.from).icon)+' '+KK(st.from).name+' '+E("27a1")+' who is it to?</div><div class="faces" style="flex-wrap:wrap">'+
+      EV.recipients.map(function(r){return '<div class="btn" data-to="'+r.id+'" style="'+big+'">'+E(r.icon)+' '+r.label+'</div>'}).join("")+'</div>'+
+      '<div class="faces"><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
+    $("envback").onclick=function(e){e.stopPropagation();from()};
+    document.querySelectorAll("#mbox [data-to]").forEach(function(n){n.onclick=function(){st.to=n.dataset.to;L("env_to",{to:st.to});load()}})}
+  function rec(){return EV.recipients.find(function(r){return r.id===st.to})}
+  function load(){modal('<div class="q" style="font-size:30px">'+E("1f5a8")+' Put ONE envelope in the printer like this:</div>'+
+      (EV.photo?'<img src="/api/envelope_photo" alt="" style="max-height:48vh;max-width:90%;border-radius:12px;margin:6px auto;display:block">':'')+
+      '<div class="q" style="font-size:22px;opacity:.85">Into the slot on the front, the way the picture shows. Push it in gently until the printer grabs it.</div>'+
+      '<div class="faces"><div class="btn yes" id="envin" style="'+big+'">'+E("2705")+' It\'s in!</div><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
+    $("envback").onclick=function(e){e.stopPropagation();to()};
+    $("envin").onclick=function(){L("env_loaded",{});go()}}
+  function go(){var r=rec();modal('<div class="big">'+E("2709")+'</div><div class="q">From '+E(KK(st.from).icon)+' '+KK(st.from).name+'<br>To '+E(r.icon)+' '+r.label+'</div>'+
+      '<div class="faces"><div class="btn yes" id="envprint" style="font-size:44px;font-weight:900;padding:14px 40px">'+E("1f5a8")+' Print!</div><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
+    $("envback").onclick=function(e){e.stopPropagation();load()};
+    $("envprint").onclick=function(){if(busy)return;busy=true;L("env_print",{from:st.from,to:st.to});
+      modal('<div class="big">'+E("1f5a8")+'</div><div class="q">Printing&hellip;</div>');
+      api("/api/envelope",{kid:kid,from:st.from,to:st.to}).then(function(res){busy=false;
+        if(res.ok){chime([523,659,784]);modal('<div class="big">'+E("2709")+E("2728")+'</div><div class="q">Your envelope is printing!</div><div class="q" style="font-size:24px;opacity:.85">Take it from the printer, put your letter in, and ask a grown-up for a stamp.</div>'+
+            '<div class="faces"><div class="btn yes" id="envok" style="'+big+'">OK</div></div>');$("envok").onclick=function(){done()}}
+        else{modal('<div class="big">'+E("1f615")+'</div><div class="q">The printer didn\'t take it.</div><div class="q" style="font-size:22px;opacity:.8">'+(res.error||"")+'</div>'+
+            '<div class="faces"><div class="btn yes" id="envretry" style="'+big+'">Try again</div><div class="btn" id="envskip" style="font-size:22px;padding:6px 18px">Skip the envelope</div></div>');
+          $("envretry").onclick=function(){load()};$("envskip").onclick=function(){L("env_skip",{});done()}}
+      }).catch(function(){busy=false;modal('<div class="q">The printer didn\'t answer.</div><div class="faces"><div class="btn yes" id="envretry" style="'+big+'">Try again</div></div>');$("envretry").onclick=function(){load()}})}}
+  from()}
 function doReport(c,feel,node,note,ask){L("report",{chore:c.id,feeling:feel,note:note||null,ask:ask==null?null:ask});
   if(busy)return;busy=true;
   api("/api/report",{kid:kid,chore:c.id,feeling:feel,note:note||undefined,ask:ask==null?undefined:ask}).then(function(res){

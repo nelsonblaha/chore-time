@@ -61,6 +61,20 @@ The reward ids `show`, `movie` and `games` unlock TVs: streaming/casting, stream
 
 Most of these can be set without editing JSON: **＋ New chore** and **Edit** on the parents' page open a form for the name, subtitle (`desc`), icon, stars, how it repeats (one time, back after N days, once a day per kid, any time, or only when a grown-up opens it), where, which kids, which house, and the dates, times, daylight and length. The "Where" list comes from `house_tasks.floors` in house.json; picking a room also fills `floor`, and `map_rooms` when a robot-map room of that name is already in use.
 
+### Envelopes (letters)
+
+A job listed in `envelopes.chores` (e.g. a letter to a relative) gets extra steps before its "I'm done": the kid picks who it's
+from and who it's to, puts an envelope in the printer (with an optional photo showing how), and taps **Print**. Chore Time
+writes a one-page PDF and sends it to CUPS with `lp`. See the docstring at the top of `envelopes.py` for every key:
+
+```json
+"envelopes": {"printer": "Office", "chores": ["letter"],
+  "lp_options": {"PageSize": "Env10", "InputSlot": "Manual", "MediaType": "Envelope", "orientation-requested": "4", "print-scaling": "none"},
+  "return_address": ["1 Main St", "Springfield"], "senders": {"ava": "Ava Example"},
+  "recipients": [{"id": "gran", "label": "Granny", "name": "Ann Example", "icon": "1f475"}],
+  "to_address": ["2 Elm St", "Shelbyville"], "load_photo": "envelope-load.jpg"}
+```
+
 ### Two households
 
 A child who lives in two homes can use Chore Time in both. Add `households` (the first is the default home of every job

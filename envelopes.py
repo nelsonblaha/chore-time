@@ -1,0 +1,106 @@
+"""Print an addressed envelope from a kid's screen (e.g. after writing a letter).
+
+house.json "envelopes" (all optional except the addresses):
+  printer        CUPS queue name
+  lp_options     {"PageSize": "Env10", "InputSlot": "Manual", ...} passed to lp as -o key=value
+  size_pt        [width, height] of the envelope in points, landscape (US #10 = [684, 297])
+  chores         chore ids whose "I'm done" goes through the envelope steps
+  return_address lines under the sender's name (top left)
+  senders        {kid id: "Name as printed"}; only these kids can be the "from"
+  recipients     [{"id", "label" (on the button), "name" (printed), "icon", "address": [lines] (optional)}]
+  to_address     lines under the recipient's name when a recipient has no address of its own
+  load_photo     an image in the data folder showing how to put the envelope in the printer
+A one-page PDF is written with the built-in Helvetica font (no extra libraries) and sent to lp.
+"""
+import subprocess
+import tempfile
+import time
+
+CFG = {}
+LAST = {"ts": 0.0}
+MIN_GAP_S = 20   # a double tap must not print two envelopes
+
+
+def configure(cfg):
+    CFG.clear()
+    CFG.update(cfg or {})
+
+
+def enabled():
+    return bool(CFG.get("senders") and CFG.get("recipients"))
+
+
+def public():
+    """what the kids' screens need (names and labels only)"""
+    if not enabled():
+        return None
+    return {"chores": list(CFG.get("chores") or []), "senders": list(CFG["senders"]),
+            "recipients": [{"id": r["id"], "label": r.get("label") or r["name"], "icon": r.get("icon") or "1f48c"}
+                           for r in CFG["recipients"]],
+            "photo": bool(CFG.get("load_photo"))}
+
+
+def _esc(t):
+    t = str(t).encode("latin-1", "replace").decode("latin-1")
+    return t.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def pdf(sender_lines, to_lines, size=(684, 297)):
+    """a one-page PDF: return address top left (10 pt), recipient in the middle right (15 pt)"""
+    w, h = size
+    ops = ["BT /F1 10 Tf 12 TL 30 %d Td" % (h - 33)]
+    for i, line in enumerate(sender_lines):
+        ops.append(("(%s) Tj" if i == 0 else "T* (%s) Tj") % _esc(line))
+    ops.append("ET")
+    ops.append("BT /F1 15 Tf 21 TL %d %d Td" % (int(w * 0.42), int(h - 139)))
+    for i, line in enumerate(to_lines):
+        ops.append(("(%s) Tj" if i == 0 else "T* (%s) Tj") % _esc(line))
+    ops.append("ET")
+    stream = "\n".join(ops).encode("latin-1")
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>" % (w, h)).encode(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream"]
+    out, offs = bytearray(b"%PDF-1.4\n"), []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out))
+        out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for o in offs:
+        out += b"%010d 00000 n \n" % o
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    return bytes(out)
+
+
+def build(sender, recipient):
+    """(pdf bytes, title) or raises ValueError"""
+    if sender not in (CFG.get("senders") or {}):
+        raise ValueError("unknown sender")
+    rec = next((r for r in CFG.get("recipients") or [] if r["id"] == recipient), None)
+    if not rec:
+        raise ValueError("unknown recipient")
+    frm = [CFG["senders"][sender]] + list(CFG.get("return_address") or [])
+    to = [rec["name"]] + list(rec.get("address") or CFG.get("to_address") or [])
+    return pdf(frm, to, tuple(CFG.get("size_pt") or (684, 297))), "%s to %s - envelope" % (sender, rec.get("label") or rec["name"])
+
+
+def print_envelope(sender, recipient, run=subprocess.run):
+    """send it to the printer; returns the lp output (job id line)"""
+    if time.time() - LAST["ts"] < MIN_GAP_S:
+        raise ValueError("already printing")
+    data, title = build(sender, recipient)
+    if not CFG.get("printer"):
+        raise ValueError("no printer set")
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+        f.write(data)
+        f.flush()
+        cmd = ["lp", "-d", CFG["printer"], "-t", title]
+        for k, v in (CFG.get("lp_options") or {}).items():
+            cmd += ["-o", "%s=%s" % (k, v)]
+        r = run(cmd + [f.name], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise ValueError((r.stderr or "print failed").strip()[:200])
+    LAST["ts"] = time.time()
+    return (r.stdout or "").strip()
