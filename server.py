@@ -572,7 +572,11 @@ def watch_hub_motion():
 
 def dress_displays(on, started):
     """the Hubs show it big: kids' Hubs get their screen back, other displays (dress.displays) get the clothes screen"""
+    tok = ha_token()
     for h in HUBS.values():
+        hs = ha_get(h["entity"], tok) if h.get("entity") else {}
+        if hs.get("state") in ("playing", "buffering", "paused") and (hs.get("attributes") or {}).get("app_name") != "DashCast":
+            continue   # never cut off music (Spotify) on a Hub; the speakers and the TVs still carry the message
         if on and not hub_showing_chores(h["ip"]):
             ilog({"src": "dress", "action": "cast_hub", "ip": h["ip"]})
             cast(h["ip"], "/")
