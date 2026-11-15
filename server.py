@@ -299,7 +299,7 @@ def compute_awards(c, reports, evs, earned, typical):
             "awards_seen": seen, "next_awards": nxt}
 
 
-GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "points": 0, "cooldown_h": 0, "shared": True,
+GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "points": 0, "cooldown_h": 0, "shared": True, "est_minutes": 5,
                "hidden": True, "desc": "Clothes, socks and shoes on. Then show a grown-up.",
                "trophy": {"icon": "1f3c3", "title": "Dressed!"}}   # the "Put on clothes!" job: a timed race, a trophy each time
 

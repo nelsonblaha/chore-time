@@ -605,6 +605,14 @@ function render(){
         return pt>=a.ts?' <span class="tag clean">🖨️ envelope printed '+new Date(pt*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'</span> <span class="tag warn">✉️ not handed over yet</span>':' <span class="tag warn">✍️ writing · envelope not printed yet</span>'})():'')+(a.split&&Object.keys(a.split).length?' <span class="tag">deal: '+Object.keys(a.split).map(function(m){return esc(kidOf(m).name)+" "+a.split[m]}).join(", ")+'</span>':'')+
       '<div class="mute">'+(a.notimer?'timer off':'⏱ <span class="cdu2" data-since="'+a.ts+'"></span>')+' · expected ~'+Math.round(expectFor(S,team[0],a.chore,team))+' min'+
       (a.rework&&a.rework.feedback?' · 🔁 "'+esc(a.rework.feedback)+'"':'')+'</div></div></div>'+(a.notimer?'':chartBar(S,team[0],a.chore,a.ts,team,false))+'</div>'});
+  var DRS=S.dress||{};   // "Put on clothes!" is a job in progress too: one race clock, a bar per kid against their usual time
+  if(DRS.on){var fm=function(x){x=Math.max(0,Math.round(x));return Math.floor(x/60)+":"+("0"+x%60).slice(-2)};
+    ah='<div class="card"><div class="row"><span class="big">👕🧦👟</span><div style="flex:1"><b>Put on clothes!</b> · race since '+new Date(DRS.since*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+
+      '<div class="mute">⏱ <span class="cdu2" data-since="'+DRS.since+'"></span> · turns off when everyone is ✅</div></div></div>'+
+      Object.keys(DRS.kids||{}).map(function(k){var v=DRS.kids[k],rp=S.history.find(function(h){return h.type==="report"&&h.chore==="get_dressed"&&h.kid===k&&h.ts>=DRS.since});
+        return '<div style="margin-top:8px"><div class="row" style="gap:8px"><b>'+E(kidOf(k).icon)+' '+esc(kidOf(k).name)+'</b>'+
+          (v==="ready"?'<span class="tag clean">✅ dressed in '+fm(rp?rp.ts-DRS.since:0)+'</span>':v==="waiting"?'<span class="tag warn">🔍 says dressed in '+fm(rp?rp.ts-DRS.since:0)+': check them</span>':'<span class="tag">⏳ getting dressed · usually ~'+Math.round(expectFor(S,k,"get_dressed"))+' min</span>')+'</div>'+
+          (v==="todo"?chartBar(S,k,"get_dressed",DRS.since,[k],false):'')+'</div>'}).join("")+'</div>'+ah}
   $("actbox").innerHTML=ah?'<h2 class="h2b">⏱ In progress</h2>'+ah:'';
   document.querySelectorAll("#actbox .actcard").forEach(function(n){n.onclick=function(){ACTJOB={kid:n.dataset.act};openPM("actjob")}});
   var PZ=S.paused||{},pz="";
