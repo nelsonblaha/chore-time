@@ -658,7 +658,8 @@ function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){retu
     $("envback").onclick=function(e){e.stopPropagation();to()};
     $("envin").onclick=function(){L("env_loaded",{});go()}}
   function go(){var r=rec();modal('<div class="big">'+E("2709")+'</div><div class="q">From '+E(KK(st.from).icon)+' '+KK(st.from).name+'<br>To '+E(r.icon)+' '+r.label+'</div>'+
-      '<div class="faces"><div class="btn yes" id="envprint" style="font-size:44px;font-weight:900;padding:14px 40px">'+E("1f5a8")+' Print!</div><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
+      '<div class="btn yes" id="envprint" style="display:block;font-size:52px;font-weight:900;padding:26px 20px;margin:10px auto 6px;width:80%;box-sizing:border-box">'+E("1f5a8")+' Print!</div>'+
+      '<div class="faces"><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
     $("envback").onclick=function(e){e.stopPropagation();load()};
     $("envprint").onclick=function(){if(busy)return;busy=true;L("env_print",{from:st.from,to:st.to});
       modal('<div class="big">'+E("1f5a8")+'</div><div class="q">Printing&hellip;</div>');
