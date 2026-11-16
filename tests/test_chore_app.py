@@ -517,7 +517,9 @@ class Vacuum(unittest.TestCase):
         va.configure(house["vacuum"])
         adults = house["adults"]
         self.now = [datetime(2026, 11, 15, 10, 0).timestamp()]
+        real_time = va.time.time
         va.time.time = lambda: self.now[0]
+        self.addCleanup(setattr, va.time, "time", real_time)   # the time module is shared: later tests need the real clock
         self.H, self.calls = {}, []
         for e in va.SENSORS:
             self.S(e, "off", 3000)
@@ -1374,7 +1376,18 @@ class SchoolMornings(Case):
         self.assertGreaterEqual(d["go"], d["since"])
         code, r = self.app.post("/api/report", {"kid": "ava", "chore": "get_dressed", "feeling": "ok"})
         self.assertEqual(code, 200, r)
-        self.assertLessEqual(r["event"]["started"], r["event"]["ts"])
+        self.assertNotIn("started", r["event"])                                        # no clock unless the kid started it
+
+    def test_the_kid_starts_their_own_clock(self):
+        self.app.event(type="dress", on=True, kids=["ava", "max"], by="auto", school=True)
+        self.assertEqual(self.app.state()["dress"]["started"], {})                     # nothing running when they wake up
+        code, r = self.app.post("/api/start", {"kid": "ava", "chore": "get_dressed"})
+        self.assertEqual(code, 200, r)
+        st = self.app.state()["dress"]
+        self.assertEqual(list(st["started"]), ["ava"])
+        self.assertEqual(st["kids"], {"ava": "todo", "max": "todo"})
+        code, r = self.app.post("/api/report", {"kid": "ava", "chore": "get_dressed", "feeling": "ok"})
+        self.assertEqual((code, r["event"]["started"]), (200, st["started"]["ava"]))
 
     def test_next_school_morning_skips_the_weekend_and_holidays(self):
         sat = (self.MON + timedelta(days=5)).replace(hour=9)

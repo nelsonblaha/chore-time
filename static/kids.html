@@ -419,8 +419,8 @@ function render(){
   drawBed();
   var h="";
   var DRK=Object.keys((S.dress&&S.dress.on&&S.dress.kids)||{}).filter(function(x){return S.dress.kids[x]!=="ready"});
-  if(DRK.length)h+=(S.dress.school?'<div style="position:fixed;top:6px;left:3vw;right:3vw;z-index:5;background:#1565c0;color:#fff;border-radius:20px;padding:6px 16px;font-size:28px;font-weight:900;text-align:center">'+E("1f3eb")+' School day! '+DRK.map(function(x){return (S.config.kids.find(function(y){return y.id===x})||{name:x}).name}).join(", ")+': clothes on first '+E("1f455")+E("1f9e6")+E("1f45f"):
-    '<div style="position:fixed;top:6px;left:3vw;right:3vw;z-index:5;background:#c62828;color:#fff;border-radius:20px;padding:6px 16px;font-size:28px;font-weight:900;text-align:center;animation:attnb .8s infinite">'+E("1f455")+' '+DRK.map(function(x){return (S.config.kids.find(function(y){return y.id===x})||{name:x}).name}).join(", ")+': put on your clothes NOW!')+' '+E("23f1")+' <span class="cdu" data-since="'+(S.dress.go||S.dress.since)+'"></span></div>';
+  if(DRK.length)h+=(S.dress.school?'<div style="position:fixed;top:6px;left:3vw;right:3vw;z-index:5;background:#1565c0;color:#fff;border-radius:20px;padding:6px 16px;font-size:28px;font-weight:900;text-align:center">'+E("1f3eb")+' School day! '+DRK.map(function(x){return (S.config.kids.find(function(y){return y.id===x})||{name:x}).name}).join(", ")+': clothes on first '+E("1f455")+E("1f9e6")+E("1f45f")+'</div>':
+    '<div style="position:fixed;top:6px;left:3vw;right:3vw;z-index:5;background:#c62828;color:#fff;border-radius:20px;padding:6px 16px;font-size:28px;font-weight:900;text-align:center;animation:attnb .8s infinite">'+E("1f455")+' '+DRK.map(function(x){return (S.config.kids.find(function(y){return y.id===x})||{name:x}).name}).join(", ")+': put on your clothes NOW! '+E("23f1")+' <span class="cdu" data-since="'+S.dress.since+'"></span></div>');
   dressBeep();
   S.config.kids.forEach(function(k){
     var b=S.balance[k.id],w=reports(k.id).filter(function(r){return r.status==="pending"}).length,tro=trophies(k.id);
@@ -833,10 +833,18 @@ function dressOf(k){var D=S.dress||{};return D.on?(D.kids||{})[k]:null}
 function dressScreen(k){var st=dressOf(k);if(!st||st==="ready")return false;L("dress_screen",{st:st});
   if(st==="waiting"){modal('<div class="big">'+E("1f455")+E("1f50d")+'</div><div class="q">A grown-up is coming to check you!</div><div class="q" style="font-size:24px;opacity:.8">Clothes, socks and shoes on? Wait right here.</div>');addOk();return true}
   var R=(S.records||{}).get_dressed,RK=R&&S.config.kids.find(function(x){return x.id===R.kid});
-  var SC=S.dress.school;   // school morning: the same race, said calmly (it switched itself on before anyone was up)
+  var SC=S.dress.school,ST=SC?(S.dress.started||{})[k]:S.dress.since;   // school morning: said calmly, and the kid presses Start
+  if(SC&&!ST){modal('<div class="big">'+E("1f3eb")+E("1f455")+'</div><div class="q" style="font-size:44px;color:#1565c0">School day! Get dressed first.</div>'+
+    '<div class="faces" style="font-size:30px;gap:24px"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
+    (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Record: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+
+    '<div class="faces"><div class="btn yes" id="drgo" style="font-size:44px;font-weight:900;padding:16px 40px">'+E("25b6")+' Start!</div></div>'+
+    '<div class="q" style="font-size:22px;opacity:.75">The clock starts when you press Start.</div>');
+    $("drgo").onclick=function(){if(busy)return;busy=true;L("dress_go",{});api("/api/start",{kid:k,chore:"get_dressed"}).then(function(r){busy=false;if(r.ok)S=r.state;
+      if(!r.ok){modal('<div class="q">Hmm: '+(r.error||'try again')+'</div>');addOk();return}chime([523,659,784]);dressScreen(k)}).catch(function(){busy=false})};
+    return true}
   modal((SC?'<div class="big">'+E("1f3eb")+E("1f455")+'</div><div class="q" style="font-size:44px;color:#1565c0">School day! Get dressed first.</div>':
     '<div class="big" style="animation:pulse 1s infinite">'+E("1f455")+'</div><div class="q" style="font-size:44px;color:#c62828">Put on your clothes NOW!</div>')+
-    '<div class="q" style="font-size:64px;font-weight:900">'+E("23f1")+' <span class="cdu" data-since="'+(S.dress.go||S.dress.since)+'"></span></div>'+
+    '<div class="q" style="font-size:64px;font-weight:900">'+E("23f1")+' <span class="cdu" data-since="'+ST+'"></span></div>'+
     (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Record: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+
     '<div class="faces" style="font-size:30px;gap:24px"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
     '<div class="q" style="font-size:22px;opacity:.75">Nothing else until a grown-up says you\'re ready to go.</div>'+

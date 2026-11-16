@@ -125,10 +125,10 @@ function goalOf(S,k){var b=S.balance[k],rs=S.config.rewards.slice().sort(functio
 var VER0=null;
 // "Put on clothes!": the whole screen, a race clock from when the grown-up flipped the switch
 var DRS=null;
-function drawDress(S){var D=S.dress||{},el=document.getElementById("dress");DRS=D.on?(D.go||D.since):null;
+function drawDress(S){var D=S.dress||{},el=document.getElementById("dress");DRS=D.on&&!D.school?D.since:null;   // school mornings: each kid starts their own clock on their screen
   if(!D.on){el.className="";return}
   var K=function(id){return S.config.kids.find(function(k){return k.id===id})||{name:id,icon:"1f642"}},R=(S.records||{}).get_dressed;
-  el.innerHTML=(D.school?'<div class="big" style="animation:none">'+E("1f3eb")+' School day! Get dressed first.</div>':'<div class="big">'+E("1f455")+' Put on your clothes NOW!</div>')+'<div class="clk" id="dclk"></div><div class="clk" id="dclk"></div>'+
+  el.innerHTML=(D.school?'<div class="big" style="animation:none">'+E("1f3eb")+' School day! Get dressed first.</div>':'<div class="big">'+E("1f455")+' Put on your clothes NOW!</div>')+(D.school?'':'<div class="clk" id="dclk"></div>')+
     '<div class="row"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
     '<div class="who">'+Object.keys(D.kids||{}).map(function(k){var v=D.kids[k];return '<div>'+E(K(k).icon)+' '+K(k).name+' '+(v==="ready"?E("2705"):v==="waiting"?E("1f50d"):E("23f3"))+'</div>'}).join("")+'</div>'+
     (R?'<div class="rec">'+E("1f947")+' Record: '+K(R.kid).name+' '+Math.floor(R.sec/60)+':'+("0"+R.sec%60).slice(-2)+'</div>':'<div class="rec">'+E("1f3c3")+' Fastest dresser gets the record!</div>');

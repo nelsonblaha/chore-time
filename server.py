@@ -577,8 +577,8 @@ DRESS = HOUSE.get("dress") or {}
 
 
 def dress_state(evs, reports, awake=None):
-    """school mornings switch it on before anyone is up: their race clock ("go") starts when the kids are
-    (the house's "awake" sensor, or the end of bedtime)"""
+    """school mornings switch it on before anyone is up: the screens wait until the kids are ("go": the house's
+    "awake" sensor, or the end of bedtime), and each kid starts their own race clock with Start"""
     last = next((e for e in reversed(evs) if e["type"] == "dress"), None)
     if not last or not last.get("on"):
         return {"on": False, "off_ts": last["ts"] if last else None, "off_by": last.get("by") if last else None,
@@ -1412,7 +1412,8 @@ def derive():
             "history": history[:200], "now": time.time(),
             "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "dress": dress_state(evs, reports, GUARD.get("awake_ts")), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
+            "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
+                          started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -2201,9 +2202,10 @@ class H(BaseHTTPRequestHandler):
                     extra["team"] = [b["kid"]] + [m for m in act["team"] if m != b["kid"]]
                     if act.get("split"):
                         extra["split"] = act["split"]
-            if b["chore"] == "get_dressed" and (st.get("dress") or {}).get("on"):
-                # the race clock starts when the grown-up flips the switch (always timed); on a school morning, when they're up
-                extra["started"] = min(st["dress"].get("go") or st["dress"]["since"], time.time())
+            if b["chore"] == "get_dressed" and (st.get("dress") or {}).get("on") and not st["dress"].get("school"):
+                # the race clock starts when the grown-up flips the switch (always timed); on a school morning the kid
+                # presses Start (the active job's start, above)
+                extra["started"] = st["dress"]["since"]
             if ch_.get("together") and not set(ch_.get("only") or []) <= set(extra.get("team") or [b["kid"]]):
                 return self.send(409, {"error": "do it together: team up first"})
             ev = append({"type": "report", "kid": b["kid"], "chore": b["chore"],
@@ -2813,7 +2815,7 @@ class H(BaseHTTPRequestHandler):
         ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
         if p == "/api/spend" and ev.get("type") == "spend":
             threading.Thread(target=notify_parents, args=(ev,), daemon=True).start()
-        if p == "/api/start" and ev.get("type") == "start":
+        if p == "/api/start" and ev.get("type") == "start" and ev.get("chore") != "get_dressed":
             threading.Thread(target=notify_started, args=(ev["kid"], ev["chore"]), daemon=True).start()
         if p == "/api/team" and ev.get("type") == "team":
             threading.Thread(target=notify_started, args=(ev["members"][0], ev["chore"], ev["members"], "team"), daemon=True).start()
