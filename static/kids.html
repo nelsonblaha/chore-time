@@ -583,7 +583,7 @@ function renderKid(){
   shown.forEach(function(r){
     if(r.type==="adjust"){hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.points<0?"1f6ab":"2b50")+'</span><span style="font-size:15px;font-weight:700;opacity:.7">'+(r.reason||"").replace(/^paper log: /,"")+'</span><span class="s">'+E(insp(r.by).icon)+' '+(r.points>0?"+":"")+r.points+'</span></div>';return}
     var s=r.status==="pending"&&r.inspecting?'<span class="s wait">'+E("1f50d")+E(insp(r.inspecting.by).icon)+'</span>':r.status==="pending"?'<span class="s wait">'+(r.priority?E("2b50"):"")+E("23f3")+'</span>':
-      r.status==="inspected"?'<span class="s">'+E(insp(r.inspected_by).icon)+E("2705")+' +'+r.awarded+'</span>':
+      r.status==="inspected"?'<span class="s">'+E(insp(r.inspected_by).icon)+E("2705")+(r.awarded?' +'+r.awarded:'')+'</span>':
       r.status==="returned"?'<span class="s">'+E(insp(r.inspected_by).icon)+E("1f501")+'</span>':
       '<span class="s">'+E(insp(r.inspected_by).icon)+E("274c")+'</span>';
     hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.chore_icon)+'</span><span style="font-size:16px;font-weight:800">'+r.chore_name+((r.team||[]).length>1?' '+teamIcons(r.team):'')+(r.feedback||r.leftover_note?' '+E("1f4dd"):'')+'</span>'+s+'</div>'});
@@ -651,7 +651,7 @@ function revealQueue(list){L("reveal",{n:list.length});
   if(r.chore==="toy_swap"&&ok&&r.present){presentPick(r,i,function(){closeModal();revealQueue(list)});return}
   if(r.prank){penaltyModal(r,i,function(){closeModal();revealQueue(list)});return}
   modal('<div class="celebrate"><div class="big">'+E(i.icon)+'</div><div class="q">'+i.name+' inspected '+E(r.chore_icon)+'</div>'+
-    (ok?'<div class="plus">'+E("2705")+' +'+r.awarded+' '+E("2b50")+'</div>'+(r.leftover_note!=null&&r.partial?'<div class="q" style="font-size:26px;color:#4527a0">'+E("1f9e9")+' Still to do'+(r.leftover_note?': '+notes(r.leftover_note):'')+'</div>':''):'<div class="q">'+E("274c")+' Not done yet</div>'+(r.feedback?'<div class="q" style="font-size:30px;color:#c62828">"'+r.feedback+'"</div>':'')+'<div class="q" style="font-size:24px;opacity:.8">'+E("1f501")+' Fix it, then tap '+E("1f50d")+' Inspect again</div>')+
+    (ok?'<div class="plus">'+E("2705")+(r.awarded?' +'+r.awarded+' '+E("2b50"):'')+'</div>'+(r.leftover_note!=null&&r.partial?'<div class="q" style="font-size:26px;color:#4527a0">'+E("1f9e9")+' Still to do'+(r.leftover_note?': '+notes(r.leftover_note):'')+'</div>':''):'<div class="q">'+E("274c")+' Not done yet</div>'+(r.feedback?'<div class="q" style="font-size:30px;color:#c62828">"'+r.feedback+'"</div>':'')+'<div class="q" style="font-size:24px;opacity:.8">'+E("1f501")+' Fix it, then tap '+E("1f50d")+' Inspect again</div>')+
     '<div class="faces" style="margin-top:12px">'+(ok&&restOpen(r)?restBtn():'')+'<div class="btn yes" id="nx" style="font-size:44px;font-weight:900;padding:14px 34px">OK</div></div></div>');
   if($("dorest"))$("dorest").onclick=function(){L("do_rest",{chore:r.chore});closeModal();setSeen(kid,S.now);askChore(r.chore)};
   if(ok){confetti(160);chime([523,659,784,1047]);$("kbal").classList.remove("pop");void $("kbal").offsetWidth;$("kbal").classList.add("pop")}
@@ -829,24 +829,27 @@ function checkAttention(){if(!S)return;var now=Date.now(),list=[];
       if(list.length){L("attn_motion",{kids:list.map(function(k){return k.id})});chime([784,988,784,988]);list.forEach(function(k){ATTN[k.id]=Math.max(ATTN[k.id]||0,now+25000)});
         setTimeout(function(){if(!kid)render()},26000)}}}}
 /* "Put on clothes!" (a grown-up's switch): nothing else until they're dressed and checked */
+function WEAR(){return '<div style="display:flex;justify-content:center;flex-wrap:wrap;gap:12px 22px;margin:8px 0;font-size:22px;font-weight:800">'+[["1f455","Shirt"],["1f456","Pants"],["1fa72","Underwear"],["1f9e6","Socks"],["1f45f","Shoes"]].map(function(x){return '<div style="text-align:center"><span style="font-size:52px;line-height:1">'+E(x[0])+'</span><br>'+x[1]+'</div>'}).join("")+'</div>'}
+function pbLine(k){var P=((S.personal_records||{}).get_dressed||{})[k];return P?'<div class="q" style="font-size:24px">'+E("1f3c5")+' Your best: '+fmtS(P.sec)+'</div>':''}
 function dressOf(k){var D=S.dress||{};return D.on?(D.kids||{})[k]:null}
 function dressScreen(k){var st=dressOf(k);if(!st||st==="ready")return false;L("dress_screen",{st:st});
   if(st==="waiting"){modal('<div class="big">'+E("1f455")+E("1f50d")+'</div><div class="q">A grown-up is coming to check you!</div><div class="q" style="font-size:24px;opacity:.8">Clothes, socks and shoes on? Wait right here.</div>');addOk();return true}
   var R=(S.records||{}).get_dressed,RK=R&&S.config.kids.find(function(x){return x.id===R.kid});
   var SC=S.dress.school,ST=SC?(S.dress.started||{})[k]:S.dress.since;   // school morning: said calmly, and the kid presses Start
   if(SC&&!ST){modal('<div class="big">'+E("1f3eb")+E("1f455")+'</div><div class="q" style="font-size:44px;color:#1565c0">School day! Get dressed first.</div>'+
-    '<div class="faces" style="font-size:30px;gap:24px"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
-    (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Record: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+
+    WEAR()+
+    (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Fastest: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+pbLine(k)+
     '<div class="faces"><div class="btn yes" id="drgo" style="font-size:44px;font-weight:900;padding:16px 40px">'+E("25b6")+' Start!</div></div>'+
     '<div class="q" style="font-size:22px;opacity:.75">The clock starts when you press Start.</div>');
-    $("drgo").onclick=function(){if(busy)return;busy=true;L("dress_go",{});api("/api/start",{kid:k,chore:"get_dressed"}).then(function(r){busy=false;if(r.ok)S=r.state;
+    $("drgo").onclick=function(){if(busy)return;busy=true;L("dress_go",{});api("/api/start",{kid:k,chore:"get_dressed"}).then(function(r){busy=false;if(r.ok&&r.state)S=r.state;
+      if(r.ok&&S.dress&&!(S.dress.started||{})[k]){S.dress.started=S.dress.started||{};S.dress.started[k]=Date.now()/1000}
       if(!r.ok){modal('<div class="q">Hmm: '+(r.error||'try again')+'</div>');addOk();return}chime([523,659,784]);dressScreen(k)}).catch(function(){busy=false})};
     return true}
   modal((SC?'<div class="big">'+E("1f3eb")+E("1f455")+'</div><div class="q" style="font-size:44px;color:#1565c0">School day! Get dressed first.</div>':
     '<div class="big" style="animation:pulse 1s infinite">'+E("1f455")+'</div><div class="q" style="font-size:44px;color:#c62828">Put on your clothes NOW!</div>')+
     '<div class="q" style="font-size:64px;font-weight:900">'+E("23f1")+' <span class="cdu" data-since="'+ST+'"></span></div>'+
-    (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Record: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+
-    '<div class="faces" style="font-size:30px;gap:24px"><div>'+E("1f455")+'<br>Clothes</div><div>'+E("1f9e6")+'<br>Socks</div><div>'+E("1f45f")+'<br>Shoes</div></div>'+
+    (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Fastest: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+pbLine(k)+
+    WEAR()+
     '<div class="q" style="font-size:22px;opacity:.75">Nothing else until a grown-up says you\'re ready to go.</div>'+
     '<div class="faces"><div class="btn yes" id="drdone" style="font-size:38px;font-weight:900;padding:14px 34px">'+E("2705")+' I\'m dressed!</div></div>');
   $("drdone").onclick=function(){if(busy)return;busy=true;L("dress_done",{});api("/api/report",{kid:k,chore:"get_dressed",feeling:"ok"}).then(function(r){busy=false;if(r.ok)S=r.state;
@@ -861,7 +864,7 @@ function doReport(c,feel,node,note,ask,delivered){L("report",{chore:c.id,feeling
     busy=false;if(!res.ok){closeModal();return}
     S=res.state;
     var took=res.event.started?res.event.ts-res.event.started:null,rec=(S.records||{})[c.id],isRec=took&&took>=30&&(!rec||took<rec.sec);
-    modal('<div class="celebrate"><div class="big">'+E("1f389")+'</div><div class="q">'+E(c.icon)+' '+E("1f50d")+(took?' &nbsp;'+E("23f1")+' '+fmtS(took):'')+'</div>'+(isRec?'<div class="q" style="color:#d4a017">'+E("1f947")+' Maybe a NEW RECORD! (if it passes inspection)</div>':'')+'<div class="plus">'+(res.event.ask!=null?E("1f64b")+" "+res.event.ask:res.event.points==null?E("2753"):"+"+res.event.points)+' '+E("2b50")+'</div>'+((res.event.team||[]).length>1?'<div class="q" style="font-size:26px">'+E("1f91d")+' '+teamIcons(res.event.team)+' share it</div>':'')+'<div class="q" style="font-size:24px;opacity:.7">waiting for inspection</div></div>');
+    modal('<div class="celebrate"><div class="big">'+E("1f389")+'</div><div class="q">'+E(c.icon)+' '+E("1f50d")+(took?' &nbsp;'+E("23f1")+' '+fmtS(took):'')+'</div>'+(isRec?'<div class="q" style="color:#d4a017">'+E("1f947")+' Maybe a NEW RECORD! (if it passes inspection)</div>':'')+'<div class="plus">'+(res.event.ask!=null?E("1f64b")+" "+res.event.ask:res.event.points==null?E("2753"):res.event.points===0?E("1f44d"):"+"+res.event.points)+(res.event.points===0&&res.event.ask==null?'':' '+E("2b50"))+'</div>'+((res.event.team||[]).length>1?'<div class="q" style="font-size:26px">'+E("1f91d")+' '+teamIcons(res.event.team)+' share it</div>':'')+'<div class="q" style="font-size:24px;opacity:.7">waiting for inspection</div></div>');
     confetti(220);chime([659,784,988,1319,1568]);
     addOk(function(){renderKid()});
   }).catch(function(){busy=false;closeModal()});
@@ -1169,7 +1172,7 @@ function jobModal(id){var r=S.history.find(function(h){return h.id===id});if(!r)
   if(r.type==="adjust"){modal('<div class="big">'+E(insp(r.by).icon)+'</div><div class="q">'+insp(r.by).name+' gave '+(r.points>0?"+":"")+r.points+' '+E("2b50")+'</div><div class="q" style="font-size:24px">'+(r.reason||"").replace(/^paper log: /,"")+'</div>');return}
   var head='<div class="big">'+E(r.chore_icon)+'</div><div class="q">'+r.chore_name+'</div>';
   if(r.status==="inspected"){var my=(typeof shares==="undefined")?null:null;
-    modal(head+'<div class="q">'+E(insp(r.inspected_by).icon)+' '+insp(r.inspected_by).name+' checked it '+E("2705")+'</div><div class="plus">+'+r.awarded+' '+E("2b50")+'</div>'+
+    modal(head+'<div class="q">'+E(insp(r.inspected_by).icon)+' '+insp(r.inspected_by).name+' checked it '+E("2705")+'</div>'+(r.awarded?'<div class="plus">+'+r.awarded+' '+E("2b50")+'</div>':'')+
       ((r.team||[]).length>1?'<div class="q" style="font-size:22px;opacity:.8">'+E("1f91d")+' '+teamIcons(r.team)+(r.split&&Object.keys(r.split).length?' · deal: '+Object.keys(r.split).map(function(m){return KI2(m).name+" "+r.split[m]}).join(", "):' shared')+'</div>':'')+
       (r.partial&&r.leftover_note!=null?'<div class="q" style="font-size:28px;color:#4527a0;background:#ede7f6;border-radius:16px;padding:8px 12px">'+E("1f9e9")+' Still to do: '+(notes(r.leftover_note)||"the rest")+'</div>':'')+
       (r.feedback?'<div class="q" style="font-size:26px">'+E("1f4dd")+' '+notes(r.feedback)+'</div>':'')+

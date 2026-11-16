@@ -1389,6 +1389,27 @@ class SchoolMornings(Case):
         code, r = self.app.post("/api/report", {"kid": "ava", "chore": "get_dressed", "feeling": "ok"})
         self.assertEqual((code, r["event"]["started"]), (200, st["started"]["ava"]))
 
+    def test_a_second_start_keeps_the_first_clock(self):
+        self.app.event(type="dress", on=True, kids=["ava"], by="auto", school=True)
+        self.app.post("/api/start", {"kid": "ava", "chore": "get_dressed"})
+        first = self.app.state()["dress"]["started"]["ava"]
+        time.sleep(0.05)
+        code, r = self.app.post("/api/start", {"kid": "ava", "chore": "get_dressed"})
+        self.assertEqual((code, r.get("already")), (200, True))
+        self.assertEqual(self.app.state()["dress"]["started"]["ava"], first)
+
+    def test_personal_bests_beside_the_fastest_kid(self):
+        now = time.time()
+        for kid, sec, ago in (("max", 300, 3000), ("ava", 600, 2000), ("ava", 500, 1000)):
+            ev = self.app.event(type="report", kid=kid, chore="get_dressed", feeling="ok", points=0,
+                                ts=now - ago, started=now - ago - sec)
+            self.app.post("/api/inspect", {"ref": ev["id"], "by": "jordan", "ok": True, "points": 0})
+        st = self.app.state()
+        self.assertEqual(st["records"]["get_dressed"]["kid"], "max")
+        self.assertEqual({k: v["sec"] for k, v in st["personal_records"]["get_dressed"].items()}, {"max": 300, "ava": 500})
+        self.assertTrue(any(a["id"].startswith("pb:get_dressed") and "beat your 10:00" in a["sub"] for a in st["awards"]["ava"]),
+                        st["awards"]["ava"])
+
     def test_next_school_morning_skips_the_weekend_and_holidays(self):
         sat = (self.MON + timedelta(days=5)).replace(hour=9)
         self.assertEqual(self.s.school_next(sat, self.s.cfg()["kids"])["day"], "Mon")

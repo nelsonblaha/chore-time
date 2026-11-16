@@ -201,6 +201,7 @@ def compute_awards(c, reports, evs, earned, typical):
     passed = sorted([r for r in reports.values() if r["status"] == "inspected" and r["chore"] != "toy_swap" and not r.get("partial")],
                     key=lambda r: r.get("inspected_ts") or r["ts"])
     records, jobs, days = {}, {k: 0 for k in kids}, {k: set() for k in kids}
+    pbs = {}   # each kid's own best time per job: {chore: {kid: {"sec", "ts"}}}
     expanded = []
     for r in passed:
         for m in (r.get("team") or [r["kid"]]):
@@ -242,10 +243,16 @@ def compute_awards(c, reports, evs, earned, typical):
             sec = r["ts"] - r["started"]
             if 30 <= sec <= 4 * 3600:
                 best = records.get(cid)
+                mine = pbs.setdefault(cid, {}).get(k)
                 if not best or sec < best["sec"]:
                     records[cid] = {"kid": k, "sec": sec, "ts": ts, "prev": best}
                     add(k, "record:%s:%d" % (cid, int(ts)), "1f947", "Fastest " + ch.get("name", cid) + " ever!",
                         fmt_s(sec) + ("" if not best else " (beat " + fmt_s(best["sec"]) + ")"), ts)
+                elif mine and sec < mine["sec"]:   # not the fastest kid, but faster than they've ever been
+                    add(k, "pb:%s:%d" % (cid, int(ts)), "1f3c5", "Your best " + ch.get("name", cid) + "!",
+                        fmt_s(sec) + " (beat your " + fmt_s(mine["sec"]) + ")", ts)
+                if not mine or sec < mine["sec"]:
+                    pbs[cid][k] = {"sec": sec, "ts": ts}
                 T = (typical.get(cid) or {}).get("minutes")
                 if T and sec < T * 60 * 0.8 and (typical[cid]["n"] >= 3):
                     add(k, "speed:" + cid, "26a1", "Speedy " + ch.get("name", cid) + "!", "Faster than usual: " + fmt_s(sec), ts)
@@ -300,12 +307,13 @@ def compute_awards(c, reports, evs, earned, typical):
                     add(k, "lvl:team:%d" % lv, "1f91d", "Team Player LV %d!" % lv, "%d team jobs" % team_n, ts_)
     recs = {cid: {"kid": v["kid"], "sec": round(v["sec"]), "ts": v["ts"], **({"team": v["team"], "size": v["size"]} if v.get("team") else {})}
             for cid, v in records.items()}
-    return {"awards": {k: sorted(v, key=lambda a: a["ts"]) for k, v in aw.items()}, "records": recs,
+    prs = {cid: {k: {"sec": round(v["sec"]), "ts": v["ts"]} for k, v in by.items()} for cid, by in pbs.items() if by}
+    return {"awards": {k: sorted(v, key=lambda a: a["ts"]) for k, v in aw.items()}, "records": recs, "personal_records": prs,
             "awards_seen": seen, "next_awards": nxt}
 
 
 GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "points": 0, "cooldown_h": 0, "shared": True, "est_minutes": 5,
-               "hidden": True, "desc": "Clothes, socks and shoes on. Then show a grown-up.",
+               "hidden": True, "desc": "Shirt, pants, underwear, socks and shoes on. Then show a grown-up.",
                "trophy": {"icon": "1f3c3", "title": "Dressed!"}}   # the "Put on clothes!" job: a timed race, a trophy each time
 
 
@@ -571,7 +579,7 @@ def watch_when_down():
 
 
 # "Put on clothes!" (a grown-up's switch on the parents' page): the listed kids can't do other jobs or spend until a
-# grown-up passes their "Get dressed" (clothes, socks, shoes); the switch turns itself off when all are ready.
+# grown-up passes their "Get dressed" (shirt, pants, underwear, socks, shoes); the switch turns itself off when all are ready.
 # Spoken reminders every 30 s on house.json dress.speakers (plain speakers: a Hub would drop its kids' screen).
 DRESS = HOUSE.get("dress") or {}
 
@@ -743,7 +751,7 @@ def dress_announce(first=False):
     if not d_.get("on") or not todo or d_.get("school"):   # school mornings are quiet (kids may still be asleep)
         return
     names = " and ".join(next((x["name"] for x in cfg()["kids"] if x["id"] == k), k) for k in todo)
-    msg = (DRESS.get("message") or "{names}: put on your clothes, socks and shoes right now! Then show a grown-up.").format(names=names)
+    msg = (DRESS.get("message") or "{names}: put on your shirt, pants, underwear, socks and shoes right now! Then show a grown-up.").format(names=names)
     spk = DRESS.get("speakers") or ([ANNOUNCE_SPEAKER] if ANNOUNCE_SPEAKER else [])
     if ANNOUNCE_TTS and spk:
         ilog({"src": "announce", "msg": msg, "speaker": spk})
@@ -1493,7 +1501,7 @@ def push_state_sensor(state=None, last_result=None):
     hist = [{k: h[k] for k in keep if k in h} for h in state["history"][:40]]
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
-             "records": state.get("records"), "paused": state.get("paused"),
+             "records": state.get("records"), "personal_records": state.get("personal_records"), "paused": state.get("paused"),
              "expected": state.get("expected"), "personal_best": state.get("personal_best"),
              "achievements": state.get("achievements"), "streak": state.get("streak"), "chore_mode": state.get("chore_mode"),
              "pending_points": state["pending_points"], "board": state["board"], "history": hist,
@@ -2511,6 +2519,8 @@ class H(BaseHTTPRequestHandler):
         elif p in ("/api/start", "/api/stop"):
             if b.get("kid") not in kids or (p == "/api/start" and b.get("chore") not in chores):
                 return self.send(400, {"error": "unknown kid/chore"})
+            if p == "/api/start" and (st["active"].get(b["kid"]) or {}).get("chore") == b["chore"]:
+                return self.send(200, {"ok": True, "already": True, "state": st})   # a second tap keeps the clock running
             if p == "/api/start" and chores[b["chore"]].get("each_daily") and \
                     b["kid"] in (st["board"].get(b["chore"]) or {}).get("done_today", []):
                 return self.send(409, {"error": "already done today"})
