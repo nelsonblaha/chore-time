@@ -28,6 +28,7 @@ The data folder also holds `ledger.jsonl` (every event, append-only) and some sm
      "needs_ok": true}                               // optional: the kid ASKS; a grown-up accepts (it starts and is paid then) or says not now
   ],
   "bedtime": "20:30",                                 // or "off"
+  "rewards_until": "19:30",                           // optional: no rewards from then until morning (brush-teeth time)
   "households": [{"id": "dad", "name": "Dad's house"}, {"id": "mom", "name": "Mom's house"}],   // optional, see below
   "chores": [ ... ]
 }
@@ -128,3 +129,10 @@ Every section is optional. A missing section means that feature is off. `example
 - For the vacuum: `input_boolean.vacuum_autopilot` (the on/off switch) and `input_boolean.vacuum_autopilot_active` (on while it drives, so your own automations can stand down), plus a script that starts room cleaning by name (see `contrib/`).
 
 Chore Time publishes `sensor.chore_state`, `sensor.chore_points_<kid>`, `sensor.chore_lights` (which bulbs carry a colour, so your lighting can skip them) and `sensor.vacuum_autopilot` (every room's vacuum decision and why).
+
+### Spoken announcements
+
+`house.json` → `home_assistant.announce`: `tts` (a TTS entity) and `speaker` (a media player). If the speaker
+plays only a chime and no voice (it can't fetch Home Assistant's own TTS links, e.g. a Music Assistant player
+that can't resolve HA's internal hostname), add `"media_base": "http://<HA address the speaker can reach>:8123"`:
+Chore Time then makes the audio itself and plays it from there. VR warnings are said twice.
