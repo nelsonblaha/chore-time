@@ -365,6 +365,13 @@ function renderCfEdit(){var k=kidOf(CFK),F=(S.chores_first||{})[CFK]||{};if($("c
   wireList("cfl");
   $("cfgo").onclick=function(){var its=$("cfl").value.split("\n").map(function(t){return t.trim()}).filter(Boolean);
     post("/api/chores_first",{kid:CFK,on:true,items:its},F.on?"List saved":"Chores first: "+k.name+"'s rewards are blocked").then(closePM)}}
+// "Reject with penalty" only shows when it fits: this kid's last 2 inspections in a row (past 12 h) were rejected or
+// worth 0, or 3+ of theirs are waiting at once (fake chores piling up)
+function prankish(k){var mine=S.history.filter(function(h){return h.type==="report"&&h.kid===k&&S.now-h.ts<43200});
+  if(mine.filter(function(h){return h.status==="pending"}).length>=3)return true;
+  var done=mine.filter(function(h){return h.status!=="pending"&&h.inspected_ts}).sort(function(a,b){return b.inspected_ts-a.inspected_ts}),n=0;
+  for(var i=0;i<done.length&&(done[i].status==="rejected"||(done[i].status==="inspected"&&!done[i].awarded));i++)n++;
+  return n>=2}
 function renderMostly(){var r=S.history.find(function(h){return h.id===MOSTLY});if(!r){closePM();return}var k=kidOf(r.kid);
   if($("mnow"))return;  // keep what the parent is typing
   $("pmbody").innerHTML='<h2 class="h2b">🧩 Mostly done</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><span class="mute">full job '+r.points+' ⭐</span></div>'+
@@ -483,7 +490,7 @@ function render(){
       '<div class="chips">'+[0,1,2,3,4,5,6,8,10].map(function(n){var on=(fixed&&n===r.points)||(r.ask!=null&&n===r.ask);return'<button class="'+(on?"ok":"")+'" data-p="'+n+'">'+(on?"✓ ":"")+n+'</button>'}).join("")+
       '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>')+
       (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
-      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button><button class="no" data-prank="'+r.id+'" title="Nothing was done: reject it and take 1 star">🚫 Reject with penalty (−1 ⭐)</button>'+(r.partial||other?'':'<button data-kw="'+r.id+'" title="Back to them as still in progress: same team and deal, not a fail">🔁 Keep working…</button>')+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
+      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(prankish(r.kid)?'<button class="no" data-prank="'+r.id+'" title="Nothing was done: reject it and take 1 star">🚫 Reject with penalty (−1 ⭐)</button>':'')+(r.partial||other?'':'<button data-kw="'+r.id+'" title="Back to them as still in progress: same team and deal, not a fail">🔁 Keep working…</button>')+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
   var cert=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};return c.slot&&bd.certify_at&&bd.claimed_by&&bd.certified==null&&!bd.claim_done&&Date.now()/1000>=bd.certify_at});   // only if the kid hasn't said "I did it"
   cert.forEach(function(c){var bd=S.board[c.id],k=kidOf(bd.claimed_by),when=new Date(bd.slot*1000);   // e.g. church reading: the grown-up says whether it happened
     ph='<div class="card"><div class="row"><span class="big">'+E(k.icon)+E(c.icon)+'</span><div style="flex:1"><b>Did '+esc(k.name)+' do it?</b> · '+esc(c.name)+
