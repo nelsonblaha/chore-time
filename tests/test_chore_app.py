@@ -81,7 +81,7 @@ class App:
         s.ha_get = lambda e, tok: self.states.get(e, {"state": "unavailable", "attributes": {}})
         s.ha_call = lambda svc, data, tok: self.calls.append((svc, data))
         s.ha_post_state = lambda *a, **k: None
-        self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting") if hasattr(s, n)}
+        self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting", "announce") if hasattr(s, n)}
         for n in ("announce", "notify_report", "notify_inspecting", "notify_started", "send_adult_request",
                   "clear_adult_request", "push_state_sensor", "push_ha", "after_change"):
             if hasattr(s, n):
@@ -1454,6 +1454,75 @@ class ChoresFirst(Case):
         # blocking again later starts fresh (the old pass doesn't count)
         a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Dishes"]})
         self.assertTrue(a.state()["chores_first"]["ava"]["on"])
+
+
+class GrownUpStartsVR(Case):
+    def test_vr_is_paid_then_a_grown_up_starts_the_timer_or_refunds(self):
+        c = base_config()
+        for r in c["rewards"]:
+            if r["id"] == "vr":
+                r["needs_ok"] = True
+        a = App(c)
+        a.event(type="adjust", kid="ava", points=10, reason="test")
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200, r)
+        self.assertTrue(r["event"]["await_ok"])
+        st = a.state()
+        self.assertEqual((st["balance"]["ava"], st["timers"], len(st["requests"])), (8, [], 1))   # paid, not started
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)   # bought already
+        self.assertEqual(a.post("/api/request_answer", {"ref": r["event"]["id"], "by": "jordan", "ok": True})[0], 200)
+        st = a.state()
+        self.assertEqual((st["balance"]["ava"], len(st["timers"]), st["requests"]), (8, 1, []))
+        self.assertGreaterEqual(st["timers"][0]["start"], r["event"]["ts"])   # the clock starts at the grown-up's go
+        self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"]})[0], 400)   # grown-ups only
+        self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"], "by": "jordan"})[0], 200)
+        self.assertEqual(a.state()["timers"], [])
+        # another kid's, answered "not now": refunded, and a note waits on their screen
+        a.event(type="adjust", kid="max", points=5, reason="test")
+        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr"})
+        self.assertEqual(a.state()["balance"]["max"], 3)
+        self.assertEqual(a.post("/api/request_answer", {"ref": r2["event"]["id"], "by": "jordan", "ok": False})[0], 200)
+        st = a.state()
+        self.assertEqual((st["balance"]["max"], [t for t in st["timers"] if t["kid"] == "max"]), (5, []))
+        note = st["kid_notes"]["max"][0]
+        self.assertIn("Not right now", note["text"])
+        self.assertEqual(a.post("/api/kid_note_seen", {"kid": "max", "ref": note["id"]})[0], 200)
+        self.assertEqual(a.state()["kid_notes"].get("max"), None)
+
+    def test_announcements_say_it_twice(self):
+        s = self.app.s
+        s.ANNOUNCE_TTS, s.ANNOUNCE_SPEAKER, s.ANNOUNCE_MEDIA_BASE = "tts.x", "media_player.x", None
+        self.app.orig["announce"]("Ava, VR time is up.", "tok", repeat=2)
+        said = [d for svc, d in self.app.calls if svc == "tts.speak"]
+        self.assertEqual(said[-1]["message"], "Ava, VR time is up. Ava, VR time is up.")
+
+
+class PrankInspection(Case):
+    def test_nothing_done_costs_a_star_and_is_not_handed_back(self):
+        a = App(base_config())
+        a.event(type="adjust", kid="ava", points=5, reason="test")
+        rep = a.post("/api/report", {"kid": "ava", "chore": "kitchen", "feeling": "ok"})[1]["event"]
+        self.assertEqual(a.post("/api/inspect", {"ref": rep["id"], "by": "jordan", "prank": True, "ok": True})[0], 200)
+        st = a.state()
+        r = next(h for h in st["history"] if h.get("id") == rep["id"])
+        self.assertEqual((r["status"], st["balance"]["ava"], st["active"]), ("rejected", 4, {}))
+        self.assertIn("against the rules", r["feedback"])
+
+
+class WindDown(Case):
+    def test_no_rewards_after_the_evening_cutoff(self):
+        c = base_config()
+        c["rewards_until"] = "00:00"   # always past it
+        a = App(c)
+        a.event(type="adjust", kid="ava", points=20, reason="test")
+        self.assertTrue(a.state()["wind_down"]["on"])
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "games"})
+        self.assertEqual(code, 409)
+        self.assertIn("bedtime", r["error"])
+        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "other", "feeling": "ok"})[0], 200)   # jobs still fine
+
+    def test_off_without_a_cutoff(self):
+        self.assertFalse(App(base_config()).state()["wind_down"]["on"])
 
 
 class NoRecordForSomethingElse(Case):

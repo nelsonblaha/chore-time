@@ -846,6 +846,18 @@ def watch_bedtime():
         time.sleep(10)
 
 
+def wind_down_state(c):
+    """chores.json "rewards_until": "19:30" -> from then until morning (BED_END_H) no rewards can be bought:
+    it's tooth-brushing time and bedtime is coming. {on, at}"""
+    from datetime import datetime
+    at = c.get("rewards_until")
+    if not at:
+        return {"on": False, "at": None}
+    now = datetime.now()
+    hh, mm = (int(x) for x in str(at).split(":"))
+    return {"on": now.hour < BED_END_H or (now.hour, now.minute) >= (hh, mm), "at": at}
+
+
 def bedtime_state(c, evs):
     """Bedtime: from c["bedtime"] (default 20:30) until 6 AM, or when a parent presses
     Bedtime; a parent's latest press since 5 AM wins over the clock."""
@@ -895,6 +907,7 @@ def derive():
             r["inspected_ts"] = e["ts"]
             r["awarded"] = e.get("points") if e.get("ok") else 0
             r["inspect_id"] = e["id"]
+            r["prank"] = bool(e.get("prank"))   # "reject with penalty": asked for an inspection with nothing done
             if e.get("label"):
                 r["label"] = e["label"]
             if e.get("present"):
@@ -1284,6 +1297,7 @@ def derive():
     return {"version": ver, "ver_tv": ver_tv, "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(read_events()), "screen_break": screen_break, "bedtime": bedtime_state(c, evs),
+            "wind_down": wind_down_state(c),
             "config": live_cfg(c, cf_board(c, evs, reports, board)), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
@@ -1367,7 +1381,7 @@ def push_state_sensor(state=None, last_result=None):
     state = state or derive()
     keep = ("id", "ts", "type", "kid", "chore", "chore_name", "chore_icon", "status", "points", "awarded",
             "feeling", "inspected_by", "inspect_id", "reason", "by", "reward", "reward_name", "reward_icon", "cost", "tv",
-            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered", "inspected_ts", "certified")
+            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered", "inspected_ts", "certified", "prank")
     hist = [{k: h[k] for k in keep if k in h} for h in state["history"][:40]]
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
@@ -1379,7 +1393,7 @@ def push_state_sensor(state=None, last_result=None):
              "reward_ready": state.get("reward_ready"), "timers": state.get("timers"),
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
              "awards": state.get("awards"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
-             "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "version": state.get("version"),
+             "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "wind_down": state.get("wind_down"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
@@ -1903,6 +1917,8 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and b.get("chore") != "get_dressed" \
                 and (st.get("dress") or {}).get("on") and (st["dress"]["kids"].get(b.get("kid")) or "ready") != "ready":
             return self.send(409, {"error": "Put on your clothes first!"})
+        if p == "/api/spend" and (st.get("wind_down") or {}).get("on"):
+            return self.send(409, {"error": "It's almost bedtime: no more rewards after %s. Brush your teeth!" % st["wind_down"]["at"]})
         if p == "/api/spend" and any(((st.get("chores_first") or {}).get(k_) or {}).get("on") for k_ in [b.get("kid")] + list(b.get("with") or [])):
             k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("chores_first") or {}).get(k_) or {}).get("on"))
             nm_ = next((x["name"] for x in c["kids"] if x["id"] == k_), str(k_))
@@ -2119,7 +2135,9 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "unknown report/inspector"})
             if r["status"] != "pending":
                 return self.send(409, {"error": "already inspected"})
-            ok = bool(b.get("ok", True))
+            ok = bool(b.get("ok", True)) and not b.get("prank")
+            if b.get("prank"):   # asked for an inspection with nothing done: no, it's not handed back, and it costs 1 star
+                b["feedback"] = str(b.get("feedback") or "Adding fake chores is against the rules! Nothing was done, so it costs 1 star.")
             pts = b.get("points", r.get("points"))
             if ok and isinstance(b.get("award"), dict):   # a grown-up decides who did it and what each kid gets
                 award = {k: max(0, min(50, int(v or 0))) for k, v in b["award"].items() if k in kids}
@@ -2144,6 +2162,7 @@ class H(BaseHTTPRequestHandler):
             ev = append({"type": "inspect", "ref": r["id"], "by": b["by"], "ok": ok,
                          "points": int(pts) if ok else 0, "label": str(b.get("label") or "")[:60], **extra,
                          **({"feedback": str(b.get("feedback") or "")[:600]} if not ok else {}),
+                         **({"prank": True} if b.get("prank") else {}),
                          **({"keep": True} if not ok and b.get("keep") else {})})
             if r["chore"] == "get_dressed" and ok:
                 d_ = derive().get("dress") or {}
@@ -2152,7 +2171,10 @@ class H(BaseHTTPRequestHandler):
             if ok and b.get("leftover_points") is not None and r["chore"] not in ("toy_swap", "other"):
                 append({"type": "price", "chore": r["chore"], "points": max(0, min(50, int(b["leftover_points"]))),
                         "rest": True, "note": str(b.get("leftover_note") or "")[:600], "by": b["by"], "ref": r["id"]})
-            if not ok and not r.get("partial") and r["chore"] not in ("toy_swap", "other", "get_dressed"):
+            if b.get("prank"):
+                append({"type": "adjust", "kid": r["kid"], "points": -1, "by": b["by"], "icon": "1f6ab", "ref": r["id"],
+                        "reason": "Inspection for nothing: " + str(r.get("chore_name") or (chores.get(r["chore"]) or {}).get("name", r["chore"]))})
+            if not ok and not b.get("prank") and not r.get("partial") and r["chore"] not in ("toy_swap", "other", "get_dressed"):
                 # hand the chore back: the kid's timer resumes from the work time so far (waiting/inspection excluded)
                 worked = (r["ts"] - r["started"]) if r.get("started") else 0
                 append({"type": "rework", "ref": r["id"], "chore": r["chore"], "team": r.get("team") or [r["kid"]],
@@ -2522,6 +2544,10 @@ class H(BaseHTTPRequestHandler):
                     if act == "lock":
                         GUARD.setdefault("grace", {}).pop(tid_, None)
             ev = append({"type": "tv_set_until", "tv": b["tv"], "until": until, "by": b["by"], "action": act})
+        elif p == "/api/timer_done":   # grown-ups: clear a timed reward (time's up and the headset is off)
+            if b.get("by") not in insp or b.get("ref") not in {t["ref"] for t in timed_rewards()}:
+                return self.send(400, {"error": "unknown inspector / no timer"})
+            ev = append({"type": "timer_done", "ref": b["ref"], "by": b["by"]})
         elif p == "/api/timer_restart":
             tr = {t["ref"]: t for t in timed_rewards()}
             if b.get("ref") not in tr:
@@ -2791,13 +2817,32 @@ ANNOUNCE_SPEAKER = os.environ.get("CHORE_SPEAKER", (HA.get("announce") or {}).ge
 ANNOUNCE_TTS = (HA.get("announce") or {}).get("tts")
 
 
-def announce(msg, tok, speaker=None):
+ANNOUNCE_MEDIA_BASE = (HA.get("announce") or {}).get("media_base")   # e.g. HA's LAN address
+
+
+def announce(msg, tok, speaker=None, repeat=1):
+    """Say msg on the speaker(s), `repeat` times in a row (VR: twice, so a kid in a headset catches it).
+    announce.media_base: when the speaker can't fetch HA's own TTS links (e.g. Music Assistant can't resolve
+    HA's internal hostname, so only its announcement bell plays), the audio is made here and played from that base."""
     if not ANNOUNCE_TTS or not (speaker or ANNOUNCE_SPEAKER):   # no speaker configured: stay silent
         return
-    ilog({"src": "announce", "msg": msg, "speaker": speaker or ANNOUNCE_SPEAKER})
-    print("announce:", msg, flush=True)
+    text = " ".join([msg] * max(1, int(repeat)))
+    ilog({"src": "announce", "msg": msg, "repeat": repeat, "speaker": speaker or ANNOUNCE_SPEAKER})
+    print("announce:", text, flush=True)
+    if ANNOUNCE_MEDIA_BASE:
+        try:
+            req = urllib.request.Request(f"{HA_URL}/api/tts_get_url", method="POST",
+                                         data=json.dumps({"engine_id": ANNOUNCE_TTS, "message": text, "cache": True}).encode(),
+                                         headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+            path = json.loads(urllib.request.urlopen(req, timeout=20).read())["path"]
+            ha_call("media_player.play_media", {"entity_id": speaker or ANNOUNCE_SPEAKER, "announce": True,
+                                                "media_content_id": ANNOUNCE_MEDIA_BASE.rstrip("/") + path,
+                                                "media_content_type": "music"}, tok)
+            return
+        except Exception as ex:  # noqa: BLE001
+            ilog({"src": "announce", "action": "media_base_failed", "error": str(ex)[:200]})
     ha_call("tts.speak", {"entity_id": ANNOUNCE_TTS, "media_player_entity_id": speaker or ANNOUNCE_SPEAKER,
-                          "message": msg, "cache": True}, tok)
+                          "message": text, "cache": True}, tok)
 
 
 def timed_rewards(evs=None, now=None):
@@ -2821,6 +2866,8 @@ def timed_rewards(evs=None, now=None):
         elif e["type"] == "timer_restart" and e.get("ref") in out:
             out[e["ref"]]["start"] = e["ts"]
             out[e["ref"]]["restarts"] += 1
+        elif e["type"] == "timer_done" and e.get("ref") in out:   # a grown-up cleared it (headset off)
+            out.pop(e["ref"])
     return [t for t in out.values() if t["start"] + t["minutes"] * 60 + 120 > now]
 
 
@@ -2828,6 +2875,11 @@ def vr_timers(tok):
     """Spoken 1-minute warning and time's-up for every running timed reward (restart-aware)."""
     now = time.time()
     done = GUARD.setdefault("vr_said", set())
+    live = sorted(t["ref"] for t in timed_rewards())
+    if live != GUARD.get("vr_live"):   # a timer ran out (dropped 2 min after time's up): screens that only see the
+        if GUARD.get("vr_live") is not None:   # HA sensor need a push, or "time is up" stays on them
+            push_state_sensor()
+        GUARD["vr_live"] = live
     kidname = {k["id"]: k["name"] for k in cfg()["kids"]}
     for t in timed_rewards():
         end = t["start"] + t["minutes"] * 60
@@ -2835,10 +2887,10 @@ def vr_timers(tok):
         k1, k0 = (t["ref"], round(t["start"]), 1), (t["ref"], round(t["start"]), 0)
         if end - 60 <= now < end and k1 not in done:
             done.add(k1)
-            announce(f"{nm}, one minute of VR left.", tok)
+            announce(f"{nm}, one minute of VR left.", tok, repeat=2)
         if end <= now < end + 90 and k0 not in done:
             done.add(k0)
-            announce(f"{nm}, VR time is up. Please take off the headset.", tok)
+            announce(f"{nm}, VR time is up. Please take off the headset.", tok, repeat=2)
 
 
 UNLOCKS = {  # reward id -> (minutes, what it allows, longest single playback allowed in s or None)

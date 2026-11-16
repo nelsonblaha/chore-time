@@ -483,7 +483,7 @@ function render(){
       '<div class="chips">'+[0,1,2,3,4,5,6,8,10].map(function(n){var on=(fixed&&n===r.points)||(r.ask!=null&&n===r.ask);return'<button class="'+(on?"ok":"")+'" data-p="'+n+'">'+(on?"✓ ":"")+n+'</button>'}).join("")+
       '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>')+
       (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
-      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(r.partial||other?'':'<button data-kw="'+r.id+'" title="Back to them as still in progress: same team and deal, not a fail">🔁 Keep working…</button>')+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
+      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button><button class="no" data-prank="'+r.id+'" title="Nothing was done: reject it and take 1 star">🚫 Reject with penalty (−1 ⭐)</button>'+(r.partial||other?'':'<button data-kw="'+r.id+'" title="Back to them as still in progress: same team and deal, not a fail">🔁 Keep working…</button>')+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
   var cert=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};return c.slot&&bd.certify_at&&bd.claimed_by&&bd.certified==null&&!bd.claim_done&&Date.now()/1000>=bd.certify_at});   // only if the kid hasn't said "I did it"
   cert.forEach(function(c){var bd=S.board[c.id],k=kidOf(bd.claimed_by),when=new Date(bd.slot*1000);   // e.g. church reading: the grown-up says whether it happened
     ph='<div class="card"><div class="row"><span class="big">'+E(k.icon)+E(c.icon)+'</span><div style="flex:1"><b>Did '+esc(k.name)+' do it?</b> · '+esc(c.name)+
@@ -495,6 +495,9 @@ function render(){
   document.querySelectorAll("[data-cert]").forEach(function(b){b.onclick=function(){var ok=b.dataset.ok==="1";
     post("/api/certify",{chore:b.dataset.cert,ok:ok},ok?"Stars given":"Marked as not done")}});
   document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
+  document.querySelectorAll("[data-prank]").forEach(function(b){b.onclick=function(){var r=S.history.find(function(h){return h.id===b.dataset.prank});if(!r)return;
+    var t=prompt("Nothing was done? "+kidOf(r.kid).name+" loses 1 ⭐. Message they'll see:","Adding fake chores is against the rules! Nothing was done, so it costs 1 star.");if(t===null)return;
+    post("/api/inspect",{ref:r.id,ok:false,prank:true,feedback:t},"Rejected with penalty · −1 ⭐ for "+kidOf(r.kid).name)}});
   document.querySelectorAll("[data-kw]").forEach(function(b){b.onclick=function(){var r=S.history.find(function(h){return h.id===b.dataset.kw});if(!r)return;
     var env=S.envelope&&S.envelope.chores.indexOf(r.chore)>=0,n=prompt("Keep working: what's next for them? (optional)",env&&!r.delivered?S.envelope.handoff:"");
     if(n===null)return;post("/api/inspect",{ref:r.id,ok:false,keep:true,points:0,feedback:n},"Back to them: keep working")}});
@@ -602,7 +605,8 @@ function render(){
   }
   var tb="",tvs=(S.tv&&S.tv.tvs)||{};
   (S.timers||[]).forEach(function(t){var left=Math.round(t.start+t.minutes*60-S.now),k=kidOf(t.kid);
-    tb+='<div class="row" style="margin:4px 0;padding:6px;border-radius:10px;background:'+(left>60?"#1b5e20":left>0?"#8a6d00":"#7f1d1d")+';color:#fff"><b>'+E(k.icon)+' '+esc(k.name)+' · 🥽 VR timer</b><span>'+(left>0?Math.floor(left/60)+":"+("0"+left%60).slice(-2)+" left":"time is up")+'</span><span style="margin-left:auto"></span><button data-tre="'+t.ref+'">↻ Restart '+t.minutes+':00</button></div>'+
+    tb+='<div class="row" style="margin:4px 0;padding:6px;border-radius:10px;background:'+(left>60?"#1b5e20":left>0?"#8a6d00":"#7f1d1d")+';color:#fff"><b>'+E(k.icon)+' '+esc(k.name)+' · 🥽 VR timer</b><span>'+(left>0?Math.floor(left/60)+":"+("0"+left%60).slice(-2)+" left":"time is up")+'</span><span style="margin-left:auto"></span><button data-tre="'+t.ref+'">↻ Restart '+t.minutes+':00</button>'+(left<=0?'<button class="ok" data-tdn="'+t.ref+'">✓ Headset off</button>':'')+'</div>'+
+      (left<=0?'<div class="mute" style="margin:0 0 4px 6px">Clears by itself 2 minutes after time\'s up, or tap ✓ Headset off.</div>':'')+
       '<div class="mute" style="margin:0 0 8px 6px">⚠️ <b>Not enforced:</b> the system can\'t take the headset away yet. A speaker announces 1 minute left and time\'s up — if nobody will be nearby, set a Google timer as a backup.</div>'});
   var choreOn=S.tv&&S.tv.lock_until>S.now;
   var WHAT={show:"📺 Show",movie:"🎬 Movie",games:"🎮 Games",vr:"🥽 VR casting",other:"✨ Other"};
@@ -648,6 +652,7 @@ function render(){
   if($("bedbtn"))$("bedbtn").onclick=function(){post("/api/bedtime",{on:!(S.bedtime||{}).on},(S.bedtime||{}).on?"Bedtime ended":"Bedtime! Screens are sending them to bed")};
   document.querySelectorAll("[data-ta]").forEach(function(b){b.onclick=function(){var a=b.dataset.ta.split(":");
     post("/api/tv/adjust",{tv:a[0],action:a[1]},{five:"5-minute countdown started",plus:"+10 min",minus:"−10 min",lock:"Locked"}[a[1]])}});
+  document.querySelectorAll("[data-tdn]").forEach(function(b){b.onclick=function(){post("/api/timer_done",{ref:b.dataset.tdn},"VR timer cleared")}});
   document.querySelectorAll("[data-tre]").forEach(function(b){b.onclick=function(){post("/api/timer_restart",{ref:b.dataset.tre},"VR timer restarted")}});
   document.querySelectorAll("[data-un]").forEach(function(b){b.onclick=function(){var m=+b.dataset.un;post("/api/tv/unlock",{tv:"*",minutes:m},m?"TVs unlocked for "+m+" min":"TVs locked again")}});
   var AC=S.active||{},seenA={},ah="";
