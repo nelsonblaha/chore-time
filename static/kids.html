@@ -70,7 +70,9 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
 .pager{display:flex;align-items:center;justify-content:center;gap:18px;padding:6px 0}
 .pg{font-size:44px;background:#fff;border-radius:22px;padding:0 34px;box-shadow:0 5px 0 rgba(0,0,0,.12);color:var(--kid)}
 .pg:active{transform:scale(.9)}.pg.off{opacity:.2}
-#pgdots span{display:inline-block;width:18px;height:18px;border-radius:50%;background:#ccc;margin:0 5px}#pgdots span.on{background:var(--kid)}
+#pgdots span,.pgd span{display:inline-block;width:18px;height:18px;border-radius:50%;background:#ccc;margin:0 5px}#pgdots span.on,.pgd span.on{background:var(--kid)}
+.pager.sm{gap:12px;padding:4px 0}.pager.sm .pg{font-size:30px;padding:0 22px}
+.fold{cursor:pointer;user-select:none}.fold .sum{margin-left:auto;font-size:18px;font-weight:800;opacity:.75}.fold .chev{font-size:22px;color:var(--kid);margin-left:6px}
 .tile{background:var(--card);border-radius:26px;padding:10px 4px 8px;text-align:center;box-shadow:0 6px 0 rgba(0,0,0,.10);
   transition:transform .12s;position:relative;border:4px solid transparent}
 .tile:active{transform:scale(.92)}
@@ -252,9 +254,11 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
       <div class="pager"><div class="pg" id="pgprev">&#9664;</div><div id="pgdots"></div><div class="pg" id="pgnext">&#9654;</div></div></div>
     <div class="side">
       <div class="panel" id="presentsp" style="display:none;border:4px solid var(--kid)"><h2><span class="eh" data-c="1f504"></span> Toy swap</h2><div id="presents"></div></div>
-      <div class="panel"><h2><span class="eh" data-c="1f6d2"></span> Buy</h2><div id="rewards"></div>
-        <div class="rw" id="toyout" style="justify-content:center;font-size:20px;font-weight:900;background:#fff3e0"></div></div>
-      <div class="panel"><h2><span class="eh" data-c="1f4cb"></span> My jobs</h2><div class="hist" id="hist"></div></div>
+      <div class="panel"><h2 class="fold" id="buyh"><span class="eh" data-c="1f6d2"></span> Buy<span class="sum" id="buysum"></span><span class="chev" id="buychev"></span></h2>
+        <div id="tvnow"></div><div id="buybody" style="display:none"><div id="rewards"></div><div id="rwpg"></div>
+        <div class="rw" id="toyout" style="justify-content:center;font-size:20px;font-weight:900;background:#fff3e0"></div></div></div>
+      <div class="panel"><h2 class="fold" id="jobsh"><span class="eh" data-c="1f4cb"></span> My jobs<span class="sum" id="jobsum"></span><span class="chev" id="jobchev"></span></h2>
+        <div class="hist" id="pzslot"></div><div id="jobbody" style="display:none"><div class="hist" id="hist"></div><div id="hpg"></div></div></div>
     </div>
   </div>
 </section>
@@ -308,6 +312,9 @@ function E(code){if(!code)return"";if(CUSTOM_ICONS[code])return '<img class="e" 
 function hydrate(root){(root||document).querySelectorAll(".eh").forEach(function(n){n.outerHTML=E(n.dataset.c)})}
 hydrate();
 var S=null,kid=null,idleT=null,seen={},busy=false,page=0;
+var FOLD={buy:false,jobs:false},RWP=0,HP=0;   // Buy and My jobs start folded each time a kid opens their screen; each pages
+function pagerSm(id,pg,pages){if(pages<2)return "";return '<div class="pager sm"><div class="pg'+(pg>0?'':' off')+'" data-pgm="'+id+':-1">&#9664;</div><div class="pgd">'+
+  Array.apply(null,Array(pages)).map(function(_,i){return '<span class="'+(i===pg?"on":"")+'"></span>'}).join("")+'</div><div class="pg'+(pg<pages-1?'':' off')+'" data-pgm="'+id+':1">&#9654;</div></div>'}
 function $(id){return document.getElementById(id)}
 function api(path,body){return fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json()})}
 /* Inside Home Assistant (served from /local/, e.g. a child's own tab at their other home): state comes from
@@ -437,7 +444,7 @@ function render(){
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
   $("kface").innerHTML=E(k.icon);$("kname").innerHTML=k.name+" "+trophies(kid)+(houseName()?'<span style="font-size:.55em;opacity:.75;margin-left:8px">'+E("1f3e0")+' '+houseName()+'</span>':'');
-  $("newsbtn").innerHTML=E("1f4f0");$("newsbtn").onclick=openNews;
+  $("newsbtn").innerHTML=E("1f4f0");$("newsbtn").onclick=function(){openNews(0)};
   var SK=(S.streak||{})[kid]||{current:0};
   $("streak").innerHTML=E("1f525")+' <b>'+(SK.current||0)+'</b>'+(SK.today?'':'<span class="sk2">Do a job today!</span>');$("streak").className="streak"+(SK.today?"":" atrisk")+(SK.current?"":" cold");
   $("streak").onclick=function(){L("streak_tap");modal('<div class="big">'+E("1f525")+'</div><div class="q">'+(SK.current||0)+' day'+(SK.current===1?"":"s")+' in a row!</div><div class="q" style="font-size:24px;opacity:.8">'+(SK.today?E("2705")+' You did a job today. Come back tomorrow!':'Do a job today to keep your '+E("1f525")+' going!')+'</div><div class="q" style="font-size:20px;opacity:.6">Best: '+(SK.best||0)+'</div>');addOk()};
@@ -491,6 +498,7 @@ function renderKid(){
     if(c.each_daily&&(bd.done_today||[]).indexOf(kid)>=0&&(bd.pending_by||[]).indexOf(kid)<0)return false;   // done today (each kid once a day)
     return true}),PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
+  vis=vis.filter(function(c){return c.cleanup_for}).concat(vis.filter(function(c){return !c.cleanup_for}));   // "Clean up first!" leads
   var ch="";vis.slice(page*PER,page*PER+PER).forEach(function(c){
     var bd=S.board[c.id]||{price:c.points,pending_by:[]},cls="tile",badge="";
     if(bd.clean_until){cls+=" clean"}
@@ -535,15 +543,22 @@ function renderKid(){
         return '<span class="cdk" data-ready="'+m.g.until+'">'+Math.floor(lft/60)+":"+("0"+Math.floor(lft%60)).slice(-2)+'</span> left<div class="cbar"><div class="cfill drain" data-ready="'+m.g.until+'" data-tot="'+tot+'" style="width:'+Math.min(100,100*lft/tot).toFixed(1)+'%"></div></div>'})())+'</div>'+
       '<div class="btn" data-mv="'+m.g.id+'" data-from="'+m.tid+'" style="font-size:20px;font-weight:900;padding:8px 12px">'+E("1f504")+' Switch TV</div></div>'});
 
-  var rw="";S.config.rewards.filter(function(r){return here(r)}).forEach(function(r){var pc=Math.min(100,Math.max(0,b/r.cost*100));
+  var rw="";S.config.rewards.filter(function(r){return here(r)}).forEach(function(r){rw+="\u0001";var pc=Math.min(100,Math.max(0,b/r.cost*100));
     if(RR[r.id]&&RR[r.id]>S.now){var tot=((r.minutes||0)+(r.break_min||0))*60||1800;
       var lft=Math.max(0,RR[r.id]-Date.now()/1000),pct=Math.min(100,100*(1-lft/tot)).toFixed(1);
       rw+='<div class="rw cool" data-r="'+r.id+'"><div class="ic" style="opacity:.6">'+E(r.icon)+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.15">'+E("1f512")+' '+r.name+
         ' <span class="cdk" data-ready="'+RR[r.id]+'">'+Math.floor(lft/60)+":"+("0"+Math.round(lft%60)%60).slice(-2)+'</span><div class="cbar"><div class="cfill wait" data-ready="'+RR[r.id]+'" data-tot="'+tot+'" style="width:'+pct+'%"></div></div></div></div>';return}
-    if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===r.id})){rw+='<div class="rw" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:20px;font-weight:900;line-height:1.15">'+E("1f64b")+' Asked a grown-up for '+r.name+'</div></div>';return}
+    if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===r.id})){rw+='<div class="rw" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:20px;font-weight:900;line-height:1.15">'+E("1f64b")+' '+r.name+' is yours! A grown-up will start it</div></div>';return}
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
-  if(((S.chores_first||{})[kid]||{}).on)rw='<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! No rewards until the messes are cleaned up.</div>'+rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
-  $("rewards").innerHTML=tvh+rw;
+  var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Clean up first!</b> and get it checked. Then rewards come back.</div>':'';
+  if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
+  var RWL=rw.split("\u0001").filter(Boolean),RPER=tvh?3:4,rpages=Math.max(1,Math.ceil(RWL.length/RPER));if(RWP>=rpages)RWP=rpages-1;
+  var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
+  $("tvnow").innerHTML=tvh;   // TV time running stays in sight even when Buy is folded
+  $("rewards").innerHTML=banner+RWL.slice(RWP*RPER,RWP*RPER+RPER).join("");$("rwpg").innerHTML=pagerSm("rw",RWP,rpages);
+  $("buybody").style.display=FOLD.buy?"":"none";$("buychev").innerHTML=FOLD.buy?"&#9650;":"&#9660;";
+  $("buysum").innerHTML=FOLD.buy?"":CF?E("1f9f9")+" chores first":canN?E("2705")+" "+canN+" you can buy":"tap to see";
+  $("buyh").onclick=function(){FOLD.buy=!FOLD.buy;if(FOLD.buy)FOLD.jobs=false;L("fold",{what:"buy",open:FOLD.buy});renderKid()};   // one open at a time: both don't fit
   $("toyout").innerHTML=E("1f9f8")+E("1f44b")+' Give away a toy';$("toyout").onclick=toyGoodbye;
   document.querySelectorAll("[data-mv]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var ref=n.dataset.mv,from=n.dataset.from;L("tv_switch_open",{from:from});
     modal('<div class="big">'+E("1f4fa")+E("1f504")+'</div><div class="q">Which TV?</div><div class="faces">'+
@@ -554,10 +569,12 @@ function renderKid(){
   document.querySelectorAll(".rw").forEach(function(n){n.onclick=function(){askSpend(n.dataset.r)}});
   var mine=S.history.filter(function(h){return inTeam(h,kid)&&h.chore!=="toy_swap"&&(h.type==="report"||h.type==="adjust")
     &&!(h.chore==="other"&&h.status==="inspected"&&!h.awarded)});   // a "something else" settled at 0 drops off the kid's log
-  var shown=mine.filter(function(h){return h.status==="pending"}).concat(mine.filter(function(h){return h.status!=="pending"})).slice(0,5);
-  var hh="",PZ=(S.paused||{})[kid];
+  var ordered=mine.filter(function(h){return h.status==="pending"}).concat(mine.filter(function(h){return h.status!=="pending"})).slice(0,40);
+  var HPER=4,hpages=Math.max(1,Math.ceil(ordered.length/HPER));if(HP>=hpages)HP=hpages-1;
+  var shown=ordered.slice(HP*HPER,HP*HPER+HPER);
+  var hh="",pzh="",PZ=(S.paused||{})[kid];
   if(PZ){var pc=S.config.chores.find(function(x){return x.id===PZ.chore})||{icon:"2b50",name:PZ.chore};
-    hh+='<div class="h" id="pzrow" style="background:#ede7f6"><span class="ic">'+E(pc.icon)+'</span><span style="font-size:16px;font-weight:800">'+E("23f8")+' '+jobName(PZ,pc)+' &middot; later</span><span class="s">'+E("25b6")+'</span></div>'}
+    pzh+='<div class="h" id="pzrow" style="background:#ede7f6"><span class="ic">'+E(pc.icon)+'</span><span style="font-size:16px;font-weight:800">'+E("23f8")+' '+jobName(PZ,pc)+' &middot; later</span><span class="s">'+E("25b6")+'</span></div>'}
   shown.forEach(function(r){
     if(r.type==="adjust"){hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.points<0?"1f6ab":"2b50")+'</span><span style="font-size:15px;font-weight:700;opacity:.7">'+(r.reason||"").replace(/^paper log: /,"")+'</span><span class="s">'+E(insp(r.by).icon)+' '+(r.points>0?"+":"")+r.points+'</span></div>';return}
     var s=r.status==="pending"&&r.inspecting?'<span class="s wait">'+E("1f50d")+E(insp(r.inspecting.by).icon)+'</span>':r.status==="pending"?'<span class="s wait">'+(r.priority?E("2b50"):"")+E("23f3")+'</span>':
@@ -565,7 +582,14 @@ function renderKid(){
       r.status==="returned"?'<span class="s">'+E(insp(r.inspected_by).icon)+E("1f501")+'</span>':
       '<span class="s">'+E(insp(r.inspected_by).icon)+E("274c")+'</span>';
     hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.chore_icon)+'</span><span style="font-size:16px;font-weight:800">'+r.chore_name+((r.team||[]).length>1?' '+teamIcons(r.team):'')+(r.feedback||r.leftover_note?' '+E("1f4dd"):'')+'</span>'+s+'</div>'});
-  $("hist").innerHTML=hh||'<div style="font-size:40px;text-align:center;opacity:.5">'+E("1f4a4")+'</div>';
+  $("pzslot").innerHTML=pzh;   // a job saved for later stays in sight even when My jobs is folded
+  $("hist").innerHTML=hh||'<div style="font-size:40px;text-align:center;opacity:.5">'+E("1f4a4")+'</div>';$("hpg").innerHTML=pagerSm("h",HP,hpages);
+  var waitN=mine.filter(function(h){return h.status==="pending"}).length;
+  $("jobbody").style.display=FOLD.jobs?"":"none";$("jobchev").innerHTML=FOLD.jobs?"&#9650;":"&#9660;";
+  $("jobsum").innerHTML=FOLD.jobs?"":waitN?E("23f3")+" "+waitN+" waiting":mine.length?mine.length+" done":"";
+  $("jobsh").onclick=function(){FOLD.jobs=!FOLD.jobs;if(FOLD.jobs)FOLD.buy=false;L("fold",{what:"jobs",open:FOLD.jobs});renderKid()};
+  document.querySelectorAll("[data-pgm]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var a=n.dataset.pgm.split(":"),d=+a[1];
+    if(a[0]==="rw"){if(RWP+d<0||RWP+d>=rpages)return;RWP+=d}else{if(HP+d<0||HP+d>=hpages)return;HP+=d}L("page_"+a[0],{to:a[0]==="rw"?RWP:HP});renderKid()}});
   document.querySelectorAll("#hist [data-h]").forEach(function(n){n.onclick=function(){jobModal(n.dataset.h)}});
   if($("pzrow"))$("pzrow").onclick=function(){resumeModal()};
 }
@@ -576,7 +600,7 @@ function getSeen(k){try{return parseFloat(localStorage.getItem(seenKey(k))||"0")
 function setSeen(k,t){seen[k]=t;try{localStorage.setItem(seenKey(k),String(t))}catch(e){}}
 function newInspections(k){var t=Math.max(getSeen(k),seen[k]||0);return reports(k).filter(function(r){return r.inspected_ts&&r.inspected_ts>t}).reverse()}
 
-function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(remindJob(k,lastUse))return;
@@ -941,8 +965,10 @@ function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(functi
     out.push({ts:R.ts,icon:"1f947",text:who+" set the "+c.name+(R.size?" ("+R.size+"-person)":"")+" record: "+Math.floor(R.sec/60)+":"+("0"+R.sec%60).slice(-2)+"!",kind:"record"})});
   Object.keys(S.awards||{}).forEach(function(k){(S.awards[k]||[]).forEach(function(a){if(/^(lvl|jobs|earned|days):/.test(a.id||"")&&!/^jobs:1$/.test(a.id))out.push({ts:a.ts,icon:"2b06",text:KN(k).name+": "+a.title.replace("!","")+"!",kind:"level"})})});
   return out.sort(function(a,b){return b.ts-a.ts}).slice(0,12)}
-function openNews(){L("news_open");var f=newsFeed(S);
-  modal('<div class="q">'+E("1f4f0")+' News</div><div style="text-align:left;max-height:520px;overflow:hidden">'+(f.length?f.slice(0,7).map(function(n){return '<div style="display:flex;gap:12px;align-items:center;font-size:24px;font-weight:800;padding:6px 0;border-bottom:1px solid #eee"><span style="font-size:44px">'+E(n.icon)+'</span><span>'+n.text+'</span></div>'}).join(""):'<div class="q">No news yet</div>')+'</div>');addOk()}
+function openNews(pg){pg=pg||0;if(!pg)L("news_open");var f=newsFeed(S),PER=4,pages=Math.max(1,Math.ceil(f.length/PER));if(pg>=pages)pg=pages-1;
+  modal('<div class="q">'+E("1f4f0")+' News</div><div style="text-align:left;max-height:520px;overflow:hidden">'+(f.length?f.slice(pg*PER,pg*PER+PER).map(function(n){return '<div style="display:flex;gap:12px;align-items:center;font-size:24px;font-weight:800;padding:6px 0;border-bottom:1px solid #eee"><span style="font-size:44px">'+E(n.icon)+'</span><span>'+n.text+'</span></div>'}).join(""):'<div class="q">No news yet</div>')+'</div>'+pagerSm("news",pg,pages));
+  document.querySelectorAll("#mbox [data-pgm]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var d=+n.dataset.pgm.split(":")[1];if(pg+d<0||pg+d>=pages)return;L("page_news",{to:pg+d});openNews(pg+d)}});
+  addOk()}
 /* --- back after a while (15 min+) with a job left over -> remind first --- */
 function remindJob(k,lastUse){var PZ=(S.paused||{})[k],A=(S.active||{})[k],it=PZ||A;
   if(!it)Object.keys(S.active||{}).forEach(function(x){var a=S.active[x];if(!it&&(a.team||[]).indexOf(k)>=0&&(S.config.chores.find(function(c){return c.id===a.chore})||{}).remind)it=A=a});   // still on a team letter
@@ -1163,8 +1189,8 @@ function minCost(r){return Math.min.apply(null,[r.cost].concat(Object.keys(r.tog
 function togetherLine(r){var tc=r.together_cost||{},ks=Object.keys(tc).sort();if(!ks.length)return "Everyone watching pays "+r.cost+" "+E("2b50")+".";
   return ks.map(function(k){return k+" watching: "+tc[k]+" "+E("2b50")+" each"}).join(" &middot; ")}
 function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:null});
-  if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===rid})){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">A grown-up is coming to help with '+r.name+'!</div>');addOk();return}
-  if(((S.chores_first||{})[kid]||{}).on){modal('<div class="big">'+E("1f9f9")+E("1f512")+'</div><div class="q">Chores first!</div><div class="q" style="font-size:28px">Clean up the messes, then a grown-up turns rewards back on.</div>');wobble();return}
+  if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===rid})){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">You bought '+r.name+'! A grown-up will help you set it up and start your time.</div>');addOk();return}
+  if(((S.chores_first||{})[kid]||{}).on){modal('<div class="big">'+E("1f9f9")+E("1f512")+'</div><div class="q">Chores first!</div><div class="q" style="font-size:28px">Do '+E("1f9f9")+' <b>Clean up first!</b> and get it checked. Then rewards come back.</div>'+((((S.chores_first||{})[kid]||{}).items||[]).length?'<div class="q" style="font-size:26px;background:#fff8e1;border-radius:16px;padding:6px 12px">'+E("1f4dd")+' '+notes(S.chores_first[kid].items.join("\n"))+'</div>':''));wobble();return}
   var r=S.config.rewards.find(function(x){return x.id===rid}),b=S.balance[kid];
   var rr=((S.reward_ready||{})[kid]||{})[rid];
   if(rr&&rr>S.now){var mins=Math.ceil((rr-S.now)/60),sb=(S.screen_break||{})[kid]&&["show","movie","games"].indexOf(rid)>=0;
@@ -1172,7 +1198,7 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
       (sb?'<div class="q" style="font-size:22px;opacity:.75">Good time for a chore '+E("1f9f9")+' or playing outside '+E("1f333")+'</div>':''));return}
   var tvR=["show","movie","games"].indexOf(r.id)>=0,lo=tvR?minCost(r):r.cost;
   if(b<lo){modal('<div class="big">'+E(r.icon)+E("1f512")+'</div><div class="q">Need '+(lo-b)+' more '+E("2b50")+(lo<r.cost?' to watch together':'')+'</div>');wobble();return}
-  if(r.needs_ok){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">Ask a grown-up for '+r.name+'?</div><div class="q" style="font-size:26px;opacity:.85">They help you set it up. '+r.cost+' '+E("2b50")+' when it starts.</div><div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Ask</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
+  if(r.needs_ok){modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+r.cost+' '+E("2b50")+'?</div><div class="q" style="font-size:26px;opacity:.85">'+E("1f64b")+' A grown-up helps you set it up, then starts your '+(r.minutes||"")+' minutes.</div><div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
     $("sn").onclick=closeModal;$("sy").onclick=function(){buy(r,null)};return}
   modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+(b<r.cost?lo:r.cost)+' '+E("2b50")+'?</div>'+(lo<r.cost?'<div class="q" style="font-size:24px;opacity:.8">'+E("1f465")+' Cheaper together! '+togetherLine(r)+(b<r.cost?' (alone: '+r.cost+')':'')+'</div>':'')+'<div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
   $("sn").onclick=closeModal;
@@ -1204,7 +1230,7 @@ function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
     draw()}}
 function buy(r,tv,withKids){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[]}).then(function(res){busy=false;
     if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(res.error||"Can't buy that")+'</div>');addOk();return}S=res.state;boughtHere[res.event.id]=1;
-    if(res.event.type==="spend_request"){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">Asked! A grown-up will come help you set up '+r.name+'.</div><div class="q" style="font-size:26px;opacity:.85">The timer starts when they say yes.</div>');addOk(function(){renderKid()});return}
+    if(res.event.await_ok){confetti(120);modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">'+r.name+' is yours! Go get a grown-up to help you set it up.</div><div class="q" style="font-size:26px;opacity:.85">'+E("23f1")+' Your '+(r.minutes||"")+' minutes start when they say go.</div>');addOk(function(){renderKid()});return}
     var tog=(withKids||[]).length?'<div class="q" style="font-size:28px">'+E("1f465")+' '+[kid].concat(withKids).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'';
     var q=res.event.queued?'<div class="q" style="font-size:26px;background:#fff8e1;border-radius:16px;padding:6px 12px">'+E("23f3")+' Your time starts when the show before yours ends.</div>':'';
     modal('<div class="celebrate"><div class="big">'+E(r.icon)+'</div><div class="q">'+E("1f973")+' '+r.name+'! '+E("1f973")+'</div>'+tog+q+(r.minutes?'<div class="q" style="font-size:30px">'+E("23f1")+' '+r.minutes+' minutes. Then a '+r.break_min+' minute break.</div>':'')+'</div>');

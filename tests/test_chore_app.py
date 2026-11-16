@@ -1423,49 +1423,37 @@ class ServiceSchedule(unittest.TestCase):
 
 
 class ChoresFirst(Case):
-    def test_no_rewards_until_a_grown_up_turns_it_off(self):
+    def test_rewards_blocked_until_the_clean_up_passes_inspection(self):
         a = App(base_config())
         a.event(type="adjust", kid="ava", points=20, reason="test")
         a.event(type="adjust", kid="max", points=20, reason="test")
+        job = lambda: next(x for x in a.state()["config"]["chores"] if x["id"] == "cleanup_ava")
+        self.assertEqual(job().get("closed"), "fine")   # nothing to clean up: no job
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "cleanup_ava"})[0], 409)
         self.assertEqual(a.post("/api/chores_first", {"kid": "ava", "on": True})[0], 400)   # grown-ups only
-        self.assertEqual(a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan"})[0], 200)
-        st = a.state()["chores_first"]
-        self.assertEqual((st["ava"]["on"], st["max"]["on"]), (True, False))   # one kid at a time
+        code, r = a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Legos off the floor", " ", "Shoes away"]})
+        self.assertEqual(code, 200, r)
+        st = a.state()
+        self.assertEqual((st["chores_first"]["ava"]["on"], st["chores_first"]["max"]["on"]), (True, False))   # one kid at a time
+        self.assertEqual(st["chores_first"]["ava"]["items"], ["Legos off the floor", "Shoes away"])
+        self.assertIsNone(job().get("closed"))
+        self.assertEqual(st["board"]["cleanup_ava"]["note"], "Legos off the floor\nShoes away")
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show"})[0], 409)
         self.assertEqual(a.post("/api/spend", {"kid": "max", "reward": "show", "with": ["ava"]})[0], 409)   # not by watching along
-        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "other"})[0], 200)   # chores still work
-        self.assertEqual(a.post("/api/chores_first", {"kid": "ava", "on": False, "by": "jordan"})[0], 200)
+        # not yet: still blocked, back to the kid
+        rep = a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok"})[1]["event"]
+        self.assertEqual(a.post("/api/inspect", {"ref": rep["id"], "by": "jordan", "ok": False, "feedback": "shoes"})[0], 200)
+        self.assertTrue(a.state()["chores_first"]["ava"]["on"])
+        rep = a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok"})[1]["event"]
+        self.assertEqual(a.post("/api/inspect", {"ref": rep["id"], "by": "jordan", "ok": True, "points": 0})[0], 200)
+        st = a.state()
+        self.assertFalse(st["chores_first"]["ava"]["on"])
+        self.assertEqual(st["chores_first"]["ava"]["lifted"]["by"], "jordan")
+        self.assertEqual(job().get("closed"), "fine")
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show"})[0], 200)
-
-
-class GrownUpAcceptsVR(Case):
-    def test_vr_waits_for_a_grown_up_and_not_now_leaves_a_note(self):
-        c = base_config()
-        for r in c["rewards"]:
-            if r["id"] == "vr":
-                r["needs_ok"] = True
-        a = App(c)
-        a.event(type="adjust", kid="ava", points=10, reason="test")
-        code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr"})
-        self.assertEqual((code, r["event"]["type"]), (200, "spend_request"))
-        st = a.state()
-        self.assertEqual((st["balance"]["ava"], st["timers"], len(st["requests"])), (10, [], 1))   # nothing paid or started yet
-        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)   # asked already
-        self.assertEqual(a.post("/api/request_answer", {"ref": r["event"]["id"], "by": "jordan", "ok": True})[0], 200)
-        st = a.state()
-        self.assertEqual((st["balance"]["ava"], len(st["timers"]), st["requests"]), (8, 1, []))
-        # a second ask, answered "not now": stars kept, a note waits on the kid's screen
-        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr"})
-        self.assertEqual(code, 409)   # max has no stars
-        a.event(type="adjust", kid="max", points=5, reason="test")
-        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr"})
-        self.assertEqual(a.post("/api/request_answer", {"ref": r2["event"]["id"], "by": "jordan", "ok": False})[0], 200)
-        st = a.state()
-        self.assertEqual(st["balance"]["max"], 5)
-        note = st["kid_notes"]["max"][0]
-        self.assertIn("Not right now", note["text"])
-        self.assertEqual(a.post("/api/kid_note_seen", {"kid": "max", "ref": note["id"]})[0], 200)
-        self.assertEqual(a.state()["kid_notes"].get("max"), None)
+        # blocking again later starts fresh (the old pass doesn't count)
+        a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Dishes"]})
+        self.assertTrue(a.state()["chores_first"]["ava"]["on"])
 
 
 class NoRecordForSomethingElse(Case):

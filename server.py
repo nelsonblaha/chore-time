@@ -216,7 +216,8 @@ def compute_awards(c, reports, evs, earned, typical):
             add(k, "jobs:%d" % jobs[k], "1f522", "%d job%s done!" % (jobs[k], "" if jobs[k] == 1 else "s"), "Passed inspection", ts)
         if len(days[k]) in DAY_MILESTONES:
             add(k, "days:%d" % len(days[k]), "1f4c5", "Busy %d days!" % len(days[k]), "Jobs on %d different days" % len(days[k]), ts)
-        add(k, "first:" + cid, ch.get("icon", "1f31f"), "First " + ch.get("name", cid) + "!", "Your first time", ts)
+        if not ch.get("cleanup_for"):   # no medal for a "chores first" clean-up
+            add(k, "first:" + cid, ch.get("icon", "1f31f"), "First " + ch.get("name", cid) + "!", "Your first time", ts)
         if ch.get("trophy"):   # a job that pays in trophies, every time (e.g. fixing something that got unplugged)
             t_ = ch["trophy"] if isinstance(ch["trophy"], dict) else {}
             took_ = r["ts"] - r["started"] if r.get("started") and 0 <= r["ts"] - r["started"] < 4 * 3600 else None
@@ -307,11 +308,25 @@ GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "poi
                "trophy": {"icon": "1f3c3", "title": "Dressed!"}}   # the "Put on clothes!" job: a timed race, a trophy each time
 
 
+def cleanup_job(kid):
+    """built in, one per kid: the "chores first" clean-up a grown-up lists; hidden unless that kid is blocked.
+    It goes through inspection like any job, and passing it lifts the block."""
+    return {"id": "cleanup_" + kid, "name": "Clean up first!", "icon": "1f9f9", "points": 0, "cooldown_h": 0, "only": [kid],
+            "cleanup_for": kid, "household": "any", "order": -100,
+            "desc": "A grown-up listed what to clean up. Then rewards come back."}
+
+
 def cfg():
     c = json.loads(CONFIG.read_text())
     if not any(x.get("id") == "get_dressed" for x in c.get("chores") or []):
         c.setdefault("chores", []).append(dict(GET_DRESSED))   # built in; never saved unless the config is edited
+    have = {x.get("id") for x in c.get("chores") or []}
+    c["chores"] += [cleanup_job(k["id"]) for k in c.get("kids") or [] if "cleanup_" + k["id"] not in have]
     return c
+
+
+def is_system(cid):
+    return cid in SYSTEM_CHORES or str(cid).startswith("cleanup_")
 
 
 def save_cfg(c):
@@ -564,14 +579,29 @@ def dress_state(evs, reports):
     return {"on": True, "since": last["ts"], "by": last.get("by"), "kids": out}
 
 
-def chores_first_state(evs, kids):
-    """"Chores first": a grown-up's switch per kid that blocks spending stars on rewards until they turn it off
-    (e.g. messes left out that must be cleaned up before any TV). {kid: {on, since, by}}"""
-    out = {k: {"on": False, "since": None, "by": None} for k in kids}
+def chores_first_state(evs, kids, reports=None):
+    """"Chores first": a grown-up blocks a kid's rewards and lists what to clean up (e.g. messes left out).
+    The kid does it as the job "cleanup_<kid>"; when that passes inspection the block lifts by itself, or a
+    grown-up turns it off. {kid: {on, since, by, items, lifted?}}"""
+    out = {k: {"on": False, "since": None, "by": None, "items": []} for k in kids}
+    pos = {e["id"]: i for i, e in enumerate(evs)}   # ledger order (timestamps can tie)
+    passed_at = {e["ref"]: pos[e["id"]] for e in evs if e["type"] == "inspect" and e.get("ok")}
+
+    def lift(k, v, until=None):   # the clean-up was reported after the block began and passed (before `until`)
+        if not v["on"]:
+            return v
+        ok = [r for r in (reports or {}).values() if r["chore"] == "cleanup_" + k and pos.get(r["id"], -1) > v["_at"]
+              and r["status"] == "inspected" and not r.get("partial") and (until is None or passed_at.get(r["id"], 1e18) < until)]
+        return dict(v, on=False, lifted={"by": ok[-1].get("inspected_by"), "ts": ok[-1].get("inspected_ts")}) if ok else v
     for e in evs:
         if e["type"] == "chores_first" and e.get("kid") in out:
-            out[e["kid"]] = {"on": bool(e.get("on")), "since": e["ts"], "by": e.get("by")}
-    return out
+            prev = lift(e["kid"], out[e["kid"]], pos[e["id"]])
+            if e.get("on") and prev["on"]:   # editing the list keeps the start time
+                out[e["kid"]] = dict(prev, items=list(e.get("items") or []))
+            else:
+                out[e["kid"]] = {"on": bool(e.get("on")), "since": e["ts"], "_at": pos[e["id"]], "by": e.get("by"),
+                                 "items": list(e.get("items") or [])}
+    return {k: {x: y for x, y in lift(k, v).items() if x != "_at"} for k, v in out.items()}
 
 
 def kid_notes(evs):
@@ -584,14 +614,13 @@ def kid_notes(evs):
     return out
 
 
-REQUEST_H = 3   # a kid's ask for a reward that needs a grown-up (VR: they help set it up) waits this long
-
-
 def reward_requests(evs):
-    """open asks: {id, kid, reward, cost, ts} (answered or older than REQUEST_H hours are gone)"""
-    done = {e["ref"] for e in evs if e["type"] == "request_answer"}
+    """rewards bought that wait for a grown-up to start them (VR: they help set it up): {id, kid, reward, cost, ts}.
+    The stars are paid at purchase; the grown-up's "start" begins the timer, "not now" refunds it."""
+    undone = {e["ref"] for e in evs if e["type"] == "undo"}
+    started = {e["ref"] for e in evs if e["type"] == "reward_start"}
     return [{k: e.get(k) for k in ("id", "kid", "reward", "cost", "ts", "reward_name", "reward_icon")}
-            for e in evs if e["type"] == "spend_request" and e["id"] not in done and time.time() - e["ts"] < REQUEST_H * 3600]
+            for e in evs if e["type"] == "spend" and e.get("await_ok") and e["id"] not in undone and e["id"] not in started]
 
 
 def dress_kids(c):
@@ -710,6 +739,8 @@ def chore_closed(ch, board):
         return "done"
     if ch.get("slot") and too_early(ch, board.get(ch["id"]) or {}):
         return "soon"
+    if ch.get("cleanup_for") and not (board.get(ch["id"]) or {}).get("blocked"):
+        return "fine"   # only while a grown-up has this kid on "chores first"
     if ch.get("on_demand") and not (board.get(ch["id"]) or {}).get("opened") and not (board.get(ch["id"]) or {}).get("pending_by"):
         return "on_demand"   # e.g. laundry: only after a grown-up opens it (machines ran), gone again once it's done
     if (ch.get("until") and today > ch["until"]) or (ch.get("from") and today < ch["from"]):
@@ -723,6 +754,18 @@ def chore_closed(ch, board):
         if ch.get("before") and now_ >= at_(ch["before"]):
             return "over"
     return None
+
+
+def cf_board(c, evs, reports, board):
+    """mark each kid's clean-up job open (blocked) with the grown-up's list as its note"""
+    for k, v in chores_first_state(evs, [x["id"] for x in c["kids"]], reports).items():
+        b = board.get("cleanup_" + k)
+        if b is not None:
+            b["blocked"] = v["on"]
+            if v["on"]:
+                b["note"] = "\n".join(v["items"]) or None
+                b["note_by"] = None
+    return board
 
 
 def live_cfg(c, board):
@@ -1146,8 +1189,9 @@ def derive():
     for e in evs:
         if e["type"] == "spend":
             rw = next((r for r in c["rewards"] if r["id"] == e["reward"]), {})
-            if rw.get("break_min"):
-                t = e["ts"] + (rw.get("minutes", 0) + rw["break_min"]) * 60
+            st_ = e["ts"] if not e.get("await_ok") else next((x["ts"] for x in evs if x["type"] == "reward_start" and x.get("ref") == e["id"]), None)
+            if rw.get("break_min") and st_:
+                t = st_ + (rw.get("minutes", 0) + rw["break_min"]) * 60
                 d = reward_ready.setdefault(e["kid"], {})
                 d[e["reward"]] = max(d.get(e["reward"], 0), t)
     for cid, ch in chores.items():   # bundles: the sum of their still-available rooms
@@ -1239,13 +1283,13 @@ def derive():
     return {"version": ver, "ver_tv": ver_tv, "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(read_events()), "screen_break": screen_break, "bedtime": bedtime_state(c, evs),
-            "config": live_cfg(c, board), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
+            "config": live_cfg(c, cf_board(c, evs, reports, board)), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "dress": dress_state(evs, reports), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]]),
+            "dress": dress_state(evs, reports), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -1406,11 +1450,12 @@ def notify_request(ev):
         ilog({"src": "notify", "action": "skipped_quiet_or_away", "what": "request", "ref": ev.get("id")})
         return
     for svc in PARENT_NOTIFY:
-        ha_call(svc, {"title": "Chores: %s wants %s" % (k["name"], ev.get("reward_name", ev["reward"])),
-                      "message": "%d⭐ once you accept. Set it up with them, then tap Accept to start the timer." % ev["cost"],
+        ha_call(svc, {"title": "Chores: %s bought %s" % (k["name"], ev.get("reward_name", ev["reward"])),
+                      "message": "Paid %d⭐. Set it up with them, then tap Start to begin the %s-minute timer." % (
+                          ev["cost"], next((r.get("minutes") for r in cfg()["rewards"] if r["id"] == ev["reward"]), "")),
                       "data": {"clickAction": "/lovelace/chores", "tag": "chore-req-" + ev["id"], "group": "chores", "priority": "high", "ttl": 0,
-                               "actions": [{"action": "CHORE_REQOK_" + ev["id"], "title": "Accept: start it"},
-                                           {"action": "CHORE_REQNO_" + ev["id"], "title": "Not now"}]}}, tok)
+                               "actions": [{"action": "CHORE_REQOK_" + ev["id"], "title": "Start the timer"},
+                                           {"action": "CHORE_REQNO_" + ev["id"], "title": "Not now (refund)"}]}}, tok)
 
 
 # Phone only: Android mirrors it to the Pixel Watch WITH its buttons (taps handled by the phone app).
@@ -2042,10 +2087,10 @@ class H(BaseHTTPRequestHandler):
                 ready = st["reward_ready"].get(wk, {}).get(b["reward"], 0)
                 if ready > time.time():
                     return self.send(409, {"error": who_ + ("screen break" if b["reward"] in ("show", "movie", "games") and st["screen_break"].get(wk) else "needs a break first"), "ready_at": ready})
-            if rewards[b["reward"]].get("needs_ok"):   # e.g. VR: a grown-up helps set it up, so they accept it first
+            if rewards[b["reward"]].get("needs_ok"):   # e.g. VR: paid now; a grown-up helps set it up, then starts the timer
                 if any(q["kid"] == b["kid"] and q["reward"] == b["reward"] for q in st["requests"]):
-                    return self.send(409, {"error": "already asked: a grown-up will come"})
-                ev = append({"type": "spend_request", "kid": b["kid"], "reward": b["reward"], "cost": cost,
+                    return self.send(409, {"error": "already bought: a grown-up will come start it"})
+                ev = append({"type": "spend", "kid": b["kid"], "reward": b["reward"], "cost": cost, "await_ok": True,
                              "reward_name": rewards[b["reward"]]["name"], "reward_icon": rewards[b["reward"]]["icon"]})
                 threading.Thread(target=notify_request, args=(ev,), daemon=True).start()
                 after_change()
@@ -2163,7 +2208,7 @@ class H(BaseHTTPRequestHandler):
                                                               **grocy_period(cur_, more)})
                     gcall("PUT", "/userfields/chores/%d" % gid, {"kid_points": "" if pts is None else str(pts), "kid_icon": cur_.get("icon", ""),
                                                                  **grocy_chore_userfields(gid, cur_, more)})
-                elif cid not in SYSTEM_CHORES:
+                elif not is_system(cid):
                     gid = int(gcall("POST", "/objects/chores", {"name": name, "description": cur_.get("desc", ""), "period_type": "manually", "track_date_only": 0, "rollover": 0, "start_date": "2026-11-01 00:00:00",
                                                                 **grocy_period(cur_, more)})["created_object_id"])
                     gcall("PUT", "/userfields/chores/%d" % gid, {"kids": "1", "kid_key": cid, "kid_points": "" if pts is None else str(pts),
@@ -2548,21 +2593,17 @@ class H(BaseHTTPRequestHandler):
             ev = append({"type": "dress", "on": on, "kids": who if on else [], "by": b["by"]})
             if on:
                 threading.Thread(target=dress_announce, args=(True,), daemon=True).start()
-        elif p == "/api/request_answer":   # a grown-up accepts (the reward starts now and the stars are paid) or says not now
+        elif p == "/api/request_answer":   # a grown-up starts a bought reward's timer (VR, once set up) or refunds it
             q = next((x for x in st["requests"] if x["id"] == b.get("ref")), None)
             if b.get("by") not in insp or not q:
-                return self.send(400, {"error": "unknown inspector / no such request"})
-            ok = bool(b.get("ok"))
+                return self.send(400, {"error": "unknown inspector / nothing waiting"})
             rw_ = rewards.get(q["reward"]) or {}
-            if ok and st["balance"][q["kid"]] < q["cost"]:
-                return self.send(409, {"error": "not enough points any more"})
-            ev = append({"type": "request_answer", "ref": q["id"], "ok": ok, "by": b["by"]})
-            if ok:
-                ev = append({"type": "spend", "kid": q["kid"], "reward": q["reward"], "cost": q["cost"], "request": q["id"],
-                             "approved_by": b["by"], "reward_name": rw_.get("name", q["reward"]), "reward_icon": rw_.get("icon", "")})
+            if b.get("ok"):
+                ev = append({"type": "reward_start", "ref": q["id"], "kid": q["kid"], "by": b["by"]})
             else:
+                ev = append({"type": "undo", "ref": q["id"], "by": b["by"]})
                 append({"type": "kid_note", "kid": q["kid"], "by": b["by"], "icon": rw_.get("icon", "1f4ac"),
-                        "text": (b.get("text") or "Not right now for %s. Your stars are still yours!" % rw_.get("name", q["reward"]))[:200]})
+                        "text": (b.get("text") or "Not right now for %s. Your stars are back!" % rw_.get("name", q["reward"]))[:200]})
         elif p == "/api/kid_note":   # a grown-up's message, shown once on the kid's screen
             if b.get("by") not in insp or b.get("kid") not in kids or not str(b.get("text") or "").strip():
                 return self.send(400, {"error": "grown-up, kid and text needed"})
@@ -2574,7 +2615,8 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/chores_first":   # grown-ups: no rewards until they turn it off
             if b.get("by") not in insp or b.get("kid") not in kids:
                 return self.send(400, {"error": "grown-ups only, for one kid"})
-            ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "by": b["by"]})
+            items = [str(x).strip()[:120] for x in (b.get("items") or []) if str(x).strip()][:20]
+            ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "items": items, "by": b["by"]})
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown inspector/chore"})
@@ -2748,7 +2790,12 @@ def timed_rewards(evs=None, now=None):
     rw = {r["id"]: r for r in c["rewards"]}
     undone = {e["ref"] for e in evs if e["type"] == "undo"}
     out = {}
+    waiting = {e["id"]: e for e in evs if e["type"] == "spend" and e.get("await_ok")}
     for e in evs:
+        if e["type"] == "spend" and e.get("await_ok"):
+            continue   # waits for a grown-up's start (below)
+        if e["type"] == "reward_start" and e.get("ref") in waiting:
+            e = dict(waiting.pop(e["ref"]), ts=e["ts"])
         if e["type"] == "spend" and e["id"] not in undone and rw.get(e.get("reward"), {}).get("minutes"):
             mins = e.get("minutes") or rw[e["reward"]]["minutes"]
             out[e["id"]] = {"ref": e["id"], "kid": e["kid"], "reward": e["reward"], "start": e["ts"], "minutes": mins,
@@ -3779,7 +3826,7 @@ def grocy_chores_pull():
         for cid, (i, x) in local.items():   # keep system chores, bundles, and anything removed from Grocy (hidden)
             if cid in seen:
                 continue
-            if cid in SYSTEM_CHORES or x.get("bundle"):
+            if is_system(cid) or x.get("bundle"):
                 out.append(dict(x, _order=i))
             elif x.get("grocy_id") or x.get("_was_grocy"):
                 out.append(dict(x, hidden=True, _order=i))
