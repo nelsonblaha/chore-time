@@ -1408,6 +1408,25 @@ class ServiceSchedule(unittest.TestCase):
         self.assertTrue(d["2026-12-13"])    # the regular rhythm again (Wed 9th - Mon 14th)
 
 
+class WatchingTogether(Case):
+    def test_a_movie_together_costs_less_each(self):
+        c = base_config()
+        for r in c["rewards"]:
+            if r["id"] == "movie":
+                r["together_cost"] = {"2": 12, "3": 10}
+        a = App(c)
+        for k in ("ava", "max", "zoe"):
+            a.event(type="adjust", kid=k, points=12, reason="test")
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "movie"})[0], 409)   # alone: 15
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "movie", "with": ["max"]})
+        self.assertEqual(code, 200, r)
+        b = a.state()["balance"]
+        self.assertEqual((b["ava"], b["max"], b["zoe"]), (0, 0, 12))
+        self.assertEqual(a.s.reward_cost(c["rewards"][1], 3), 10)
+        self.assertEqual(a.s.reward_cost(c["rewards"][1], 4), 10)
+        self.assertEqual(a.s.reward_cost(c["rewards"][1], 1), 15)
+
+
 class AbandonedJob(Case):
     def test_grown_up_stops_a_forgotten_team_job(self):
         a = App(base_config())

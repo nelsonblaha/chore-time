@@ -653,6 +653,17 @@ def too_early(ch, bd, kid=None):
     return bd["days_until"] > int(cd)
 
 
+def reward_cost(r, watching=1):
+    """what each kid pays: reward "together_cost" {"2": 12, "3": 10} = per kid when that many watch together
+    (more than the largest listed size pays that size's price); otherwise its "cost"."""
+    tc = {int(k): v for k, v in (r.get("together_cost") or {}).items()}
+    if watching > 1 and tc:
+        fit = [n for n in tc if n <= watching]
+        if fit:
+            return tc[max(fit)]
+    return r["cost"]
+
+
 def chore_closed(ch, board):
     """why a chore is unavailable right now (None = open): daylight-only after dark, one-time already done,
     outside its from/until dates (e.g. cleaning the car only in daylight; a one-time job)"""
@@ -1954,10 +1965,10 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/spend":
             if b.get("kid") not in kids or b.get("reward") not in rewards:
                 return self.send(400, {"error": "unknown kid/reward"})
-            cost = rewards[b["reward"]]["cost"]
             # "Watching together": everyone watching pays, and they share one clock
             with_ = [k for k in dict.fromkeys(b.get("with") or []) if k in kids and k != b["kid"]] \
                 if b["reward"] in ("show", "movie", "games") else []
+            cost = reward_cost(rewards[b["reward"]], 1 + len(with_))
             kname = {k["id"]: k["name"] for k in c["kids"]}
             for wk in [b["kid"]] + with_:
                 who_ = "" if wk == b["kid"] else kname.get(wk, wk) + ": "

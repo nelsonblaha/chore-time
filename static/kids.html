@@ -1149,14 +1149,20 @@ function presentPick(r,i,done){ // spin across the presents, land on the drawn n
     document.querySelector('.pp[data-n="'+cur+'"]').classList.add("hot");chime([300+cur*40]);t++;setTimeout(spin,90+t*12)})();
 }
 /* --- spend --- */
+// what each kid pays when n watch together (reward.together_cost {"2":12,"3":10}); 1 = alone
+function costFor(r,n){var tc=r.together_cost||{},best=null;if(n>1)Object.keys(tc).forEach(function(k){if(+k<=n&&(best===null||+k>best))best=+k});return best===null?r.cost:tc[best]}
+function minCost(r){return Math.min.apply(null,[r.cost].concat(Object.keys(r.together_cost||{}).map(function(k){return r.together_cost[k]})))}
+function togetherLine(r){var tc=r.together_cost||{},ks=Object.keys(tc).sort();if(!ks.length)return "Everyone watching pays "+r.cost+" "+E("2b50")+".";
+  return ks.map(function(k){return k+" watching: "+tc[k]+" "+E("2b50")+" each"}).join(" &middot; ")}
 function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:null});
   var r=S.config.rewards.find(function(x){return x.id===rid}),b=S.balance[kid];
   var rr=((S.reward_ready||{})[kid]||{})[rid];
   if(rr&&rr>S.now){var mins=Math.ceil((rr-S.now)/60),sb=(S.screen_break||{})[kid]&&["show","movie","games"].indexOf(rid)>=0;
     modal('<div class="big">'+E(sb?"1f4fa":r.icon)+E(sb?"1f634":"1f512")+'</div><div class="q">'+(sb?"Screen break!":"Break time!")+'</div><div class="q" style="font-size:28px">'+E("23f3")+' '+(sb?"TV":r.name)+' again at '+hm(rr)+' ('+mins+' min)</div>'+
       (sb?'<div class="q" style="font-size:22px;opacity:.75">Good time for a chore '+E("1f9f9")+' or playing outside '+E("1f333")+'</div>':''));return}
-  if(b<r.cost){modal('<div class="big">'+E(r.icon)+E("1f512")+'</div><div class="q">Need '+(r.cost-b)+' more '+E("2b50")+'</div>');wobble();return}
-  modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+r.cost+' '+E("2b50")+'?</div><div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
+  var tvR=["show","movie","games"].indexOf(r.id)>=0,lo=tvR?minCost(r):r.cost;
+  if(b<lo){modal('<div class="big">'+E(r.icon)+E("1f512")+'</div><div class="q">Need '+(lo-b)+' more '+E("2b50")+(lo<r.cost?' to watch together':'')+'</div>');wobble();return}
+  modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+(b<r.cost?lo:r.cost)+' '+E("2b50")+'?</div>'+(lo<r.cost?'<div class="q" style="font-size:24px;opacity:.8">'+E("1f465")+' Cheaper together! '+togetherLine(r)+(b<r.cost?' (alone: '+r.cost+')':'')+'</div>':'')+'<div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
   $("sn").onclick=closeModal;
   $("sy").onclick=function(){
     if(["show","movie","games"].indexOf(r.id)>=0){
@@ -1169,19 +1175,20 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
 function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
   var others=S.config.kids.filter(function(k){return k.id!==kid}),sel={};
   modal('<div class="big">'+E(r.icon)+'</div><div class="q">Who is watching?</div>'+
-    '<div class="faces"><div class="btn" id="wme" style="font-size:34px;font-weight:900;padding:12px 24px">'+E(KI2(kid).icon)+'<span class="lbl">Just me</span></div>'+
+    '<div class="faces"><div class="btn" id="wme" style="font-size:34px;font-weight:900;padding:12px 24px'+((S.balance[kid]||0)<r.cost?';opacity:.4':'')+'">'+E(KI2(kid).icon)+'<span class="lbl">Just me'+((S.balance[kid]||0)<r.cost?'<br><span style="font-size:18px">needs '+r.cost+' '+E("2b50")+'</span>':'')+'</span></div>'+
     '<div class="btn" id="wtog" style="font-size:34px;font-weight:900;padding:12px 24px;background:#e3f2fd;border:5px solid #64b5f6">'+E("1f465")+'<span class="lbl">Together</span></div></div>'+
-    '<div class="q" style="font-size:22px;opacity:.75">'+E("1f440")+' Watching together? Everyone watching pays '+r.cost+' '+E("2b50")+'.</div>');
-  $("wme").onclick=function(){L("who_watches",{who:"me"});buy(r,tv)};
+    '<div class="q" style="font-size:22px;opacity:.75">'+E("1f440")+' Watching together? '+togetherLine(r)+'</div>');
+  $("wme").onclick=function(){if((S.balance[kid]||0)<r.cost){wobble();return}L("who_watches",{who:"me"});buy(r,tv)};
   $("wtog").onclick=function(){L("who_watches",{who:"together"});
-    function draw(){modal('<div class="q">'+E("1f465")+' Who is watching with you?</div><div class="toygrid">'+others.map(function(k){
-        var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],why=bal<r.cost?"needs "+(r.cost-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
+    function draw(){var n=1+Object.keys(sel).length,each=costFor(r,Math.max(2,n));
+      modal('<div class="q">'+E("1f465")+' Who is watching with you?</div><div class="toygrid">'+others.map(function(k){
+        var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],need=costFor(r,sel[k.id]?n:n+1),why=bal<need?"needs "+(need-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
         return '<div class="toyb" data-w="'+k.id+'" style="'+(sel[k.id]?"border:6px solid "+k.color+";background:#fff":"")+(why?";opacity:.45":"")+'">'+E(k.icon)+'<span class="lbl">'+k.name+(sel[k.id]?" "+E("2705"):"")+(why?'<br><span style="font-size:18px">'+why+'</span>':'')+'</span></div>'}).join("")+'</div>'+
-      '<div class="q" style="font-size:24px">'+[kid].concat(Object.keys(sel)).map(function(m){return E(KI2(m).icon)+' '+r.cost+E("2b50")}).join(" &nbsp; ")+'</div>'+
+      '<div class="q" style="font-size:24px">'+[kid].concat(Object.keys(sel)).map(function(m){return E(KI2(m).icon)+' '+each+E("2b50")}).join(" &nbsp; ")+'</div>'+
       '<div class="faces"><div class="btn yes" id="wgo" style="font-size:36px;font-weight:900;padding:12px 26px'+(Object.keys(sel).length?'':';opacity:.4')+'">'+E("25b6")+' Watch together</div></div>');
       document.querySelectorAll("#mbox [data-w]").forEach(function(n){n.onclick=function(){var k=n.dataset.w,bal=S.balance[k]||0,rr=((S.reward_ready||{})[k]||{})[r.id];
-        if(bal<r.cost||(rr&&rr>S.now)){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
-      $("wgo").onclick=function(){if(!Object.keys(sel).length){wobble();return}buy(r,tv,Object.keys(sel))}}
+        if((!sel[k]&&bal<costFor(r,n+1))||(rr&&rr>S.now)){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
+      $("wgo").onclick=function(){var ks=Object.keys(sel),c_=costFor(r,1+ks.length);if(!ks.length||[kid].concat(ks).some(function(m){return (S.balance[m]||0)<c_})){wobble();return}buy(r,tv,ks)}}
     draw()}}
 function buy(r,tv,withKids){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[]}).then(function(res){busy=false;
     if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(res.error||"Can't buy that")+'</div>');addOk();return}S=res.state;boughtHere[res.event.id]=1;
