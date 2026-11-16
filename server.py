@@ -169,7 +169,7 @@ def expected_times(c, reports, typical):
             for k in kids:
                 mine = sorted([(ts, m) for ts, team, m in rs if k in team])
                 others = clean([m for ts, team, m in rs if k not in team])
-                if mine:
+                if mine and cid != "other" and not ch.get("no_record"):   # "something else": nothing to compare
                     pb.setdefault(k, {})["%s@%d" % (cid, size) if size > 1 else cid] = round(min(m for _, m in mine) * 60)
                 base = med(others) if others else (prior if size == 1 else None)
                 if base is None:   # team size never seen: solo estimate, a bit faster per extra helper
@@ -224,7 +224,8 @@ def compute_awards(c, reports, evs, earned, typical):
                 t_.get("sub") or ("in " + fmt_s(took_) if took_ is not None else datetime.fromtimestamp(ts).strftime("%b %-d")), ts)
         if ch.get("bundle"):
             add(k, "bundle:" + cid, "1f3e0", ch.get("name", cid) + "!", "The big job", ts)
-        if r.get("started") and r.get("_team"):   # team records: per chore AND team size
+        timed = cid != "other" and not ch.get("no_record")   # "something else" can be anything: no record to beat
+        if timed and r.get("started") and r.get("_team"):   # team records: per chore AND team size
             sec = r["ts"] - r["started"]
             team = r.get("team") or [k]
             key = "%s@%d" % (cid, len(team))
@@ -235,7 +236,7 @@ def compute_awards(c, reports, evs, earned, typical):
                         records[key] = {"kid": team[0], "team": list(team), "size": len(team), "sec": sec, "ts": ts, "prev": best}
                     add(k, "record:%s:%d" % (key, int(ts)), "1f947", "Fastest %d-person %s ever!" % (len(team), ch.get("name", cid)),
                         fmt_s(sec) + ("" if not records[key].get("prev") else " (beat " + fmt_s(records[key]["prev"]["sec"]) + ")"), ts)
-        if r.get("started") and not r.get("_team"):
+        if timed and r.get("started") and not r.get("_team"):
             sec = r["ts"] - r["started"]
             if 30 <= sec <= 4 * 3600:
                 best = records.get(cid)

@@ -1422,6 +1422,17 @@ class ServiceSchedule(unittest.TestCase):
         self.assertTrue(d["2026-12-13"])    # the regular rhythm again (Wed 9th - Mon 14th)
 
 
+class NoRecordForSomethingElse(Case):
+    def test_something_else_sets_no_time_record(self):
+        a = App(base_config())
+        r = a.event(type="report", kid="ava", chore="other", feeling=None, points=2, started=time.time() - 120)
+        self.assertEqual(a.post("/api/inspect", {"ref": r["id"], "by": "jordan", "ok": True, "points": 2})[0], 200)
+        st = a.state()
+        self.assertNotIn("other", st["records"])
+        self.assertFalse([x for x in st["awards"].get("ava", []) if x["id"].startswith("record:")])
+        self.assertNotIn("other", (st["personal_best"] or {}).get("ava", {}))
+
+
 class WatchingTogether(Case):
     def test_a_movie_together_costs_less_each(self):
         c = base_config()
