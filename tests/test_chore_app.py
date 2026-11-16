@@ -1422,6 +1422,52 @@ class ServiceSchedule(unittest.TestCase):
         self.assertTrue(d["2026-12-13"])    # the regular rhythm again (Wed 9th - Mon 14th)
 
 
+class ChoresFirst(Case):
+    def test_no_rewards_until_a_grown_up_turns_it_off(self):
+        a = App(base_config())
+        a.event(type="adjust", kid="ava", points=20, reason="test")
+        a.event(type="adjust", kid="max", points=20, reason="test")
+        self.assertEqual(a.post("/api/chores_first", {"kid": "ava", "on": True})[0], 400)   # grown-ups only
+        self.assertEqual(a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan"})[0], 200)
+        st = a.state()["chores_first"]
+        self.assertEqual((st["ava"]["on"], st["max"]["on"]), (True, False))   # one kid at a time
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show"})[0], 409)
+        self.assertEqual(a.post("/api/spend", {"kid": "max", "reward": "show", "with": ["ava"]})[0], 409)   # not by watching along
+        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "other"})[0], 200)   # chores still work
+        self.assertEqual(a.post("/api/chores_first", {"kid": "ava", "on": False, "by": "jordan"})[0], 200)
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show"})[0], 200)
+
+
+class GrownUpAcceptsVR(Case):
+    def test_vr_waits_for_a_grown_up_and_not_now_leaves_a_note(self):
+        c = base_config()
+        for r in c["rewards"]:
+            if r["id"] == "vr":
+                r["needs_ok"] = True
+        a = App(c)
+        a.event(type="adjust", kid="ava", points=10, reason="test")
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr"})
+        self.assertEqual((code, r["event"]["type"]), (200, "spend_request"))
+        st = a.state()
+        self.assertEqual((st["balance"]["ava"], st["timers"], len(st["requests"])), (10, [], 1))   # nothing paid or started yet
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)   # asked already
+        self.assertEqual(a.post("/api/request_answer", {"ref": r["event"]["id"], "by": "jordan", "ok": True})[0], 200)
+        st = a.state()
+        self.assertEqual((st["balance"]["ava"], len(st["timers"]), st["requests"]), (8, 1, []))
+        # a second ask, answered "not now": stars kept, a note waits on the kid's screen
+        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr"})
+        self.assertEqual(code, 409)   # max has no stars
+        a.event(type="adjust", kid="max", points=5, reason="test")
+        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr"})
+        self.assertEqual(a.post("/api/request_answer", {"ref": r2["event"]["id"], "by": "jordan", "ok": False})[0], 200)
+        st = a.state()
+        self.assertEqual(st["balance"]["max"], 5)
+        note = st["kid_notes"]["max"][0]
+        self.assertIn("Not right now", note["text"])
+        self.assertEqual(a.post("/api/kid_note_seen", {"kid": "max", "ref": note["id"]})[0], 200)
+        self.assertEqual(a.state()["kid_notes"].get("max"), None)
+
+
 class NoRecordForSomethingElse(Case):
     def test_something_else_sets_no_time_record(self):
         a = App(base_config())

@@ -564,6 +564,36 @@ def dress_state(evs, reports):
     return {"on": True, "since": last["ts"], "by": last.get("by"), "kids": out}
 
 
+def chores_first_state(evs, kids):
+    """"Chores first": a grown-up's switch per kid that blocks spending stars on rewards until they turn it off
+    (e.g. messes left out that must be cleaned up before any TV). {kid: {on, since, by}}"""
+    out = {k: {"on": False, "since": None, "by": None} for k in kids}
+    for e in evs:
+        if e["type"] == "chores_first" and e.get("kid") in out:
+            out[e["kid"]] = {"on": bool(e.get("on")), "since": e["ts"], "by": e.get("by")}
+    return out
+
+
+def kid_notes(evs):
+    """grown-ups' one-time messages to a kid ("we gave your stars back"): unseen ones, shown when they open their screen"""
+    seen = {e["ref"] for e in evs if e["type"] == "kid_note_seen"}
+    out = {}
+    for e in evs:
+        if e["type"] == "kid_note" and e["id"] not in seen and time.time() - e["ts"] < 7 * 86400:
+            out.setdefault(e["kid"], []).append({"id": e["id"], "ts": e["ts"], "text": e["text"], "icon": e.get("icon") or "1f4ac"})
+    return out
+
+
+REQUEST_H = 3   # a kid's ask for a reward that needs a grown-up (VR: they help set it up) waits this long
+
+
+def reward_requests(evs):
+    """open asks: {id, kid, reward, cost, ts} (answered or older than REQUEST_H hours are gone)"""
+    done = {e["ref"] for e in evs if e["type"] == "request_answer"}
+    return [{k: e.get(k) for k in ("id", "kid", "reward", "cost", "ts", "reward_name", "reward_icon")}
+            for e in evs if e["type"] == "spend_request" and e["id"] not in done and time.time() - e["ts"] < REQUEST_H * 3600]
+
+
 def dress_kids(c):
     """who gets dressed by default: kids at this house whose home switch is on"""
     tok = ha_token()
@@ -1215,7 +1245,8 @@ def derive():
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "dress": dress_state(evs, reports),
+            "dress": dress_state(evs, reports), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]]),
+            "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
                           if (chores.get(a["chore"]) or {}).get("remind") for m in (a.get("team") or [k])}}
@@ -1304,7 +1335,8 @@ def push_state_sensor(state=None, last_result=None):
              "awards": state.get("awards"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
-             "dress": state.get("dress"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
+             "dress": state.get("dress"), "chores_first": state.get("chores_first"),
+             "kid_notes": state.get("kid_notes"), "requests": state.get("requests"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
     if last_result is not None:
         attrs["last_result"] = last_result
     elif GLOBAL_LAST.get("r"):
@@ -1361,6 +1393,24 @@ def notify_parents(ev):
         ha_call(svc, {"title": "Chores: TV time", "message": msg,
                       "data": {"clickAction": "/lovelace/chores", "tag": "chore-tv-" + str(ev.get("tv")), "group": "chores",
                                "priority": "high", "ttl": 0, "actions": acts}}, tok)
+
+
+def notify_request(ev):
+    """a kid asked for a reward that needs a grown-up (VR): phone notice with Accept / Not now"""
+    try:
+        tok = ha_token()
+    except OSError:
+        return
+    k = next((x for x in cfg()["kids"] if x["id"] == ev["kid"]), {"name": ev["kid"]})
+    if not parent_available(tok):
+        ilog({"src": "notify", "action": "skipped_quiet_or_away", "what": "request", "ref": ev.get("id")})
+        return
+    for svc in PARENT_NOTIFY:
+        ha_call(svc, {"title": "Chores: %s wants %s" % (k["name"], ev.get("reward_name", ev["reward"])),
+                      "message": "%d⭐ once you accept. Set it up with them, then tap Accept to start the timer." % ev["cost"],
+                      "data": {"clickAction": "/lovelace/chores", "tag": "chore-req-" + ev["id"], "group": "chores", "priority": "high", "ttl": 0,
+                               "actions": [{"action": "CHORE_REQOK_" + ev["id"], "title": "Accept: start it"},
+                                           {"action": "CHORE_REQNO_" + ev["id"], "title": "Not now"}]}}, tok)
 
 
 # Phone only: Android mirrors it to the Pixel Watch WITH its buttons (taps handled by the phone app).
@@ -1581,6 +1631,16 @@ def watch_ha_events():
                                 except Exception as ex:  # noqa: BLE001
                                     print("watch tv adjust failed", ex, flush=True)
                                 ilog({"src": "watch", "action": "tv_" + a_, "tv": tv})
+                        if act.startswith("CHORE_REQOK_") or act.startswith("CHORE_REQNO_"):
+                            ref = act[len("CHORE_REQOK_"):]
+                            req = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/request_answer", data=json.dumps(
+                                {"ref": ref, "by": LEAD_ADULT, "ok": act.startswith("CHORE_REQOK_")}).encode(),
+                                headers={"Content-Type": "application/json"}, method="POST")
+                            try:
+                                urllib.request.urlopen(req, timeout=10).read()
+                            except Exception as ex:  # noqa: BLE001
+                                print("watch request answer failed", ex, flush=True)
+                            ilog({"src": "watch", "action": "request_answer", "ref": ref, "ok": act.startswith("CHORE_REQOK_")})
                         if act.startswith("CHORE_SWAPOK_"):
                             ref = act[len("CHORE_SWAPOK_"):]
                             req = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/inspect",
@@ -1796,6 +1856,10 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and b.get("chore") != "get_dressed" \
                 and (st.get("dress") or {}).get("on") and (st["dress"]["kids"].get(b.get("kid")) or "ready") != "ready":
             return self.send(409, {"error": "Put on your clothes first!"})
+        if p == "/api/spend" and any(((st.get("chores_first") or {}).get(k_) or {}).get("on") for k_ in [b.get("kid")] + list(b.get("with") or [])):
+            k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("chores_first") or {}).get(k_) or {}).get("on"))
+            nm_ = next((x["name"] for x in c["kids"] if x["id"] == k_), str(k_))
+            return self.send(409, {"error": ("" if k_ == b.get("kid") else nm_ + ": ") + "Chores first! Clean up, then rewards come back."})
         if p == "/api/log":
             evs = b if isinstance(b, list) else [b]
             opened = {}
@@ -1978,6 +2042,15 @@ class H(BaseHTTPRequestHandler):
                 ready = st["reward_ready"].get(wk, {}).get(b["reward"], 0)
                 if ready > time.time():
                     return self.send(409, {"error": who_ + ("screen break" if b["reward"] in ("show", "movie", "games") and st["screen_break"].get(wk) else "needs a break first"), "ready_at": ready})
+            if rewards[b["reward"]].get("needs_ok"):   # e.g. VR: a grown-up helps set it up, so they accept it first
+                if any(q["kid"] == b["kid"] and q["reward"] == b["reward"] for q in st["requests"]):
+                    return self.send(409, {"error": "already asked: a grown-up will come"})
+                ev = append({"type": "spend_request", "kid": b["kid"], "reward": b["reward"], "cost": cost,
+                             "reward_name": rewards[b["reward"]]["name"], "reward_icon": rewards[b["reward"]]["icon"]})
+                threading.Thread(target=notify_request, args=(ev,), daemon=True).start()
+                after_change()
+                ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
+                return self.send(200, {"ok": True, "event": ev, "state": derive()})
             tvx = {}
             if b["reward"] in UNLOCKS and (b.get("tv") in TVS or b.get("tv") == "*"):
                 tm = rewards[b["reward"]].get("tv_minutes") or UNLOCKS[b["reward"]][0]
@@ -2475,6 +2548,33 @@ class H(BaseHTTPRequestHandler):
             ev = append({"type": "dress", "on": on, "kids": who if on else [], "by": b["by"]})
             if on:
                 threading.Thread(target=dress_announce, args=(True,), daemon=True).start()
+        elif p == "/api/request_answer":   # a grown-up accepts (the reward starts now and the stars are paid) or says not now
+            q = next((x for x in st["requests"] if x["id"] == b.get("ref")), None)
+            if b.get("by") not in insp or not q:
+                return self.send(400, {"error": "unknown inspector / no such request"})
+            ok = bool(b.get("ok"))
+            rw_ = rewards.get(q["reward"]) or {}
+            if ok and st["balance"][q["kid"]] < q["cost"]:
+                return self.send(409, {"error": "not enough points any more"})
+            ev = append({"type": "request_answer", "ref": q["id"], "ok": ok, "by": b["by"]})
+            if ok:
+                ev = append({"type": "spend", "kid": q["kid"], "reward": q["reward"], "cost": q["cost"], "request": q["id"],
+                             "approved_by": b["by"], "reward_name": rw_.get("name", q["reward"]), "reward_icon": rw_.get("icon", "")})
+            else:
+                append({"type": "kid_note", "kid": q["kid"], "by": b["by"], "icon": rw_.get("icon", "1f4ac"),
+                        "text": (b.get("text") or "Not right now for %s. Your stars are still yours!" % rw_.get("name", q["reward"]))[:200]})
+        elif p == "/api/kid_note":   # a grown-up's message, shown once on the kid's screen
+            if b.get("by") not in insp or b.get("kid") not in kids or not str(b.get("text") or "").strip():
+                return self.send(400, {"error": "grown-up, kid and text needed"})
+            ev = append({"type": "kid_note", "kid": b["kid"], "text": str(b["text"]).strip()[:200], "icon": b.get("icon") or "1f4ac", "by": b["by"]})
+        elif p == "/api/kid_note_seen":
+            if b.get("kid") not in kids or not any(n["id"] == b.get("ref") for n in st["kid_notes"].get(b["kid"], [])):
+                return self.send(400, {"error": "no such note"})
+            ev = append({"type": "kid_note_seen", "kid": b["kid"], "ref": b["ref"]})
+        elif p == "/api/chores_first":   # grown-ups: no rewards until they turn it off
+            if b.get("by") not in insp or b.get("kid") not in kids:
+                return self.send(400, {"error": "grown-ups only, for one kid"})
+            ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "by": b["by"]})
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown inspector/chore"})

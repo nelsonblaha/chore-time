@@ -126,6 +126,8 @@ body.hub{max-width:none;font-size:20px}body.hub button{font-size:20px;padding:10
 
 <div id="tvbox"></div>
 
+<div id="reqbox"></div>
+
 <div id="pendwrap"><h2 class="h2b">🔍 Claimed done — inspect <span id="pcount" class="tag pend"></span></h2>
 <div id="pending"></div></div>
 
@@ -622,7 +624,8 @@ function render(){
   var DR=S.dress||{},tg=function(id,on,icon,label,sub,attr){return '<label class="tgl'+(on?' on':'')+'" '+attr+'><span class="sw"><span></span></span><span>'+icon+' <b>'+label+'</b>'+(sub?'<br><span class="mute">'+sub+'</span>':'')+'</span></label>'};
   tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">'+OD.map(function(c){var b=S.board[c.id]||{},open=!!b.opened,busy=(b.pending_by||[]).length;
       return tg(c.id,open||busy,E(c.icon),esc(c.name)+' open for the kids',busy?'a kid is waiting for inspection':open?'on: the kids can do it now':'off',(busy?'data-odbusy="1" ':'')+'data-od="'+c.id+'" data-on="'+(open?1:0)+'"')}).join("")+
-    tg("dress",DR.on,"👕","Put on clothes!",DR.on?Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅':'off · kids must dress (clothes, socks, shoes) before anything else','id="dresstgl"')+'</div>';
+    tg("dress",DR.on,"👕","Put on clothes!",DR.on?Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅':'off · kids must dress (clothes, socks, shoes) before anything else','id="dresstgl"')+
+    S.config.kids.map(function(k){var F=(S.chores_first||{})[k.id]||{};return tg("cf"+k.id,F.on,E(k.icon),esc(k.name)+': mandatory chores first',F.on?'on since '+fmtT(F.since)+(F.by?' ('+esc(inspOf(F.by).name)+')':'')+' · no rewards until you turn it off':'off · turn on to block '+esc(k.name)+'\'s rewards until the mess is cleaned up','data-cf="'+k.id+'"')}).join("")+'</div>';
   var BT=S.bedtime||{};
   tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
   tb+='<div class="mute" style="margin-top:6px">Only enforced while Chore time is on. The speaker warns 5 minutes before a TV locks. A TV that reports the episode\'s end lets a show finish (never past an hour into one title; a new episode, pause or app switch locks it). Others lock on the timer.</div>';
@@ -630,6 +633,8 @@ function render(){
   document.querySelectorAll("[data-od]").forEach(function(b){b.onclick=function(e){e.preventDefault();if(b.dataset.odbusy){toast("A kid is waiting: inspect it below");return}
     if(b.dataset.on==="1")post("/api/close_od",{chore:b.dataset.od},"Closed");else post("/api/reopen",{chore:b.dataset.od},"Open: the kids can do it now")}});
   if($("dresstgl"))$("dresstgl").onclick=function(e){e.preventDefault();var on=!(S.dress||{}).on;post("/api/dress",{on:on},on?"Put on clothes! is ON":"Put on clothes! is off")};
+  document.querySelectorAll("[data-cf]").forEach(function(n){n.onclick=function(e){e.preventDefault();var k=n.dataset.cf,on=!((S.chores_first||{})[k]||{}).on;
+    post("/api/chores_first",{kid:k,on:on},on?"Chores first: "+kidOf(k).name+"'s rewards are blocked":kidOf(k).name+"'s rewards are back on")}});
   if($("bedbtn"))$("bedbtn").onclick=function(){post("/api/bedtime",{on:!(S.bedtime||{}).on},(S.bedtime||{}).on?"Bedtime ended":"Bedtime! Screens are sending them to bed")};
   document.querySelectorAll("[data-ta]").forEach(function(b){b.onclick=function(){var a=b.dataset.ta.split(":");
     post("/api/tv/adjust",{tv:a[0],action:a[1]},{five:"5-minute countdown started",plus:"+10 min",minus:"−10 min",lock:"Locked"}[a[1]])}});
@@ -651,6 +656,13 @@ function render(){
         return '<div style="margin-top:8px"><div class="row" style="gap:8px"><b>'+E(kidOf(k).icon)+' '+esc(kidOf(k).name)+'</b>'+
           (v==="ready"?'<span class="tag clean">✅ dressed in '+fm(rp?rp.ts-DRS.since:0)+'</span>':v==="waiting"?'<span class="tag warn">🔍 says dressed in '+fm(rp?rp.ts-DRS.since:0)+': check them</span>':'<span class="tag">⏳ getting dressed · usually ~'+Math.round(expectFor(S,k,"get_dressed"))+' min</span>')+'</div>'+
           (v==="todo"?chartBar(S,k,"get_dressed",DRS.since,[k],false):'')+'</div>'}).join("")+'</div>'+ah}
+  var RQ=S.requests||[];   // rewards a kid asked for that need a grown-up (VR): accept starts it and pays
+  $("reqbox").innerHTML=RQ.length?'<h2 class="h2b">🙋 Asking for a reward</h2>'+RQ.map(function(q){var k=kidOf(q.kid);
+    return '<div class="card"><div class="row"><span class="big">'+E(k.icon)+E(q.reward_icon)+'</span><div style="flex:1"><b>'+esc(k.name)+'</b> wants <b>'+esc(q.reward_name||q.reward)+'</b> · '+q.cost+' ⭐<div class="mute">asked '+ago(q.ts)+' · set it up with them, then accept to start the timer</div></div></div>'+
+      '<div class="row" style="margin-top:6px"><button class="ok" data-rqok="'+q.id+'">✅ Accept: start it</button><button class="no" data-rqno="'+q.id+'">Not now</button></div></div>'}).join(""):'';
+  document.querySelectorAll("[data-rqok]").forEach(function(b){b.onclick=function(){post("/api/request_answer",{ref:b.dataset.rqok,ok:true},"Started: stars paid")}});
+  document.querySelectorAll("[data-rqno]").forEach(function(b){b.onclick=function(){var q=RQ.find(function(x){return x.id===b.dataset.rqno}),t=prompt("Message for "+kidOf(q.kid).name+" (shown on their screen):","Not right now for "+(q.reward_name||q.reward)+". Your stars are still yours!");
+    if(t===null)return;post("/api/request_answer",{ref:q.id,ok:false,text:t},"Told "+kidOf(q.kid).name+": not now")}});
   $("actbox").innerHTML=ah?'<h2 class="h2b">⏱ In progress</h2>'+ah:'';
   document.querySelectorAll("#actbox .actcard").forEach(function(n){n.onclick=function(){ACTJOB={kid:n.dataset.act};openPM("actjob")}});
   var PZ=S.paused||{},pz="";

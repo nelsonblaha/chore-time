@@ -24,7 +24,8 @@ The data folder also holds `ledger.jsonl` (every event, append-only) and some sm
     {"id": "show", "name": "TV show", "icon": "1f4fa", "cost": 5, "tv_minutes": 30},
     {"id": "movie", "name": "Movie", "icon": "1f3ac", "cost": 15, "tv_minutes": 100,
      "together_cost": {"2": 12, "3": 10}},          // optional: what EACH kid pays when 2 or 3 watch together
-    {"id": "vr", "name": "VR", "icon": "1f97d", "cost": 2, "minutes": 5, "break_min": 30}
+    {"id": "vr", "name": "VR", "icon": "1f97d", "cost": 2, "minutes": 5, "break_min": 30,
+     "needs_ok": true}                               // optional: the kid ASKS; a grown-up accepts (it starts and is paid then) or says not now
   ],
   "bedtime": "20:30",                                 // or "off"
   "households": [{"id": "dad", "name": "Dad's house"}, {"id": "mom", "name": "Mom's house"}],   // optional, see below

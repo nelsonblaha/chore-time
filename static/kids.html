@@ -349,6 +349,7 @@ function liveCelebrate(){ // inspections/awards that land while a kid is on thei
   if(!kid||!$("kid").classList.contains("on"))return;
   if(["m","news","timer","awards"].some(function(id){return $(id).classList.contains("on")}))return;
   var fresh=newInspections(kid);if(fresh.length){L("live_reveal",{n:fresh.length});revealQueue(fresh);return}
+  if(kidNote(kid))return;
   var ins=reports(kid).find(function(r){return r.status==="pending"&&r.inspecting&&!seenInspecting[r.id]});
   if(ins){seenInspecting[ins.id]=1;L("live_inspecting",{ref:ins.id});inspModalRef=ins.id;
     modal('<div class="big">'+E("1f50d")+E(insp(ins.inspecting.by).icon)+'</div><div class="q">'+insp(ins.inspecting.by).name+' is inspecting '+E(ins.chore_icon)+' '+ins.chore_name+' now!</div>');addOk();return}
@@ -539,7 +540,9 @@ function renderKid(){
       var lft=Math.max(0,RR[r.id]-Date.now()/1000),pct=Math.min(100,100*(1-lft/tot)).toFixed(1);
       rw+='<div class="rw cool" data-r="'+r.id+'"><div class="ic" style="opacity:.6">'+E(r.icon)+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.15">'+E("1f512")+' '+r.name+
         ' <span class="cdk" data-ready="'+RR[r.id]+'">'+Math.floor(lft/60)+":"+("0"+Math.round(lft%60)%60).slice(-2)+'</span><div class="cbar"><div class="cfill wait" data-ready="'+RR[r.id]+'" data-tot="'+tot+'" style="width:'+pct+'%"></div></div></div></div>';return}
+    if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===r.id})){rw+='<div class="rw" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:20px;font-weight:900;line-height:1.15">'+E("1f64b")+' Asked a grown-up for '+r.name+'</div></div>';return}
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
+  if(((S.chores_first||{})[kid]||{}).on)rw='<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! No rewards until the messes are cleaned up.</div>'+rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
   $("rewards").innerHTML=tvh+rw;
   $("toyout").innerHTML=E("1f9f8")+E("1f44b")+' Give away a toy';$("toyout").onclick=toyGoodbye;
   document.querySelectorAll("[data-mv]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var ref=n.dataset.mv,from=n.dataset.from;L("tv_switch_open",{from:from});
@@ -576,8 +579,13 @@ function newInspections(k){var t=Math.max(getSeen(k),seen[k]||0);return reports(
 function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
-  kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(remindJob(k,lastUse))return;
+  kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(remindJob(k,lastUse))return;
     var fresh=newInspections(k);if(fresh.length){revealQueue(fresh)}else{if(!getSeen(k))setSeen(k,S.now);showNewAwards()}})})}
+// a grown-up's one-time message ("we gave your stars back"), shown when the kid is on their screen
+var noteShown={};
+function kidNote(k){var n=((S.kid_notes||{})[k]||[]).find(function(x){return !noteShown[x.id]});if(!n)return false;noteShown[n.id]=1;L("kid_note",{ref:n.id});
+  modal('<div class="big">'+E(n.icon)+E("1f4ac")+'</div><div class="q">'+String(n.text).replace(/[&<>"]/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]})+'</div>');
+  addOk(function(){api("/api/kid_note_seen",{kid:k,ref:n.id})});return true}
 function revealQueue(list){L("reveal",{n:list.length});
   if(!list.length){setSeen(kid,S.now);setTimeout(showNewAwards,300);return}
   var r=list.shift(),i=insp(r.inspected_by),ok=r.status==="inspected";
@@ -1155,6 +1163,8 @@ function minCost(r){return Math.min.apply(null,[r.cost].concat(Object.keys(r.tog
 function togetherLine(r){var tc=r.together_cost||{},ks=Object.keys(tc).sort();if(!ks.length)return "Everyone watching pays "+r.cost+" "+E("2b50")+".";
   return ks.map(function(k){return k+" watching: "+tc[k]+" "+E("2b50")+" each"}).join(" &middot; ")}
 function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:null});
+  if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===rid})){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">A grown-up is coming to help with '+r.name+'!</div>');addOk();return}
+  if(((S.chores_first||{})[kid]||{}).on){modal('<div class="big">'+E("1f9f9")+E("1f512")+'</div><div class="q">Chores first!</div><div class="q" style="font-size:28px">Clean up the messes, then a grown-up turns rewards back on.</div>');wobble();return}
   var r=S.config.rewards.find(function(x){return x.id===rid}),b=S.balance[kid];
   var rr=((S.reward_ready||{})[kid]||{})[rid];
   if(rr&&rr>S.now){var mins=Math.ceil((rr-S.now)/60),sb=(S.screen_break||{})[kid]&&["show","movie","games"].indexOf(rid)>=0;
@@ -1162,6 +1172,8 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
       (sb?'<div class="q" style="font-size:22px;opacity:.75">Good time for a chore '+E("1f9f9")+' or playing outside '+E("1f333")+'</div>':''));return}
   var tvR=["show","movie","games"].indexOf(r.id)>=0,lo=tvR?minCost(r):r.cost;
   if(b<lo){modal('<div class="big">'+E(r.icon)+E("1f512")+'</div><div class="q">Need '+(lo-b)+' more '+E("2b50")+(lo<r.cost?' to watch together':'')+'</div>');wobble();return}
+  if(r.needs_ok){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">Ask a grown-up for '+r.name+'?</div><div class="q" style="font-size:26px;opacity:.85">They help you set it up. '+r.cost+' '+E("2b50")+' when it starts.</div><div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Ask</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
+    $("sn").onclick=closeModal;$("sy").onclick=function(){buy(r,null)};return}
   modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+(b<r.cost?lo:r.cost)+' '+E("2b50")+'?</div>'+(lo<r.cost?'<div class="q" style="font-size:24px;opacity:.8">'+E("1f465")+' Cheaper together! '+togetherLine(r)+(b<r.cost?' (alone: '+r.cost+')':'')+'</div>':'')+'<div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
   $("sn").onclick=closeModal;
   $("sy").onclick=function(){
@@ -1182,16 +1194,17 @@ function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
   $("wtog").onclick=function(){L("who_watches",{who:"together"});
     function draw(){var n=1+Object.keys(sel).length,each=costFor(r,Math.max(2,n));
       modal('<div class="q">'+E("1f465")+' Who is watching with you?</div><div class="toygrid">'+others.map(function(k){
-        var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],need=costFor(r,sel[k.id]?n:n+1),why=bal<need?"needs "+(need-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
+        var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],need=costFor(r,sel[k.id]?n:n+1),why=((S.chores_first||{})[k.id]||{}).on?E("1f9f9")+" chores first":bal<need?"needs "+(need-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
         return '<div class="toyb" data-w="'+k.id+'" style="'+(sel[k.id]?"border:6px solid "+k.color+";background:#fff":"")+(why?";opacity:.45":"")+'">'+E(k.icon)+'<span class="lbl">'+k.name+(sel[k.id]?" "+E("2705"):"")+(why?'<br><span style="font-size:18px">'+why+'</span>':'')+'</span></div>'}).join("")+'</div>'+
       '<div class="q" style="font-size:24px">'+[kid].concat(Object.keys(sel)).map(function(m){return E(KI2(m).icon)+' '+each+E("2b50")}).join(" &nbsp; ")+'</div>'+
       '<div class="faces"><div class="btn yes" id="wgo" style="font-size:36px;font-weight:900;padding:12px 26px'+(Object.keys(sel).length?'':';opacity:.4')+'">'+E("25b6")+' Watch together</div></div>');
       document.querySelectorAll("#mbox [data-w]").forEach(function(n){n.onclick=function(){var k=n.dataset.w,bal=S.balance[k]||0,rr=((S.reward_ready||{})[k]||{})[r.id];
-        if((!sel[k]&&bal<costFor(r,n+1))||(rr&&rr>S.now)){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
+        if((!sel[k]&&bal<costFor(r,n+1))||(rr&&rr>S.now)||((S.chores_first||{})[k]||{}).on){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
       $("wgo").onclick=function(){var ks=Object.keys(sel),c_=costFor(r,1+ks.length);if(!ks.length||[kid].concat(ks).some(function(m){return (S.balance[m]||0)<c_})){wobble();return}buy(r,tv,ks)}}
     draw()}}
 function buy(r,tv,withKids){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[]}).then(function(res){busy=false;
     if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(res.error||"Can't buy that")+'</div>');addOk();return}S=res.state;boughtHere[res.event.id]=1;
+    if(res.event.type==="spend_request"){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">Asked! A grown-up will come help you set up '+r.name+'.</div><div class="q" style="font-size:26px;opacity:.85">The timer starts when they say yes.</div>');addOk(function(){renderKid()});return}
     var tog=(withKids||[]).length?'<div class="q" style="font-size:28px">'+E("1f465")+' '+[kid].concat(withKids).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'';
     var q=res.event.queued?'<div class="q" style="font-size:26px;background:#fff8e1;border-radius:16px;padding:6px 12px">'+E("23f3")+' Your time starts when the show before yours ends.</div>':'';
     modal('<div class="celebrate"><div class="big">'+E(r.icon)+'</div><div class="q">'+E("1f973")+' '+r.name+'! '+E("1f973")+'</div>'+tog+q+(r.minutes?'<div class="q" style="font-size:30px">'+E("23f1")+' '+r.minutes+' minutes. Then a '+r.break_min+' minute break.</div>':'')+'</div>');
