@@ -1459,6 +1459,22 @@ class CertifiedSlot(Case):
         self.assertEqual(st["balance"]["ava"], 3)
         self.assertGreater(st["board"]["church"]["slot"], time.time())
 
+    def test_kids_see_and_claim_it_only_a_few_days_ahead(self):
+        from datetime import datetime, timedelta
+        c = base_config()
+        c["chores"].append({"id": "church", "name": "Read at church", "icon": "26ea", "points": 3, "cooldown_h": 0,
+                            "slot": {"dow": (datetime.now() + timedelta(days=6)).weekday(), "time": "11:00",
+                                     "claim_days": 4}})
+        a = App(c)
+        church = lambda: next(x for x in a.state()["config"]["chores"] if x["id"] == "church")
+        self.assertEqual(a.state()["board"]["church"]["days_until"], 6)
+        self.assertEqual(church().get("closed"), "soon")
+        self.assertEqual(a.post("/api/claim", {"kid": "ava", "chore": "church"})[0], 409)
+        a.event(type="claim", kid="ava", chore="church", slot=a.state()["board"]["church"]["slot"])   # held from before
+        self.assertIsNone(church().get("closed"))   # the kid holding it still sees it
+        self.assertEqual(a.post("/api/claim", {"kid": "ava", "chore": "church", "release": True})[0], 200)
+        self.assertEqual(church().get("closed"), "soon")
+
     def test_every_other_week_and_the_calendar_wins(self):
         from datetime import datetime, timedelta
         s = self.app.s

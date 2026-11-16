@@ -50,7 +50,7 @@ The reward ids `show`, `movie` and `games` unlock TVs: streaming/casting, stream
 | `on_demand` | hidden until a grown-up opens it (a button on the parents' page), e.g. laundry after running the machines; hidden again once it passes |
 | `from`, `until` | ISO dates when it's available |
 | `price_dates` | `{"2026-12-24": 8}`: a different price on one day |
-| `slot` | `{"dow": 5, "time": "10:00"}`: one kid claims each week's slot ahead of time. Add `"every_weeks": 2, "anchor": "YYYY-MM-DD"` for every other week (the shared calendar below overrides it), and `"certify_after": "12:00"` so a grown-up confirms it happened instead of the kid reporting it |
+| `slot` | `{"dow": 5, "time": "10:00"}`: one kid claims each week's slot ahead of time. Add `"every_weeks": 2, "anchor": "YYYY-MM-DD"` for every other week (the shared calendar below overrides it), and `"certify_after": "12:00"` so a grown-up confirms it happened (the kid's "I did it" goes to a grown-up's inspection; the confirm card is the fallback), and `"claim_days": 4` so kids only see and claim it that many days ahead |
 | `ask_title` | `true`: starting it asks the kid to name it ("organizing rocks"); any job can be named with ✏️ while doing it |
 | `bundle` | ids of rooms. Priced as the sum of those still dirty. `points` makes it a fixed price, and `together` means team only |
 | `boost` | `{"pct": 25, "min": 3}`: a bundle is worth 25% more with 3+ dirty rooms |

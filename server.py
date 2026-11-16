@@ -642,6 +642,17 @@ def watch_dress():
             print("dress error", ex, flush=True)
 
 
+def too_early(ch, bd, kid=None):
+    """slot "claim_days": kids only see and claim the service this many days ahead (e.g. 4: from Wednesday
+    for a Sunday); a kid who already holds it still sees it"""
+    cd = (ch.get("slot") or {}).get("claim_days")
+    if cd is None or bd.get("days_until") is None:
+        return False
+    if bd.get("claimed_by") and (kid is None or bd["claimed_by"] == kid):
+        return False
+    return bd["days_until"] > int(cd)
+
+
 def chore_closed(ch, board):
     """why a chore is unavailable right now (None = open): daylight-only after dark, one-time already done,
     outside its from/until dates (e.g. cleaning the car only in daylight; a one-time job)"""
@@ -655,6 +666,8 @@ def chore_closed(ch, board):
         return "done"
     if ch.get("slot") and (board.get(ch["id"]) or {}).get("claim_done"):
         return "done"
+    if ch.get("slot") and too_early(ch, board.get(ch["id"]) or {}):
+        return "soon"
     if ch.get("on_demand") and not (board.get(ch["id"]) or {}).get("opened") and not (board.get(ch["id"]) or {}).get("pending_by"):
         return "on_demand"   # e.g. laundry: only after a grown-up opens it (machines ran), gone again once it's done
     if (ch.get("until") and today > ch["until"]) or (ch.get("from") and today < ch["from"]):
@@ -2196,6 +2209,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "already done this week"})
             if bd.get("claimed_by") and bd["claimed_by"] != b["kid"]:
                 return self.send(409, {"error": "%s claimed it" % bd["claimed_by"]})
+            if not b.get("release") and too_early(ch_, bd, b["kid"]):
+                return self.send(409, {"error": "too early: claim it %s days ahead or less" % ch_["slot"]["claim_days"]})
             ev = append({"type": "claim", "kid": b["kid"], "chore": b["chore"], "slot": bd["slot"],
                          **({"release": True} if b.get("release") else {})})
         elif p in ("/api/start", "/api/stop"):
