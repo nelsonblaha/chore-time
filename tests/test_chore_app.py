@@ -377,6 +377,20 @@ class SonyInputs(Case):
         self.app.set('sensor.explicit_display','loading',lease_until=time.time()-1)
         self.assertFalse(self.s.external_display_active(self.t,players,'x'))
 
+    def test_loading_reservation_survives_screensaver_and_launcher_transition(self):
+        self.t.update(external_display_entity='sensor.explicit_display', external_display_app_id='custom-display')
+        self.app.set('sensor.explicit_display', 'loading', lease_until=time.time()+40)
+        for activity in ('com.google.android.apps.tv.dreamx', 'com.google.android.apps.tv.launcherx'):
+            self.assertEqual(self.act(activity), 'external_display', activity)
+        for activity in ('com.sony.dtv.tvx', 'com.netflix.ninja', '', None, 'unknown'):
+            self.app.set(self.t['remote'], 'on', current_activity=activity)
+            self.assertFalse(self.s.external_display_active(self.t, [], 'x'), activity)
+        self.app.set(self.t['remote'], 'on', current_activity='com.google.android.apps.tv.dreamx')
+        for state, until in [('active', time.time()+40), ('loading', time.time()-1),
+                             ('loading', time.time()+500), ('idle', time.time()+40)]:
+            self.app.set('sensor.explicit_display', state, lease_until=until)
+            self.assertFalse(self.s.external_display_active(self.t, [], 'x'), (state, until))
+
     def test_explicit_display_lease_expires_and_native_playback_wins(self):
         self.t.update(external_display_entity='sensor.explicit_display',external_display_app_id='custom-display')
         self.app.set('sensor.explicit_display','active',lease_until=time.time()+40)

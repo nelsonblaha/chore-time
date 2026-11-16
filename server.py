@@ -2786,7 +2786,14 @@ def external_display_active(t, players, tok):
         return False
     if t.get("kind")=="sony":
         activity=(ha_get(t["remote"],tok).get("attributes") or {}).get("current_activity")
-        if activity != "com.google.android.apps.mediashell":
+        allowed = {"com.google.android.apps.mediashell"}
+        if st.get("state") == "loading":
+            # Cast startup passes through the screensaver/launcher. A fresh
+            # explicit reservation must survive that gap, or the idle-screen
+            # guard launches Chores over the in-flight receiver (Nov15).
+            allowed.update({"com.google.android.apps.tv.dreamx",
+                            "com.google.android.apps.tv.launcherx"})
+        if activity not in allowed:
             return False
     # HA Cast metadata can lag launch. A fresh loading lease protects that
     # handoff; the display controller withdraws it after its 75-second deadline.
