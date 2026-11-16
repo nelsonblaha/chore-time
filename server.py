@@ -326,6 +326,14 @@ def cfg():
     return c
 
 
+def solo_job(ch):
+    """a job one kid does for themselves, never as a team: brushing teeth, a shower, a job only one kid may do,
+    a claimed slot, a kid's own "clean up first", getting dressed, toys (or "solo": true on any chore)"""
+    ch = ch or {}
+    return bool(ch.get("solo") or ch.get("each_daily") or ch.get("slot") or ch.get("cleanup_for")
+                or len(ch.get("only") or []) == 1 or ch.get("id") in ("get_dressed", "toy_swap", "toy_out"))
+
+
 def is_system(cid):
     return cid in SYSTEM_CHORES or str(cid).startswith("cleanup_")
 
@@ -2266,6 +2274,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "pick a helper"})
             act = st["active"].get(b["kid"])
             cid_ = b.get("chore") or (act or {}).get("chore")
+            if solo_job(chores.get(cid_)):
+                return self.send(409, {"error": "everyone does this one on their own"})
             owner = next((k for k, a in st["active"].items() if a["chore"] == cid_ and a.get("team") and a["team"][0] == k), None)
             if owner and owner != b["kid"]:
                 return self.send(409, {"error": "only %s can add helpers" % owner})

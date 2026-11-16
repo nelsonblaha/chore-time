@@ -468,7 +468,7 @@ function renderKid(){
       chartBar(S,kid,A.chore,A.ts,A.team,true))+
       '<div class="btn" id="dotimer" style="background:#eceff1">'+E("23f1")+(NT?' On':' Off')+'</div>'+
       ((A.team||[]).length>1?'<span class="tmi">'+E("1f91d")+teamIcons(A.team)+(A.split&&Object.keys(A.split).length?'<span style="font-size:16px"> '+Object.keys(A.split).map(function(m){return KI2(m).name+" "+A.split[m]+"⭐"}).join(", ")+'</span>':'')+'</span>':'')+
-      (((A.team||[kid])[0]===kid)?'<div class="btn" id="dohelp" style="background:#e3f2fd">'+E("1f465")+((A.team||[]).length>1?' +':' Add helper')+'</div>':'')+
+      (((A.team||[kid])[0]===kid&&!soloJob(ac))?'<div class="btn" id="dohelp" style="background:#e3f2fd">'+E("1f465")+((A.team||[]).length>1?' +':' Add helper')+'</div>':'')+
       (((A.team||[]).length>1&&(A.team||[kid])[0]===kid)?'<div class="btn" id="doshare" style="background:#fff8e1">'+E("1f91d")+' Share</div>':'')+
       (A.chore!=="other"?'<div class="btn" id="doname" style="background:#fff3e0">'+E("270f")+(A.title?'':' Name it')+'</div>':'')+
       '<div class="btn" id="dolater" style="background:#ede7f6">'+E("23f8")+' Finish later</div>'+
@@ -637,6 +637,8 @@ function penaltyModal(r,i,after){L("penalty_seen",{ref:r.id});
     '<div class="q" style="font-size:26px;opacity:.85">'+E("1f9f9")+' Do the job for real '+E("27a1")+' '+E("2b50")+E("2b50")+'</div>'+
     '<div class="faces" style="margin-top:8px"><div class="btn yes" id="pnok" style="font-size:44px;font-weight:900;padding:14px 34px">OK</div></div>');
   chime([392,330,262]);$("pnok").onclick=function(){after()}}
+// one kid's own job (teeth, shower, a job only they may do, a claimed slot...): no "Together" / "Add helper"
+function soloJob(c){c=c||{};return !!(c.solo||c.each_daily||c.slot||c.cleanup_for||(c.only&&c.only.length===1)||["get_dressed","toy_swap","toy_out"].indexOf(c.id)>=0)}
 // a grown-up's one-time message ("we gave your stars back"), shown when the kid is on their screen
 var noteShown={};
 function kidNote(k){var n=((S.kid_notes||{})[k]||[]).find(function(x){return !noteShown[x.id]});if(!n)return false;noteShown[n.id]=1;L("kid_note",{ref:n.id});
@@ -700,7 +702,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
         '<div class="btn" id="envre" style="font-size:24px;padding:8px 20px;background:#e3f2fd">'+E("1f5a8")+' Print the envelope again</div></div>'})()+
     (c.slot?slotBtns(c,bd):(
     '<div class="faces" style="flex-wrap:wrap;gap:14px">'+(A&&A.chore===cid?'':(c.together?'':'<div class="btn" id="go" style="font-size:36px;font-weight:900;padding:12px 24px;background:#fff3c4;border:5px solid #f5b400">'+E("25b6")+' Start</div>')+
-      (c.points!==0&&cid!=="toy_swap"?'<div class="btn" id="together" style="font-size:36px;font-weight:900;padding:12px 24px;background:#e3f2fd;border:5px solid #64b5f6">'+E("1f465")+' Together</div>':''))+
+      (c.points!==0&&!soloJob(c)?'<div class="btn" id="together" style="font-size:36px;font-weight:900;padding:12px 24px;background:#e3f2fd;border:5px solid #64b5f6">'+E("1f465")+' Together</div>':''))+
     '<div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I\'m done!</div></div>'+
     (c.points!==0&&cid!=="toy_swap"&&cid!=="other"?'<div class="faces" style="margin-top:10px"><div class="btn" id="some" style="font-size:26px;font-weight:900;padding:8px 20px;background:#ede7f6">'+E("1f64b")+' I did some of it</div></div>':''))));
   if($("claim"))$("claim").onclick=function(){L("claim",{chore:cid});api("/api/claim",{kid:kid,chore:cid}).then(function(r){if(r.ok){S=r.state;renderKid()}

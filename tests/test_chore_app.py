@@ -1509,6 +1509,15 @@ class PrankInspection(Case):
         self.assertIn("against the rules", r["feedback"])
 
 
+class SoloJobs(Case):
+    def test_no_team_on_a_personal_job(self):
+        c = base_config()
+        c["chores"].append({"id": "teeth", "name": "Brush teeth", "icon": "1faa5", "points": 1, "cooldown_h": 0, "each_daily": True})
+        a = App(c)
+        self.assertEqual(a.post("/api/team", {"kid": "ava", "chore": "teeth", "partners": ["max"]})[0], 409)
+        self.assertEqual(a.post("/api/team", {"kid": "ava", "chore": "kitchen", "partners": ["max"]})[0], 200)
+
+
 class WindDown(Case):
     def test_no_rewards_after_the_evening_cutoff(self):
         c = base_config()
