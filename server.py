@@ -1763,8 +1763,10 @@ def clear_adult_request(nonce, who):
 
 
 def watch_ha_events():
-    """Listen on HA's websocket for notification button presses (watch/phone)."""
+    """Notification buttons and brief doorway edges used by the vacuum."""
     import asyncio
+    from entry_edges import entry_edges
+    entry_doors = set((HOUSE.get("vacuum") or {}).get("entry_doors") or [])
     try:
         import websockets
     except ImportError:
@@ -1779,13 +1781,20 @@ def watch_ha_events():
                     await ws.send(json.dumps({"type": "auth", "access_token": tok}))
                     await ws.recv()
                     await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "mobile_app_notification_action"}))
+                    if entry_doors:
+                        await ws.send(json.dumps({"id": 2, "type": "subscribe_events", "event_type": "state_changed"}))
                     print("HA event socket: subscribed to notification actions", flush=True)
                     while True:
                         m = json.loads(await ws.recv())
                         if m.get("type") == "result":
+                            if m.get("id") == 2:
+                                entry_edges.online = bool(m.get("success"))
                             print("HA event socket: subscribe result", m.get("success"), flush=True)
                             continue
                         data_ = ((m.get("event") or {}).get("data") or {})
+                        if m.get("id") == 2:
+                            entry_edges.record(data_, entry_doors)
+                            continue
                         act = data_.get("action", "")
                         ilog({"src": "watch", "action": "raw_event", "act": act, "device": data_.get("device_id") or data_.get("webhook_id")})
                         if act.startswith("CHORE_TV"):
@@ -1874,6 +1883,7 @@ def watch_ha_events():
                                 ilog({"src": "adult", "action": r["status"], "who": r["who"], "ip": r["ip"]})
                                 print("grown-up request", nonce, r["status"], flush=True)
             except Exception as ex:  # noqa: BLE001
+                entry_edges.online = False
                 print("HA event socket error", ex, flush=True)
                 await asyncio.sleep(5)
     asyncio.run(run())

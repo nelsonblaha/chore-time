@@ -12,6 +12,7 @@ import json
 import time
 import urllib.parse
 from datetime import datetime, timedelta
+from entry_edges import entry_edges
 
 # Filled from house.json "vacuum" by configure(); see example-config/house.json.
 VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = ACTIVE = UPSTAIRS = CLEAN_SCRIPT = None
@@ -193,6 +194,9 @@ class Pilot:
                     q, who = now - epoch(s), e
         if seen < 3:                      # sensors down: never call that "empty"
             return 0, "sensors unavailable"
+        for e, stamp in entry_edges.recent(now).items():
+            if e in ENTRY_DOORS and max(0, now - stamp) < q:
+                q, who = max(0, now - stamp), e
         for name, t in self.g["TVS"].items():
             try:
                 what, _ = self.g["tv_status"](t, self.tok)
@@ -209,11 +213,13 @@ class Pilot:
         seen = D.setdefault("seen_on", {})
         trig = [t for t in D.setdefault("trig", []) if now - t[0] < 300]
         robot = self.robot_rooms(now)
+        edges = entry_edges.recent(now)
         for e in list(SENSORS) + list(ENTRY_DOORS):
             st_ = self.get(e)
-            if st_.get("state") != "on":
+            buffered = edges.get(e, 0) if e in ENTRY_DOORS else 0
+            if st_.get("state") != "on" and not buffered:
                 continue
-            t0 = epoch(st_)
+            t0 = max(buffered, epoch(st_) if st_.get("state") == "on" else 0)
             if t0 <= seen.get(e, 0) or t0 < D.get("run_started", now) - 5:
                 seen[e] = max(seen.get(e, 0), t0)
                 continue
@@ -224,6 +230,9 @@ class Pilot:
             if now - t0 > 60:
                 continue
             if e in ENTRY_DOORS:
+                # Consume this arrival once, even if the door stays open or
+                # the robot resumes within the path-evidence window.
+                D["trig"] = [t for t in trig if not (t[0] == t0 and t[1] == e)]
                 return e
             # an entry sensor (stairs) alone is NOT enough: it also sees people moving around the floor above.
             # It counts once another sensor on THIS floor, away from the robot, follows within a minute.
@@ -618,6 +627,7 @@ class Pilot:
     def publish(self, info, vs, room):
         D = self.D
         attrs = {"friendly_name": "Vacuum autopilot", "icon": "mdi:robot-vacuum",
+                 "entry_events_connected": entry_edges.online,
                  "vacuum_entity": VAC, "map_flag": MAP_FLAG, "room_request_entity": REQUESTS,
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
