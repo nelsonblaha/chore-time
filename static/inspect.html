@@ -367,6 +367,7 @@ function renderCfEdit(){var k=kidOf(CFK),F=(S.chores_first||{})[CFK]||{};if($("c
     post("/api/chores_first",{kid:CFK,on:true,items:its},F.on?"List saved":"Chores first: "+k.name+"'s rewards are blocked").then(closePM)}}
 // "Reject with penalty" only shows when it fits: this kid's last 2 inspections in a row (past 12 h) were rejected or
 // worth 0, or 3+ of theirs are waiting at once (fake chores piling up)
+function hmA(v){var p=String(v||"08:00").split(":"),h=+p[0];return (h%12||12)+":"+p[1]+(h<12?" AM":" PM")}
 function prankish(k){var mine=S.history.filter(function(h){return h.type==="report"&&h.kid===k&&S.now-h.ts<43200});
   if(mine.filter(function(h){return h.status==="pending"}).length>=3)return true;
   var done=mine.filter(function(h){return h.status!=="pending"&&h.inspected_ts}).sort(function(a,b){return b.inspected_ts-a.inspected_ts}),n=0;
@@ -644,7 +645,7 @@ function render(){
   var DR=S.dress||{},tg=function(id,on,icon,label,sub,attr){return '<label class="tgl'+(on?' on':'')+'" '+attr+'><span class="sw"><span></span></span><span>'+icon+' <b>'+label+'</b>'+(sub?'<br><span class="mute">'+sub+'</span>':'')+'</span></label>'};
   tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">'+OD.map(function(c){var b=S.board[c.id]||{},open=!!b.opened,busy=(b.pending_by||[]).length;
       return tg(c.id,open||busy,E(c.icon),esc(c.name)+' open for the kids',busy?'a kid is waiting for inspection':open?'on: the kids can do it now':'off',(busy?'data-odbusy="1" ':'')+'data-od="'+c.id+'" data-on="'+(open?1:0)+'"')}).join("")+
-    tg("dress",DR.on,"👕","Put on clothes!",DR.on?Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅':'off · kids must dress (clothes, socks, shoes) before anything else','id="dresstgl"')+
+    tg("dress",DR.on,"👕","Put on clothes!",DR.on?(DR.school?'🏫 school morning (quiet: no speakers) · ':'')+Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅'+(DR.school?' or at '+hmA(DR.until):''):'off · kids must dress (clothes, socks, shoes) before anything else'+(DR.next?'<br>🏫 on by itself next school morning: '+DR.next.day+' '+new Date(DR.next.ts*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):''),'id="dresstgl"')+
     S.config.kids.map(function(k){var F=(S.chores_first||{})[k.id]||{},its=F.items||[];return tg("cf"+k.id,F.on,E(k.icon),esc(k.name)+': mandatory chores first',F.on?'no rewards until “Tidy up first!” passes inspection · since '+fmtT(F.since)+(its.length?'<br>📝 '+its.map(esc).join(' · '):'')+' <a href="#" data-cfe="'+k.id+'">✏️ edit list</a>':(F.lifted?'lifted '+fmtT(F.lifted.ts)+' (passed inspection) · ':'off · ')+'turn on to block '+esc(k.name)+'\'s rewards until a mess is tidied up','data-cf="'+k.id+'"')}).join("")+'</div>';
   var BT=S.bedtime||{};
   tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
@@ -671,13 +672,13 @@ function render(){
       '<div class="mute">'+(a.notimer?'timer off':'⏱ <span class="cdu2" data-since="'+a.ts+'"></span>')+' · expected ~'+Math.round(expectFor(S,team[0],a.chore,team))+' min'+
       (a.rework&&a.rework.feedback?' · 🔁 "'+esc(a.rework.feedback)+'"':'')+'</div></div></div>'+(a.notimer?'':chartBar(S,team[0],a.chore,a.ts,team,false))+'</div>'});
   var DRS=S.dress||{};   // "Put on clothes!" is a job in progress too: one race clock, a bar per kid against their usual time
-  if(DRS.on){var fm=function(x){x=Math.max(0,Math.round(x));return Math.floor(x/60)+":"+("0"+x%60).slice(-2)};
-    ah='<div class="card"><div class="row"><span class="big">👕🧦👟</span><div style="flex:1"><b>Put on clothes!</b> · race since '+new Date(DRS.since*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+
-      '<div class="mute">⏱ <span class="cdu2" data-since="'+DRS.since+'"></span> · turns off when everyone is ✅</div></div></div>'+
+  if(DRS.on){var fm=function(x){x=Math.max(0,Math.round(x));return Math.floor(x/60)+":"+("0"+x%60).slice(-2)},G=Math.min(DRS.go||DRS.since,S.now);   // school mornings: the clock starts when they're up
+    ah='<div class="card"><div class="row"><span class="big">'+(DRS.school?'🏫':'')+'👕🧦👟</span><div style="flex:1"><b>Put on clothes!</b>'+(DRS.school?' (school morning)':'')+' · race since '+new Date(G*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+
+      '<div class="mute">⏱ <span class="cdu2" data-since="'+G+'"></span> · turns off when everyone is ✅'+(DRS.school?' or at '+hmA(DRS.until):'')+'</div></div></div>'+
       Object.keys(DRS.kids||{}).map(function(k){var v=DRS.kids[k],rp=S.history.find(function(h){return h.type==="report"&&h.chore==="get_dressed"&&h.kid===k&&h.ts>=DRS.since});
         return '<div style="margin-top:8px"><div class="row" style="gap:8px"><b>'+E(kidOf(k).icon)+' '+esc(kidOf(k).name)+'</b>'+
-          (v==="ready"?'<span class="tag clean">✅ dressed in '+fm(rp?rp.ts-DRS.since:0)+'</span>':v==="waiting"?'<span class="tag warn">🔍 says dressed in '+fm(rp?rp.ts-DRS.since:0)+': check them</span>':'<span class="tag">⏳ getting dressed · usually ~'+Math.round(expectFor(S,k,"get_dressed"))+' min</span>')+'</div>'+
-          (v==="todo"?chartBar(S,k,"get_dressed",DRS.since,[k],false):'')+'</div>'}).join("")+'</div>'+ah}
+          (v==="ready"?'<span class="tag clean">✅ dressed in '+fm(rp?rp.ts-G:0)+'</span>':v==="waiting"?'<span class="tag warn">🔍 says dressed in '+fm(rp?rp.ts-G:0)+': check them</span>':'<span class="tag">⏳ getting dressed · usually ~'+Math.round(expectFor(S,k,"get_dressed"))+' min</span>')+'</div>'+
+          (v==="todo"?chartBar(S,k,"get_dressed",G,[k],false):'')+'</div>'}).join("")+'</div>'+ah}
   var RQ=S.requests||[];   // rewards bought that wait for a grown-up to start them (VR): start = timer begins; not now = refund
   $("reqbox").innerHTML=RQ.length?'<h2 class="h2b">🙋 Waiting for you to start</h2>'+RQ.map(function(q){var k=kidOf(q.kid);
     return '<div class="card"><div class="row"><span class="big">'+E(k.icon)+E(q.reward_icon)+'</span><div style="flex:1"><b>'+esc(k.name)+'</b> bought <b>'+esc(q.reward_name||q.reward)+'</b> · paid '+q.cost+' ⭐<div class="mute">'+ago(q.ts)+' · set it up with them, then start the timer</div></div></div>'+

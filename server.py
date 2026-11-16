@@ -10,7 +10,7 @@ Events (one JSON object per line):
 """
 import json
 from tidy_spaces import space_states
-import random, os, threading, time, uuid, urllib.request
+import random, os, re, threading, time, uuid, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -576,16 +576,114 @@ def watch_when_down():
 DRESS = HOUSE.get("dress") or {}
 
 
-def dress_state(evs, reports):
+def dress_state(evs, reports, awake=None):
+    """school mornings switch it on before anyone is up: their race clock ("go") starts when the kids are
+    (the house's "awake" sensor, or the end of bedtime)"""
     last = next((e for e in reversed(evs) if e["type"] == "dress"), None)
     if not last or not last.get("on"):
-        return {"on": False, "off_ts": last["ts"] if last else None, "off_by": last.get("by") if last else None}
+        return {"on": False, "off_ts": last["ts"] if last else None, "off_by": last.get("by") if last else None,
+                **({"next": school_next()} if SCHOOL else {})}
     out = {}
     for k in last.get("kids") or []:
         mine = [r for r in reports.values() if r["chore"] == "get_dressed" and r["kid"] == k and r["ts"] >= last["ts"]]
         out[k] = "ready" if any(r["status"] == "inspected" for r in mine) else \
             "waiting" if any(r["status"] == "pending" for r in mine) else "todo"
-    return {"on": True, "since": last["ts"], "by": last.get("by"), "kids": out}
+    res = {"on": True, "since": last["ts"], "go": last["ts"], "by": last.get("by"), "kids": out}
+    if last.get("school"):
+        from datetime import datetime as _dt
+        go = max(last["ts"], _dt.fromtimestamp(last["ts"]).replace(hour=BED_END_H, minute=0, second=0, microsecond=0).timestamp())
+        if awake and go < awake <= time.time():
+            go = awake
+        res.update(school=True, go=go, until=SCHOOL.get("until") or "08:00")
+    return res
+
+
+# School mornings (house.json dress.school_mornings): "Put on clothes!" switches itself on at "at" on school days
+# for the kids at this house (home switch on), quietly (no speakers, no chimes), and off again at "until".
+# A school day: one of "weekdays" (Mon=0) that the kids' calendar doesn't mark as no school for that kid.
+SCHOOL = DRESS.get("school_mornings") or {}
+
+
+def _hm(v, dflt):
+    h, m = (int(x) for x in str(v or dflt).split(":"))
+    return h, m
+
+
+def school_off_kids(kids, d):
+    """kid ids with no school that day (the calendar's no-school events; one naming a kid is that kid's only)"""
+    out = set()
+    for t in schedule.off_on(d) or []:
+        named = {k["id"] for k in kids if re.search(r"\b%s\b" % re.escape(k["name"]), t, re.I)}
+        out |= named or {k["id"] for k in kids}
+    return out
+
+
+def school_next(now=None, kids=None):
+    """the next school morning's start {"ts", "day"} (within two weeks), or None"""
+    from datetime import datetime as _dt, timedelta as _td
+    now = now or _dt.now()
+    kids = kids if kids is not None else cfg()["kids"]
+    h, m = _hm(SCHOOL.get("at"), "06:00")
+    uh, um = _hm(SCHOOL.get("until"), "08:00")
+    for i in range(15):
+        d = (now + _td(days=i)).replace(hour=h, minute=m, second=0, microsecond=0)
+        if d.weekday() not in (SCHOOL.get("weekdays") or [0, 1, 2, 3, 4]):
+            continue
+        if i == 0 and now >= d.replace(hour=uh, minute=um):
+            continue
+        if len(school_off_kids(kids, d.date())) < len(kids):
+            return {"ts": d.timestamp(), "day": d.strftime("%a")}
+    return None
+
+
+def school_morning_step(now, evs, kids, home_kids):
+    """what the school-morning switch does now: ("on", [kids]), ("off", None) or None.
+    `home_kids()` lists the kids at this house (asked only when it might switch on).
+    Once a morning: a grown-up switching it off (or on) that morning is left alone."""
+    if not SCHOOL:
+        return None
+    h, m = _hm(SCHOOL.get("at"), "06:00")
+    uh, um = _hm(SCHOOL.get("until"), "08:00")
+    t_at, t_until = now.replace(hour=h, minute=m, second=0, microsecond=0), now.replace(hour=uh, minute=um, second=0, microsecond=0)
+    last = next((e for e in reversed(evs) if e["type"] == "dress"), None)
+    if last and last.get("on") and last.get("school") and (now >= t_until or last["ts"] < t_at.timestamp()):
+        return ("off", None)
+    if now.weekday() not in (SCHOOL.get("weekdays") or [0, 1, 2, 3, 4]) or not (t_at <= now < t_until):
+        return None
+    if any(e["type"] == "dress" and e["ts"] >= t_at.timestamp() for e in evs) or (last and last.get("on")):
+        return None
+    off = school_off_kids(kids, now.date())
+    who = [k for k in home_kids() if k not in off]
+    return ("on", who) if who else None
+
+
+def watch_school_mornings():
+    from datetime import datetime as _dt
+    while True:
+        try:
+            c, tok = cfg(), ha_token()
+            ent = SCHOOL.get("awake")
+            if ent:   # when the kids are up (a bedroom motion sensor's "awake" switch): the race clock starts then
+                s_ = ha_get(ent, tok) or {}
+                ts_ = None
+                if s_.get("state") == "on" and s_.get("last_changed"):
+                    try:
+                        ts_ = _dt.fromisoformat(s_["last_changed"].replace("Z", "+00:00")).timestamp()
+                    except ValueError:
+                        ts_ = None
+                GUARD["awake_ts"] = ts_ if ts_ and _dt.fromtimestamp(ts_).date() == _dt.now().date() else None
+            step = school_morning_step(_dt.now(), read_events(), c["kids"], lambda: dress_kids(c))
+            if step and step[0] == "on":
+                ev = append({"type": "dress", "on": True, "kids": step[1], "by": "auto", "school": True})
+                ilog({"src": "school", "action": "dress_on", "event": ev})
+                after_change()
+            elif step:
+                ev = append({"type": "dress", "on": False, "kids": [], "by": "auto", "school": True, "why": "school time"})
+                ilog({"src": "school", "action": "dress_off", "event": ev})
+                after_change()
+        except Exception as ex:  # noqa: BLE001
+            print("school mornings error", ex, flush=True)
+        time.sleep(30)
 
 
 def chores_first_state(evs, kids, reports=None):
@@ -642,7 +740,7 @@ def dress_kids(c):
 def dress_announce(first=False):
     d_ = derive().get("dress") or {}
     todo = [k for k, v in (d_.get("kids") or {}).items() if v == "todo"]
-    if not d_.get("on") or not todo:
+    if not d_.get("on") or not todo or d_.get("school"):   # school mornings are quiet (kids may still be asleep)
         return
     names = " and ".join(next((x["name"] for x in cfg()["kids"] if x["id"] == k), k) for k in todo)
     msg = (DRESS.get("message") or "{names}: put on your clothes, socks and shoes right now! Then show a grown-up.").format(names=names)
@@ -701,7 +799,8 @@ def watch_dress():
         time.sleep(5)
         n += 1
         try:
-            on = bool((derive().get("dress") or {}).get("on"))
+            d_ = derive().get("dress") or {}
+            on = bool(d_.get("on")) and (not d_.get("school") or d_.get("go", 0) <= time.time())   # screens wait until they're up
             if on != was or (on and n % 12 == 0):   # on/off, and once a minute while on (someone may have stopped it)
                 dress_displays(on, started)
             was = on
@@ -1313,7 +1412,7 @@ def derive():
             "history": history[:200], "now": time.time(),
             "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "dress": dress_state(evs, reports), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
+            "dress": dress_state(evs, reports, GUARD.get("awake_ts")), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -2093,7 +2192,8 @@ class H(BaseHTTPRequestHandler):
                     if act.get("split"):
                         extra["split"] = act["split"]
             if b["chore"] == "get_dressed" and (st.get("dress") or {}).get("on"):
-                extra["started"] = st["dress"]["since"]   # the race clock starts when the grown-up flips the switch (always timed)
+                # the race clock starts when the grown-up flips the switch (always timed); on a school morning, when they're up
+                extra["started"] = min(st["dress"].get("go") or st["dress"]["since"], time.time())
             if ch_.get("together") and not set(ch_.get("only") or []) <= set(extra.get("team") or [b["kid"]]):
                 return self.send(409, {"error": "do it together: team up first"})
             ev = append({"type": "report", "kid": b["kid"], "chore": b["chore"],
@@ -4272,6 +4372,8 @@ def start_modules():
             go("kid-where", watch_kid_where)      # which household each kid is at (two-household families)
             go("when-down", watch_when_down)      # "plug it back in" jobs appear while a device is unavailable
             go("dress", watch_dress)              # "Put on clothes!" spoken reminders every 30 s while it's on
+            if SCHOOL:
+                go("school-mornings", watch_school_mornings)   # "Put on clothes!" by itself on school mornings
             if any((h_ or {}).get("motion") for h_ in (HOUSE.get("hubs") or {}).values()):
                 go("hub-motion", watch_hub_motion)   # someone walks up to a Hub: it chimes for kids with something waiting
         if TVS or HUBS:

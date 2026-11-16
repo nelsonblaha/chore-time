@@ -86,6 +86,20 @@ house.json `"kid_calendar": {"ics_url": "<private iCal address>", "with": "^Home
 matches `with` means the kids are here that day. Slot chores (e.g. reading at a weekly service) follow it where it
 has data, and their `every_weeks` rule elsewhere. Read every 6 hours into `kid_calendar.json` in the data folder.
 
+The same calendar marks days with no school: an all-day event whose title matches `"no_school"` (default: holiday,
+break, intersession, "no school", "off school", vacation) and not `"school_anyway"` (default: "last day", "resumes",
+"first day"). An event that names a kid is that kid's day off only.
+
+### School mornings ("Put on clothes!" by itself)
+
+house.json `"dress": {"school_mornings": {"at": "05:30", "until": "07:30", "weekdays": [0, 1, 2, 3, 4],
+"awake": "input_boolean.kids_awake"}}`: on a school day (one of `weekdays`, Mon=0, that the kids' calendar doesn't
+mark as no school) the "Put on clothes!" switch turns on at `at` for the kids at this house (home switch on), and
+off at `until` if a grown-up hasn't passed everyone yet. It is quiet: no spoken reminders, no chimes, and the
+Hubs and TVs aren't taken over until the kids are up. The race clock starts when `awake` (an optional Home
+Assistant switch that turns on when the kids get up) does, or when bedtime ends. Once a morning: a grown-up who
+switches it off keeps it off until the next school day.
+
 ### Two households
 
 A child who lives in two homes can use Chore Time in both. Add `households` (the first is the default home of every job

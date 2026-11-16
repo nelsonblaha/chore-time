@@ -1310,6 +1310,89 @@ class PutOnClothes(Case):
         self.assertFalse(self.app.state()["board"]["wash"]["opened"])
 
 
+class SchoolMornings(Case):
+    """On school days "Put on clothes!" switches itself on at 5:30 for the kids at this house, quietly, and off at 7:30.
+    The kids' calendar's holidays and breaks (keyword match) skip it; one naming a kid skips only that kid."""
+    MON = datetime(2026, 11, 16)   # a Monday
+
+    def setUp(self):
+        super().setUp()
+        self.s.SCHOOL.clear()
+        self.s.SCHOOL.update({"at": "05:30", "until": "07:30"})
+        self.sch = self.s.schedule
+        self.saved = (dict(self.sch.CACHE["days"]), dict(self.sch.CACHE["off"]))
+        self.sch.CACHE["days"].clear()
+        self.sch.CACHE["off"].clear()
+        for i in range(14):
+            self.sch.CACHE["days"][(self.MON.date() + timedelta(days=i)).isoformat()] = True
+
+    def tearDown(self):
+        self.s.SCHOOL.clear()
+        self.sch.CACHE["days"].clear(); self.sch.CACHE["days"].update(self.saved[0])
+        self.sch.CACHE["off"].clear(); self.sch.CACHE["off"].update(self.saved[1])
+        super().tearDown()
+
+    def step(self, when, home=("ava", "max")):
+        return self.s.school_morning_step(when, self.s.read_events(), self.s.cfg()["kids"], lambda: list(home))
+
+    def test_on_at_half_past_five_on_a_school_day_only(self):
+        self.assertEqual(self.step(self.MON.replace(hour=5, minute=29)), None)
+        self.assertEqual(self.step(self.MON.replace(hour=5, minute=31)), ("on", ["ava", "max"]))
+        self.assertEqual(self.step(self.MON.replace(hour=7, minute=31)), None)               # too late to start
+        self.assertEqual(self.step((self.MON + timedelta(days=5)).replace(hour=6)), None)   # Saturday
+        self.assertEqual(self.step(self.MON.replace(hour=6), home=()), None)                # nobody here
+
+    def test_holidays_skip_it_and_a_named_kid_only_skips_that_kid(self):
+        self.sch.CACHE["off"][self.MON.date().isoformat()] = ["District: Thanksgiving Break"]
+        self.assertEqual(self.step(self.MON.replace(hour=6)), None)
+        self.sch.CACHE["off"][self.MON.date().isoformat()] = ["Ava Intersession (No School)"]
+        self.assertEqual(self.step(self.MON.replace(hour=6)), ("on", ["max"]))
+
+    def test_once_a_morning_and_off_at_the_cutoff(self):
+        at = self.MON.replace(hour=5, minute=30).timestamp()
+        self.app.event(type="dress", on=True, kids=["ava"], by="auto", school=True, ts=at)
+        self.assertEqual(self.step(self.MON.replace(hour=7)), None)
+        self.assertEqual(self.step(self.MON.replace(hour=7, minute=30)), ("off", None))
+        self.app.event(type="dress", on=False, kids=[], by="jordan", ts=at + 60)       # a grown-up turned it off
+        self.assertEqual(self.step(self.MON.replace(hour=7)), None)                    # stays off this morning
+
+    def test_quiet_and_the_race_starts_when_they_are_up(self):
+        tts, spk = self.s.ANNOUNCE_TTS, self.s.DRESS.get("speakers")
+        self.s.ANNOUNCE_TTS, self.s.DRESS["speakers"] = "tts.test", ["media_player.test"]
+        self.addCleanup(lambda: (setattr(self.s, "ANNOUNCE_TTS", tts), self.s.DRESS.pop("speakers") if spk is None else self.s.DRESS.update(speakers=spk)))
+        code, r = self.app.post("/api/dress", {"by": "jordan", "on": True, "kids": ["ava"]})
+        self.assertEqual(code, 200, r)
+        time.sleep(0.5)                                                                # its first reminder (a thread)
+        n = len(self.app.calls)
+        self.s.dress_announce()
+        self.assertEqual(len(self.app.calls), n + 1)                                   # the grown-up's switch speaks
+        self.app.event(type="dress", on=True, kids=["ava"], by="auto", school=True)
+        self.s.dress_announce()
+        self.assertEqual(len(self.app.calls), n + 1)                                   # a school morning doesn't
+        d = self.app.state()["dress"]
+        self.assertTrue(d["school"])
+        self.assertGreaterEqual(d["go"], d["since"])
+        code, r = self.app.post("/api/report", {"kid": "ava", "chore": "get_dressed", "feeling": "ok"})
+        self.assertEqual(code, 200, r)
+        self.assertLessEqual(r["event"]["started"], r["event"]["ts"])
+
+    def test_next_school_morning_skips_the_weekend_and_holidays(self):
+        sat = (self.MON + timedelta(days=5)).replace(hour=9)
+        self.assertEqual(self.s.school_next(sat, self.s.cfg()["kids"])["day"], "Mon")
+        self.sch.CACHE["off"][(self.MON + timedelta(days=7)).date().isoformat()] = ["MLK Day Holiday"]
+        self.assertEqual(self.s.school_next(sat, self.s.cfg()["kids"])["day"], "Tue")
+
+    def test_calendar_keywords(self):
+        ics = "\n".join(["BEGIN:VCALENDAR",
+                         "BEGIN:VEVENT", "UID:a", "DTSTART;VALUE=DATE:20261123", "DTEND;VALUE=DATE:20261128", "SUMMARY:District: Thanksgiving Break", "END:VEVENT",
+                         "BEGIN:VEVENT", "UID:b", "DTSTART;VALUE=DATE:20261120", "DTEND;VALUE=DATE:20261121", "SUMMARY:Last school day before break", "END:VEVENT",
+                         "BEGIN:VEVENT", "UID:c", "DTSTART;VALUE=DATE:20261012", "DTEND;VALUE=DATE:20261013", "SUMMARY:No school - teacher development", "END:VEVENT",
+                         "BEGIN:VEVENT", "UID:d", "DTSTART:20261030T120000", "DTEND:20261030T130000", "SUMMARY:Early release holiday party", "END:VEVENT",
+                         "END:VCALENDAR"])
+        off = self.sch.days_off(ics, start=date(2026, 10, 1), horizon_days=90)
+        self.assertEqual(sorted(off), ["2026-10-12", "2026-11-23", "2026-11-24", "2026-11-25", "2026-11-26", "2026-11-27"])
+
+
 class GrownUpFromHA(unittest.TestCase):
     """The grown-up watch check from the kids' page inside Home Assistant (a parent's own phone or tablet)."""
 
