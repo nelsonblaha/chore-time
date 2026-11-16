@@ -2636,6 +2636,8 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown inspector/chore"})
+            if any(a.get("chore") == b["chore"] for a in list(st["active"].values()) + list(st["paused"].values())) or st["board"].get(b["chore"], {}).get("pending_by"):
+                return self.send(409, {"error": "finish or inspect the existing job first"})
             ev = append({"type": "mark_clean", "chore": b["chore"], "by": b["by"]})
         elif p == "/api/tour_seen":
             if b.get("by") not in insp or b.get("chore") not in chores:

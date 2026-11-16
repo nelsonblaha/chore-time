@@ -53,6 +53,7 @@ class RoomTidiness(unittest.TestCase):
         self.app.post('/api/report', {'kid':'ava','chore':'kitchen','feeling':'ok'})
         before = self.app.s.derive()
         self.assertEqual(self.app.post('/api/space_tidy', {'space':'kitchen','tidy':True,'by':'jordan'})[0],409)
+        self.assertEqual(self.app.post('/api/mark_clean', {'chore':'kitchen','by':'jordan'})[0],409)
         after = self.app.s.derive()
         self.assertEqual(after['board']['kitchen'],before['board']['kitchen'])
         self.assertEqual(after['balance'],before['balance'])
