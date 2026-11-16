@@ -351,7 +351,10 @@ function renderActJob(){var a=ACTJOB.kid?(S.active||{})[ACTJOB.kid]:null,r=ACTJO
       step(delivered,cur===3,"✉️","Fold the letter into the envelope, unsealed","so you can read it")+
       step(delivered,cur===3,"📬","Hand it over",delivered?(r.delivered?"“"+esc(EV.handoff_done)+"” · "+tm(r.delivered):"reported before this step existed"):"a kid taps “"+esc(EV.handoff_done)+"” once it's there")+
       step(judged,cur===5,"🔍","You read it and give the stars",judged?(r.status==="inspected"?"passed · "+(r.awarded||0)+" ⭐":r.status):(split&&Object.keys(split).length?"deal: "+Object.keys(split).map(function(m){return esc(kidOf(m).name)+" "+split[m]}).join(" + "):""))}
-  $("pmbody").innerHTML=h+'</div>'}
+  if(a)h+='<div class="row" style="margin-top:14px"><button class="no" id="abandon">🛑 Stop it: they abandoned it</button></div><div class="mute">Ends the job for '+team.map(function(m){return esc(kidOf(m).name)}).join(" + ")+' with no stars. Nothing is saved for later.</div>';
+  $("pmbody").innerHTML=h+'</div>';
+  if($("abandon"))$("abandon").onclick=function(){if(confirm("Stop "+(a.title||c.name)+" for "+team.map(function(m){return kidOf(m).name}).join(" + ")+"? No stars."))
+    post("/api/abandon",{kid:ACTJOB.kid},"Stopped: abandoned").then(closePM)}}
 function renderMostly(){var r=S.history.find(function(h){return h.id===MOSTLY});if(!r){closePM();return}var k=kidOf(r.kid);
   if($("mnow"))return;  // keep what the parent is typing
   $("pmbody").innerHTML='<h2 class="h2b">🧩 Mostly done</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><span class="mute">full job '+r.points+' ⭐</span></div>'+

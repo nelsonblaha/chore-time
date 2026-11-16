@@ -898,6 +898,10 @@ def derive():
             for m in gone.get("team", []):
                 if m in active:
                     active[m]["team"] = [x for x in active[m]["team"] if x != e["kid"]]
+        elif e["type"] == "abandon":   # a grown-up ends a job the kids forgot about (no points), for the whole team
+            for m in e.get("team") or [e["kid"]]:
+                if active.get(m, {}).get("chore") == e.get("chore"):
+                    active.pop(m)
         elif e["type"] == "stop" and e.get("kid") in active:
             gone = active.pop(e["kid"])
             for m in gone.get("team", []):
@@ -2169,6 +2173,12 @@ class H(BaseHTTPRequestHandler):
             if not pz:
                 return self.send(400, {"error": "nothing saved"})
             ev = append({"type": "resume", "kid": b["kid"]})
+        elif p == "/api/abandon":
+            a_ = st["active"].get(b.get("kid"))
+            if b.get("by") not in insp or not a_:
+                return self.send(400, {"error": "unknown inspector / not doing a job"})
+            ev = append({"type": "abandon", "kid": b["kid"], "chore": a_["chore"], "team": a_.get("team") or [b["kid"]],
+                         "by": b["by"], "minutes": round((time.time() - a_["ts"]) / 60)})
         elif p == "/api/release":
             if b.get("by") not in insp or b.get("kid") not in st["paused"]:
                 return self.send(400, {"error": "unknown inspector / nothing saved"})

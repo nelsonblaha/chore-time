@@ -1408,6 +1408,19 @@ class ServiceSchedule(unittest.TestCase):
         self.assertTrue(d["2026-12-13"])    # the regular rhythm again (Wed 9th - Mon 14th)
 
 
+class AbandonedJob(Case):
+    def test_grown_up_stops_a_forgotten_team_job(self):
+        a = App(base_config())
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "other"})[0], 200)
+        self.assertEqual(a.post("/api/team", {"kid": "ava", "partners": ["max"]})[0], 200)
+        self.assertEqual(sorted(a.state()["active"]), ["ava", "max"])
+        self.assertEqual(a.post("/api/abandon", {"kid": "ava"})[0], 400)   # grown-ups only
+        code, r = a.post("/api/abandon", {"kid": "ava", "by": "jordan"})
+        self.assertEqual(code, 200, r)
+        st = a.state()
+        self.assertEqual((st["active"], st["paused"], st["balance"]["ava"]), ({}, {}, 0))
+
+
 class CertifiedSlot(Case):
     """Church reading: kids claim a Sunday; a grown-up confirms it after the service; weeks away are skipped."""
 
