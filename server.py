@@ -9,6 +9,7 @@ Events (one JSON object per line):
   undo     {ref, by}                                     -> voids a report/spend/adjust/inspect
 """
 import json
+from tidy_spaces import space_states
 import random, os, threading, time, uuid, urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -311,9 +312,9 @@ GET_DRESSED = {"id": "get_dressed", "name": "Get dressed", "icon": "1f455", "poi
 def cleanup_job(kid):
     """built in, one per kid: the "chores first" clean-up a grown-up lists; hidden unless that kid is blocked.
     It goes through inspection like any job, and passing it lifts the block."""
-    return {"id": "cleanup_" + kid, "name": "Clean up first!", "icon": "1f9f9", "points": 0, "cooldown_h": 0, "only": [kid],
+    return {"id": "cleanup_" + kid, "name": "Tidy up first!", "icon": "1f9f9", "points": 0, "cooldown_h": 0, "only": [kid],
             "cleanup_for": kid, "household": "any", "order": -100,
-            "desc": "A grown-up listed what to clean up. Then rewards come back."}
+            "desc": "A grown-up listed what to tidy up. Then rewards come back."}
 
 
 def cfg():
@@ -1288,6 +1289,7 @@ def derive():
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
+            "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dress_state(evs, reports), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
@@ -1373,7 +1375,7 @@ def push_state_sensor(state=None, last_result=None):
              "expected": state.get("expected"), "personal_best": state.get("personal_best"),
              "achievements": state.get("achievements"), "streak": state.get("streak"), "chore_mode": state.get("chore_mode"),
              "pending_points": state["pending_points"], "board": state["board"], "history": hist,
-             "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"),
+             "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"), "tidy_spaces": state.get("tidy_spaces", {}),
              "reward_ready": state.get("reward_ready"), "timers": state.get("timers"),
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
              "awards": state.get("awards"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
@@ -1904,7 +1906,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/spend" and any(((st.get("chores_first") or {}).get(k_) or {}).get("on") for k_ in [b.get("kid")] + list(b.get("with") or [])):
             k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("chores_first") or {}).get(k_) or {}).get("on"))
             nm_ = next((x["name"] for x in c["kids"] if x["id"] == k_), str(k_))
-            return self.send(409, {"error": ("" if k_ == b.get("kid") else nm_ + ": ") + "Chores first! Clean up, then rewards come back."})
+            return self.send(409, {"error": ("" if k_ == b.get("kid") else nm_ + ": ") + "Chores first! Tidy up, then rewards come back."})
         if p == "/api/log":
             evs = b if isinstance(b, list) else [b]
             opened = {}
@@ -2017,9 +2019,9 @@ class H(BaseHTTPRequestHandler):
                 if bd["pending_by"]:
                     return self.send(409, {"error": "already waiting for inspection"})
                 if not bd["covers"]:
-                    return self.send(409, {"error": "presumed clean"})
+                    return self.send(409, {"error": "already tidy"})
             if bd["clean_until"]:
-                return self.send(409, {"error": "presumed clean"})
+                return self.send(409, {"error": "already tidy"})
             if bd["pending_by"] and chores[b["chore"]].get("room"):
                 return self.send(409, {"error": "already waiting for inspection"})
             if b["chore"] != "other" and b["kid"] in (bd.get("pending_by") or []):   # the same kid twice (a second tap on a waiting tile)
@@ -2617,6 +2619,20 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "grown-ups only, for one kid"})
             items = [str(x).strip()[:120] for x in (b.get("items") or []) if str(x).strip()][:20]
             ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "items": items, "by": b["by"]})
+        elif p == "/api/space_tidy":
+            space = next((x for x in HOUSE.get("tidy_spaces", []) if x["id"] == b.get("space")), None)
+            if b.get("by") not in insp or space is None or type(b.get("tidy")) is not bool:
+                return self.send(400, {"error": "known grown-up, room and tidy state required"})
+            jobs = space.get("chores", [])
+            if any(job not in chores for job in jobs):
+                return self.send(409, {"error": "room chore configuration needs attention"})
+            if any(a.get("chore") in jobs for a in list(st["active"].values()) + list(st["paused"].values())) or any(st["board"].get(job, {}).get("pending_by") for job in jobs):
+                return self.send(409, {"error": "finish or inspect the room's existing job first"})
+            if jobs:
+                for job in jobs:
+                    ev = append({"type": "mark_clean" if b["tidy"] else "reopen", "chore": job, "by": b["by"]})
+            else:
+                ev = append({"type": "space_tidy", "space": space["id"], "tidy": b["tidy"], "by": b["by"]})
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown inspector/chore"})

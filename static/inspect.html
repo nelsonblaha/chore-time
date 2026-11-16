@@ -145,7 +145,7 @@ body.hub{max-width:none;font-size:20px}body.hub button{font-size:20px;padding:10
 <details><summary>🎁 Presents (toy swap)</summary><div id="presentsadm"></div></details>
 
 <details><summary>🧹 Chore chart</summary>
-<div class="mute">Change the price for the next cleaning only, reopen a room, or edit the chart.</div>
+<div class="mute">Change the price for the next tidying only, reopen a room, or edit the chart.</div>
 <div class="grid" id="chart"></div>
 <div class="row" style="margin-top:8px"><button class="ok" id="nadd">＋ New chore</button></div>
 </details>
@@ -239,7 +239,7 @@ function ptsSlider(id,v,base,mx){v=v==null?0:v;mx=mx||Math.max(10,(base||0)*3,v)
 function wireSlider(id,base,cb){var s=$(id);if(!s)return;s.oninput=function(){var v=+s.value,d=$(id+"v");d.textContent=v+" ⭐";
   d.style.color=base==null?"":v>base?"#d50000":v<base?"#1e88e5":"";if(cb)cb(v)}}
 function renderNoteForm(){if($("nfnote"))return;var c=choreOf(NOTEFORM.chore),bd=S.board[c.id]||{},cur=bd.price!=null?bd.price:c.points;
-  $("pmbody").innerHTML='<h2 class="h2b">'+E(c.icon)+' '+esc(c.name)+'</h2><div class="mute">'+(NOTEFORM.mode==="reopen"?"Reopen it so a kid can do it again.":"Set the price for its next cleaning.")+'</div>'+
+  $("pmbody").innerHTML='<h2 class="h2b">'+E(c.icon)+' '+esc(c.name)+'</h2><div class="mute">'+(NOTEFORM.mode==="reopen"?"Reopen it so a kid can do it again.":"Set the price for its next tidying.")+'</div>'+
     '<label class="mute" style="display:block;margin-top:10px">Points</label>'+ptsSlider("nfpts",cur,c.points)+
     '<label class="mute" style="display:block;margin-top:10px">📝 What needs doing? (kids see this)</label>'+listEd("nfnote",bd.note||"","e.g. toys under the couch")+
     '<button class="ok tvgo" id="nfgo">'+(NOTEFORM.mode==="reopen"?"Reopen":"Save")+'</button>';
@@ -359,8 +359,8 @@ function renderActJob(){var a=ACTJOB.kid?(S.active||{})[ACTJOB.kid]:null,r=ACTJO
     post("/api/abandon",{kid:ACTJOB.kid},"Stopped: abandoned").then(closePM)}}
 var CFK=null;   // "chores first": what this kid must clean up before rewards; they do it as a job and you inspect it
 function renderCfEdit(){var k=kidOf(CFK),F=(S.chores_first||{})[CFK]||{};if($("cfl"))return;   // keep what the parent is typing
-  $("pmbody").innerHTML='<h2 class="h2b">🧹 '+esc(k.name)+': clean up first</h2><div class="mute">Rewards stay blocked until '+esc(k.name)+' does “Clean up first!” and it passes your inspection (watch too).</div>'+
-    '<label class="mute" style="margin-top:8px;display:block">What to clean up (they see this list)</label>'+listEd("cfl",(F.on?F.items||[]:[]).join("\n"),"e.g. Legos off the living room floor")+
+  $("pmbody").innerHTML='<h2 class="h2b">🧹 '+esc(k.name)+': tidy up first</h2><div class="mute">Rewards stay blocked until '+esc(k.name)+' does “Tidy up first!” and it passes your inspection (watch too).</div>'+
+    '<label class="mute" style="margin-top:8px;display:block">What to tidy up (they see this list)</label>'+listEd("cfl",(F.on?F.items||[]:[]).join("\n"),"e.g. Legos off the living room floor")+
     '<button class="ok tvgo" id="cfgo">'+(F.on?'Save the list':'Block rewards until it\'s done')+'</button>';
   wireList("cfl");
   $("cfgo").onclick=function(){var its=$("cfl").value.split("\n").map(function(t){return t.trim()}).filter(Boolean);
@@ -393,7 +393,7 @@ function renderTour(){
     $("tdone").onclick=closePM;return}
   var c=S.config.chores.find(function(x){return x.id===ids[TOUR.i]}),bd=S.board[c.id]||{},base=c.points,cur=bd.price!=null?bd.price:base;
   if(TOUR.val==null)TOUR.val=cur==null?0:cur;var mx=Math.max(10,(base||0)*3,cur||0);
-  var st=bd.clean_until&&c.daily?"✅ done today"+(bd.clean_by?" ("+esc(kidOf(bd.clean_by).name)+")":""):bd.clean_until?"✨ clean until "+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+(bd.clean_by?" ("+esc(kidOf(bd.clean_by).name)+")":""):
+  var st=bd.clean_until&&c.daily?"✅ done today"+(bd.clean_by?" ("+esc(kidOf(bd.clean_by).name)+")":""):bd.clean_until?"✨ tidy until "+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+(bd.clean_by?" ("+esc(kidOf(bd.clean_by).name)+")":""):
     (bd.pending_by&&bd.pending_by.length)?"🔍 waiting for inspection ("+bd.pending_by.map(function(k){return esc(kidOf(k).name)}).join(", ")+")":
     (Object.keys(S.active||{}).filter(function(k){return S.active[k].chore===c.id}).map(function(k){return "⏱ "+esc(kidOf(k).name)+" is doing it"})[0]||"available");
   var v=TOUR.val,cls=base==null?"":v>base?"color:#d50000":v<base?"color:#1e88e5":"";
@@ -404,10 +404,10 @@ function renderTour(){
     '<input type="range" id="tsl" min="0" max="'+mx+'" step="1" value="'+v+'">'+
     '<div class="row mute" style="justify-content:space-between"><span>0</span><span>usual: '+(base==null?"adult sets":base)+'</span><span>'+mx+'</span></div>'+
     '<label class="mute" style="display:block;margin-top:8px">📝 Notes for the kids </label>'+listEd("tnote",TOUR.note!=null?TOUR.note:(bd.note||""),"e.g. items on the dining room table")+
-    (bd.clean_until&&!TOUR.messy?'<div class="row" style="margin-top:12px"><button class="ok tvgo" style="flex:2" id="tstill">✅ Still '+(c.room?'clean':'done')+' → next</button></div>'+
-      '<div class="row" style="margin-top:6px"><button style="flex:1" id="tmessy">🧹 It\'s dirty — reopen & set price</button></div>':
+    (bd.clean_until&&!TOUR.messy?'<div class="row" style="margin-top:12px"><button class="ok tvgo" style="flex:2" id="tstill">✅ Still '+(c.room?'tidy':'done')+' → next</button></div>'+
+      '<div class="row" style="margin-top:6px"><button style="flex:1" id="tmessy">🧹 It\'s untidy — reopen & set price</button></div>':
     '<div class="row" style="margin-top:12px"><button class="ok tvgo" style="flex:2" id="tset">Set '+v+' ⭐ → next</button></div>'+
-    (c.room&&!bd.clean_until?'<div class="row" style="margin-top:6px"><button style="flex:1" id="tclean">✨ It\'s clean (no points) → next</button></div>':''))+
+    (c.room&&!bd.clean_until?'<div class="row" style="margin-top:6px"><button style="flex:1" id="tclean">✨ Mark tidy (no points) → next</button></div>':''))+
     '<div class="row" style="margin-top:6px"><button style="flex:1" id="tskip">Skip</button>'+(base!=null?'<button style="flex:1" id="tusual">Usual ('+base+')</button>':'')+'<button style="flex:1" id="tback">◀ Back</button><button class="no" style="flex:1" id="tstop">End tour</button></div>';
   if($("tsl"))$("tsl").oninput=function(){TOUR.val=+this.value;$("tv").textContent=TOUR.val+" ⭐";$("tv").style.color=base==null?"":TOUR.val>base?"#d50000":TOUR.val<base?"#1e88e5":"";$("tset").textContent="Set "+TOUR.val+" ⭐ → next"};
   if($("tnote"))$("tnote").oninput=function(){TOUR.note=this.value};wireList("tnote");
@@ -416,7 +416,7 @@ function renderTour(){
   function next(){post("/api/tour_seen",{chore:c.id},"");TOUR.i++;TOUR.val=null;TOUR.messy=false;TOUR.note=null;renderTour()}
   if($("tstill"))$("tstill").onclick=function(){saveNoteIfChanged().then(next)};
   if($("tmessy"))$("tmessy").onclick=function(){post("/api/reopen",{chore:c.id,note:noteNow()},esc(c.name)+" reopened").then(function(){TOUR.messy=true;renderTour()})};
-  if($("tclean"))$("tclean").onclick=function(){post("/api/mark_clean",{chore:c.id},esc(c.name)+" marked clean").then(function(){return noteChanged()?post("/api/note",{chore:c.id,note:""},""):null}).then(next)};
+  if($("tclean"))$("tclean").onclick=function(){post("/api/mark_clean",{chore:c.id},esc(c.name)+" marked tidy").then(function(){return noteChanged()?post("/api/note",{chore:c.id,note:""},""):null}).then(next)};
   if($("tset"))$("tset").onclick=function(){var to=TOUR.val;if(to===cur){saveNoteIfChanged().then(next);return}
     post("/api/price",{chore:c.id,points:to,note:noteNow()},esc(c.name)+": "+to+" ⭐").then(function(){if(to!==(base==null?null:base))TOUR.changed.push({icon:c.icon,name:c.name,from:cur,to:to});next()})};
   $("tskip").onclick=function(){saveNoteIfChanged().then(next)};$("tstop").onclick=function(){TOUR.i=999;renderTour()};
@@ -634,7 +634,7 @@ function render(){
   tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">'+OD.map(function(c){var b=S.board[c.id]||{},open=!!b.opened,busy=(b.pending_by||[]).length;
       return tg(c.id,open||busy,E(c.icon),esc(c.name)+' open for the kids',busy?'a kid is waiting for inspection':open?'on: the kids can do it now':'off',(busy?'data-odbusy="1" ':'')+'data-od="'+c.id+'" data-on="'+(open?1:0)+'"')}).join("")+
     tg("dress",DR.on,"👕","Put on clothes!",DR.on?Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅':'off · kids must dress (clothes, socks, shoes) before anything else','id="dresstgl"')+
-    S.config.kids.map(function(k){var F=(S.chores_first||{})[k.id]||{},its=F.items||[];return tg("cf"+k.id,F.on,E(k.icon),esc(k.name)+': mandatory chores first',F.on?'no rewards until “Clean up first!” passes inspection · since '+fmtT(F.since)+(its.length?'<br>📝 '+its.map(esc).join(' · '):'')+' <a href="#" data-cfe="'+k.id+'">✏️ edit list</a>':(F.lifted?'lifted '+fmtT(F.lifted.ts)+' (passed inspection) · ':'off · ')+'turn on to block '+esc(k.name)+'\'s rewards until a mess is cleaned up','data-cf="'+k.id+'"')}).join("")+'</div>';
+    S.config.kids.map(function(k){var F=(S.chores_first||{})[k.id]||{},its=F.items||[];return tg("cf"+k.id,F.on,E(k.icon),esc(k.name)+': mandatory chores first',F.on?'no rewards until “Tidy up first!” passes inspection · since '+fmtT(F.since)+(its.length?'<br>📝 '+its.map(esc).join(' · '):'')+' <a href="#" data-cfe="'+k.id+'">✏️ edit list</a>':(F.lifted?'lifted '+fmtT(F.lifted.ts)+' (passed inspection) · ':'off · ')+'turn on to block '+esc(k.name)+'\'s rewards until a mess is tidied up','data-cf="'+k.id+'"')}).join("")+'</div>';
   var BT=S.bedtime||{};
   tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
   tb+='<div class="mute" style="margin-top:6px">Only enforced while Chore time is on. The speaker warns 5 minutes before a TV locks. A TV that reports the episode\'s end lets a show finish (never past an hour into one title; a new episode, pause or app switch locks it). Others lock on the timer.</div>';
@@ -688,14 +688,14 @@ function render(){
   document.querySelectorAll("[data-pzp]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzp,z=PZ[k],v=prompt("Partial points for "+kidOf(k).name+" ("+choreOf(z.chore).name+")?","1");if(!v)return;
     post("/api/adjust",{kid:k,points:+v,reason:"partly did "+choreOf(z.chore).name},"+"+v+" for "+kidOf(k).name)}});
   // chart
-  var ch="";S.config.chores.forEach(function(c){if(c.hidden)return;var bd=S.board[c.id]||{};var tags=c.bundle?'<span class="tag">'+(c.only?c.only.join(", ")+' only · ':'')+'now '+(bd.price||0)+' pts = '+((bd.covers||[]).map(function(x){var cc=S.config.chores.find(function(y){return y.id===x})||{name:x};return esc(cc.name)+' '+((S.board[x]||{}).price||0)}).join(' + ')||'all clean')+(bd.boost_pct?' +'+bd.boost_pct+'% big-job bonus ('+bd.boost_from+'→'+bd.price+')':'')+'</span> ':"";
+  var ch="";S.config.chores.forEach(function(c){if(c.hidden)return;var bd=S.board[c.id]||{};var tags=c.bundle?'<span class="tag">'+(c.only?c.only.join(", ")+' only · ':'')+'now '+(bd.price||0)+' pts = '+((bd.covers||[]).map(function(x){var cc=S.config.chores.find(function(y){return y.id===x})||{name:x};return esc(cc.name)+' '+((S.board[x]||{}).price||0)}).join(' + ')||'all tidy')+(bd.boost_pct?' +'+bd.boost_pct+'% big-job bonus ('+bd.boost_from+'→'+bd.price+')':'')+'</span> ':"";
     if(bd.bonus)tags+='<span class="tag bonus">next time: '+(bd.price==null?"?":bd.price)+'</span> ';
     if(bd.note)tags+='<span class="tag">📝 '+esc(bd.note).replace(/\n/g," · ")+'</span> ';
-    if(bd.clean_until)tags+='<span class="tag clean">clean until '+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</span> ';
+    if(bd.clean_until)tags+='<span class="tag clean">tidy until '+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</span> ';
     if(bd.pending_by&&bd.pending_by.length)tags+='<span class="tag pend">waiting</span> ';
     var T=(S.typical||{})[c.id];if(T)tags+='<span class="tag">⏱ ~'+Math.round(T.minutes)+' min ('+T.n+')</span> ';
     ch+='<div class="card chore" data-c="'+c.id+'"><span class="big">'+E(c.icon)+'</span><span class="nm">'+esc(c.name)+' <span class="mute">'+(c.points==null?"adult sets":c.points+" pts")+(c.room?" · room":"")+'</span><br>'+tags+'</span>'+
-      '<button data-a="price">Price once</button>'+(bd.clean_until?'<button data-a="reopen">Reopen</button>':'')+'<button data-a="edit">Edit</button></div>'});
+      '<button data-a="price">Price once</button>'+(c.room&&!c.bundle?'<button data-a="tidy" title="Record tidy now; no points; vacuum history stays separate">✨ Mark tidy</button>':'')+(bd.clean_until?'<button data-a="reopen">Reopen</button>':'')+'<button data-a="edit">Edit</button></div>'});
   // group into collapsible floors (open/closed state remembered while the page is open)
   var groups={Downstairs:[],Upstairs:[],Other:[]};
   ch.split('<div class="card chore" data-c="').slice(1).forEach(function(part){var id=part.slice(0,part.indexOf('"')),c=choreOf(id);
@@ -703,9 +703,16 @@ function render(){
   window.CHOPEN=window.CHOPEN||{};
   $("chart").innerHTML=["Downstairs","Upstairs","Other"].filter(function(g){return groups[g].length}).map(function(g){
     return '<details class="cgrp" data-g="'+g+'"'+(CHOPEN[g]?" open":"")+'><summary>'+({Downstairs:"⬇️",Upstairs:"⬆️",Other:"✨"}[g])+' '+g+' <span class="mute">('+groups[g].length+')</span></summary>'+groups[g].join("")+'</details>'}).join("");
+  var spaces=Object.values(S.tidy_spaces||{}).filter(function(x){return !(x.chores||[]).length});
+  if(spaces.length){var html='<details class="cgrp" data-g="Room condition"'+(CHOPEN['Room condition']?' open':'')+'><summary>Room condition · no children’s jobs or points</summary>';
+    spaces.forEach(function(x){var label={tidy:'Tidy',untidy:'Untidy',unknown:'Not checked'}[x.state]||x.state;html+='<div class="card row"><span style="flex:1"><b>'+esc(x.name)+'</b><br><small>'+label+'</small></span><button data-space="'+esc(x.id)+'" data-tidy="true">✨ Mark tidy</button><button data-space="'+esc(x.id)+'" data-tidy="false">🧹 Mark untidy</button></div>'});
+    $("chart").insertAdjacentHTML('beforeend',html+'</details>');
+    document.querySelectorAll('[data-space]').forEach(function(b){b.onclick=function(){b.disabled=true;post('/api/space_tidy',{space:b.dataset.space,tidy:b.dataset.tidy==='true'},'Room marked '+(b.dataset.tidy==='true'?'tidy':'untidy')).finally(function(){b.disabled=false})}});
+  }
   document.querySelectorAll("#chart details.cgrp").forEach(function(d){d.ontoggle=function(){CHOPEN[d.dataset.g]=d.open}});
   document.querySelectorAll("#chart .chore").forEach(function(n){var c=choreOf(n.dataset.c);
     n.querySelector('[data-a="price"]').onclick=function(){NOTEFORM={chore:c.id,mode:"price"};openPM("noteform")};
+    var tidy=n.querySelector('[data-a="tidy"]');if(tidy){var busy=Object.values(S.active||{}).concat(Object.values(S.paused||{})).some(function(a){return a.chore===c.id})||((S.board[c.id]||{}).pending_by||[]).length;tidy.disabled=!!busy;if(busy)tidy.title="Finish or inspect the existing job first";tidy.onclick=function(){tidy.disabled=true;post("/api/mark_clean",{chore:c.id},c.name+" marked tidy · no points").finally(function(){tidy.disabled=false})};}
     var ro=n.querySelector('[data-a="reopen"]');if(ro)ro.onclick=function(){NOTEFORM={chore:c.id,mode:"reopen"};openPM("noteform")};
     n.querySelector('[data-a="edit"]').onclick=function(){CHFORM={id:c.id};openPM("chform")}});
   $("nadd").onclick=function(){CHFORM={id:null};openPM("chform")};

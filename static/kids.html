@@ -498,7 +498,7 @@ function renderKid(){
     if(c.each_daily&&(bd.done_today||[]).indexOf(kid)>=0&&(bd.pending_by||[]).indexOf(kid)<0)return false;   // done today (each kid once a day)
     return true}),PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
-  vis=vis.filter(function(c){return c.cleanup_for}).concat(vis.filter(function(c){return !c.cleanup_for}));   // "Clean up first!" leads
+  vis=vis.filter(function(c){return c.cleanup_for}).concat(vis.filter(function(c){return !c.cleanup_for}));   // "Tidy up first!" leads
   var ch="";vis.slice(page*PER,page*PER+PER).forEach(function(c){
     var bd=S.board[c.id]||{price:c.points,pending_by:[]},cls="tile",badge="";
     if(bd.clean_until){cls+=" clean"}
@@ -525,7 +525,7 @@ function renderKid(){
     if(bd.clean_until&&c.weekly){var dn=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
       modal('<div class="big">'+E(c.icon)+E("1f4c5")+'</div><div class="q">'+(bd.last_clean&&bd.last_clean>=bd.clean_until-7*86400?E("2705")+' Done for this week!':'No '+c.name.toLowerCase()+' today')+'</div><div class="q" style="font-size:26px;opacity:.8">'+E("1f4c5")+' Next '+c.name.toLowerCase()+' comes '+dn[c.weekly.open_dow||0]+'</div>');addOk();return}
     if(bd.clean_until&&c.daily){modal('<div class="big">'+E(c.icon)+E("2705")+'</div><div class="q">Done for today!</div><div class="q" style="font-size:26px;opacity:.8">'+E("1f305")+' Again tomorrow</div>');addOk();return}
-    if(bd.clean_until){modal('<div class="big">'+E(c.icon)+E("2728")+'</div><div class="q">'+E("2705")+' Already clean!</div><div class="q" style="font-size:24px;opacity:.75">'+E("1f4c5")+' Ready again in '+Math.max(1,Math.ceil((bd.clean_until-S.now)/86400))+' day'+(Math.ceil((bd.clean_until-S.now)/86400)>1?"s":"")+'</div>');return}
+    if(bd.clean_until){modal('<div class="big">'+E(c.icon)+E("2728")+'</div><div class="q">'+E("2705")+' Already tidy!</div><div class="q" style="font-size:24px;opacity:.75">'+E("1f4c5")+' Ready again in '+Math.max(1,Math.ceil((bd.clean_until-S.now)/86400))+' day'+(Math.ceil((bd.clean_until-S.now)/86400)>1?"s":"")+'</div>');return}
     if(bd.pending_by.length&&c.room){modal('<div class="big">'+E(c.icon)+E("1f50d")+'</div><div class="q">'+bd.pending_by.map(function(k){var x=S.config.kids.find(function(y){return y.id===k});return E(x.icon)+" "+x.name}).join(" ")+' did it</div><div class="q" style="font-size:24px;opacity:.75">'+E("23f3")+' Waiting for inspection</div>');return}
     askChore(n.dataset.c)}});
   var kc=K(),T=S.toys&&S.toys[kid];
@@ -551,7 +551,7 @@ function renderKid(){
         ' <span class="cdk" data-ready="'+RR[r.id]+'">'+Math.floor(lft/60)+":"+("0"+Math.round(lft%60)%60).slice(-2)+'</span><div class="cbar"><div class="cfill wait" data-ready="'+RR[r.id]+'" data-tot="'+tot+'" style="width:'+pct+'%"></div></div></div></div>';return}
     if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===r.id})){rw+='<div class="rw" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:20px;font-weight:900;line-height:1.15">'+E("1f64b")+' '+r.name+' is yours! A grown-up will start it</div></div>';return}
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
-  var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Clean up first!</b> and get it checked. Then rewards come back.</div>':'';
+  var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Tidy up first!</b> and get it checked. Then rewards come back.</div>':'';
   if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
   var RWL=rw.split("\u0001").filter(Boolean),RPER=tvh?3:4,rpages=Math.max(1,Math.ceil(RWL.length/RPER));if(RWP>=rpages)RWP=rpages-1;
   var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
@@ -614,7 +614,7 @@ function cleanupModal(){var F=(S.chores_first||{})[kid]||{},cid="cleanup_"+kid,b
   var esc_=function(t){return String(t).replace(/[&<>"]/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]})};
   if(waiting){modal('<div class="big">'+E("1f9f9")+E("1f50d")+'</div><div class="q">A grown-up will check your clean-up soon!</div><div class="q" style="font-size:26px;opacity:.85">Rewards come back when it passes.</div>');addOk();return}
   var allTicked=its.length&&its.every(function(t,i){return cfTick[kid+":"+i+":"+t]});
-  modal('<div class="big">'+E("1f9f9")+'</div><div class="q">Clean up first!</div>'+
+  modal('<div class="big">'+E("1f9f9")+'</div><div class="q">Tidy up first!</div>'+
     (rw&&rw.feedback?'<div class="q" style="font-size:26px;background:#ffebee;border-radius:16px;padding:6px 12px">'+E("1f449")+' '+notes(rw.feedback)+'</div>':'')+
     '<div style="text-align:left;margin:8px auto;max-width:640px">'+(its.length?its.map(function(t,i){var on=cfTick[kid+":"+i+":"+t];
       return '<div class="h" data-cft="'+i+'" style="font-size:28px;padding:10px 14px;margin:6px 0;'+(on?'background:#e8f5e9':'')+'"><span style="font-size:34px">'+E(on?"2705":"2b1c")+'</span><span style="flex:1;'+(on?'text-decoration:line-through;opacity:.6':'')+'">'+esc_(t)+'</span></div>'}).join(""):
@@ -670,8 +670,8 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
     (c.trophy?'<div class="q" style="font-size:28px;color:#b8860b">'+E("1f3c6")+' Earns a trophy!</div>':'')+
     (c.bundle?(function(){var inc=bd.covers||[],cl=c.bundle.filter(function(x){return inc.indexOf(x)<0}),CC=function(x){return S.config.chores.find(function(y){return y.id===x})||{name:x,icon:"2b50"}};
       return '<div class="q" style="font-size:24px;background:#fff8e1;border-radius:16px;padding:6px 12px;text-align:left">'+(inc.length?inc.map(function(x){var b=S.board[x]||{};return E(CC(x).icon)+' '+CC(x).name+' <b>'+(b.price||0)+'</b>'+E("2b50")}).join('<br>'):'')+
-        (bd.boost_pct?'<div style="font-size:24px;margin-top:4px;color:#e65100">'+E("1f680")+' Big job bonus +'+bd.boost_pct+'%! <b>'+bd.boost_from+' '+E("27a1")+' '+bd.price+'</b>'+E("2b50")+'</div>':(c.boost&&inc.length?'<div style="font-size:20px;opacity:.7;margin-top:4px">'+E("1f680")+' +'+c.boost.pct+'% bonus when '+c.boost.min+'+ rooms need cleaning</div>':''))+
-        (cl.length?'<div style="opacity:.6;font-size:20px;margin-top:4px">'+E("2728")+' already clean: '+cl.map(function(x){return E(CC(x).icon)}).join(" ")+'</div>':'')+'</div>'})():'')+
+        (bd.boost_pct?'<div style="font-size:24px;margin-top:4px;color:#e65100">'+E("1f680")+' Big job bonus +'+bd.boost_pct+'%! <b>'+bd.boost_from+' '+E("27a1")+' '+bd.price+'</b>'+E("2b50")+'</div>':(c.boost&&inc.length?'<div style="font-size:20px;opacity:.7;margin-top:4px">'+E("1f680")+' +'+c.boost.pct+'% bonus when '+c.boost.min+'+ rooms need tidying</div>':''))+
+        (cl.length?'<div style="opacity:.6;font-size:20px;margin-top:4px">'+E("2728")+' already tidy: '+cl.map(function(x){return E(CC(x).icon)}).join(" ")+'</div>':'')+'</div>'})():'')+
     (c.together?'<div class="q" style="font-size:28px;background:#e3f2fd;border-radius:16px;padding:6px 12px">'+E("1f91d")+' Together only: '+(c.only||[]).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'')+
     (bd.note?'<div class="q" style="font-size:26px;background:#fff8e1;border-radius:16px;padding:6px 12px">'+E("1f4dd")+' '+(bd.note_by?E(insp(bd.note_by).icon)+' ':'')+notes(bd.note)+'</div>':'')+
     (c.weekly?'<div class="q" style="font-size:24px;color:#c62828">'+E("1f4c5")+' Due '+["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][c.weekly.due_dow||4]+'</div>':'')+
@@ -980,7 +980,7 @@ function askStars(name,id){var ask=2;
 function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(function(x){return x.id===k})||{name:k})},CH=function(id){return S.config.chores.find(function(x){return x.id===id})||{name:id,icon:"2b50"}};
   (S.whatsnew_all||[]).forEach(function(n){(n.items||[]).forEach(function(it){out.push({ts:n.ts||0,icon:it.icon,text:it.text,kind:"new"})})});
   Object.keys(S.board||{}).forEach(function(id){var b=S.board[id],c=CH(id);if(!b.bonus||b.clean_until||c.hidden||c.bundle||b.price==null||b.base==null||b.is_rest||b.part_paid)return;
-    out.push({ts:b.tour_seen||S.now-1800,icon:b.price>b.base?"1f525":"2b07",text:c.name+" is worth "+b.price+(b.price===1?" star":" stars")+" this time"+(b.price>b.base?" — extra messy!":"."),kind:"price"})});
+    out.push({ts:b.tour_seen||S.now-1800,icon:b.price>b.base?"1f525":"2b07",text:c.name+" is worth "+b.price+(b.price===1?" star":" stars")+" this time"+(b.price>b.base?" — extra untidy!":"."),kind:"price"})});
   Object.keys(S.records||{}).forEach(function(key){var R=S.records[key],c=CH(key.split("@")[0]),who=R.team?R.team.map(function(k){return KN(k).name}).join(" + "):KN(R.kid).name;
     out.push({ts:R.ts,icon:"1f947",text:who+" set the "+c.name+(R.size?" ("+R.size+"-person)":"")+" record: "+Math.floor(R.sec/60)+":"+("0"+R.sec%60).slice(-2)+"!",kind:"record"})});
   Object.keys(S.awards||{}).forEach(function(k){(S.awards[k]||[]).forEach(function(a){if(/^(lvl|jobs|earned|days):/.test(a.id||"")&&!/^jobs:1$/.test(a.id))out.push({ts:a.ts,icon:"2b06",text:KN(k).name+": "+a.title.replace("!","")+"!",kind:"level"})})});
@@ -1043,7 +1043,7 @@ function recordTry(key){var R=(S.records||{})[key];if(!R)return;var cid=key.spli
   else if((bd.pending_by||[]).length)why=E("1f50d")+" Waiting for a grown-up to check it.";
   else if(bd.clean_until&&c.daily)why=E("2705")+" Done for today. Try again tomorrow!";
   else if(bd.clean_until&&c.weekly)why=E("1f4c5")+" Done for this week.";
-  else if(bd.clean_until){var d=new Date(bd.clean_until*1000);why=E("2728")+" Already clean. Ready again "+dn[d.getDay()]+"!"}
+  else if(bd.clean_until){var d=new Date(bd.clean_until*1000);why=E("2728")+" Already tidy. Ready again "+dn[d.getDay()]+"!"}
   else if((S.active||{})[kid])why=E("23f1")+" Finish your other chore first!";
   if(why){modal(head+'<div class="q" style="font-size:28px;background:#f3f3f3;border-radius:16px;padding:8px 12px">'+why+'</div>');addOk();return}
   modal(head+'<div class="q" style="font-size:26px">'+E("1f4aa")+' Can you beat it?</div><div class="faces" style="flex-wrap:wrap;gap:14px">'+
@@ -1309,7 +1309,7 @@ function showAnnounce(list,done){
     var up=a.base!=null&&a.price!=null&&a.price>a.base,down=a.base!=null&&a.price!=null&&a.price<a.base;
     return '<div class="newscard'+(down?' calm':'')+'"><div style="font-size:120px;line-height:1.05">'+E(c.icon)+'</div>'+
       '<div style="font-size:38px;font-weight:900">'+c.name+'</div><div class="newsprice">'+(a.base!=null&&a.price!==a.base?'<s style="opacity:.45;font-size:44px">'+a.base+'</s> ':'')+(a.price==null?"?":a.price)+' '+E("2b50")+'</div>'+
-      '<div style="font-size:19px;font-weight:700">'+(up?"Extra messy! It is worth more this time.":down?"Almost clean! It is worth less this time.":"New price, just this one time.")+'</div>'+
+      '<div style="font-size:19px;font-weight:700">'+(up?"Extra untidy! It is worth more this time.":down?"Almost tidy! It is worth less this time.":"New price, just this one time.")+'</div>'+
       (up&&!c.slot&&c.id!=="other"&&Math.random()<0.4?'<div class="annwho" style="background:#ede7f6">'+E("1f9e9")+' Too big? Do <b>part</b> of it for a few '+E("2b50")+'. Start it, then tap '+E("23f8")+' Finish later › '+E("1f64b")+' I did some.</div>':'')+   // sometimes: a piece of a big job still pays
       (function(){var KI=function(k){return S.config.kids.find(function(x){return x.id===k})||{icon:"2753",name:k}};
         var doers=Object.keys(S.active||{}).filter(function(k){return S.active[k].chore===a.chore}),bd=S.board[a.chore]||{};

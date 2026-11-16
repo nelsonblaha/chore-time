@@ -94,7 +94,7 @@ document.getElementById("newsic").innerHTML=E("1f4f0");
 function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(function(x){return x.id===k})||{name:k})},CH=function(id){return S.config.chores.find(function(x){return x.id===id})||{name:id,icon:"2b50"}};
   (S.whatsnew_all||[]).forEach(function(n){(n.items||[]).forEach(function(it){out.push({ts:n.ts||0,icon:it.icon,text:it.text,kind:"new"})})});
   Object.keys(S.board||{}).forEach(function(id){var b=S.board[id],c=CH(id);if(!b.bonus||b.clean_until||c.hidden||c.bundle||b.price==null||b.base==null||b.is_rest||b.part_paid)return;
-    out.push({ts:b.tour_seen||S.now-1800,icon:b.price>b.base?"1f525":"2b07",text:c.name+" is worth "+b.price+(b.price===1?" star":" stars")+" this time"+(b.price>b.base?" — extra messy!":"."),kind:"price"})});
+    out.push({ts:b.tour_seen||S.now-1800,icon:b.price>b.base?"1f525":"2b07",text:c.name+" is worth "+b.price+(b.price===1?" star":" stars")+" this time"+(b.price>b.base?" — extra untidy!":"."),kind:"price"})});
   Object.keys(S.records||{}).forEach(function(key){var R=S.records[key],c=CH(key.split("@")[0]),who=R.team?R.team.map(function(k){return KN(k).name}).join(" + "):KN(R.kid).name;
     out.push({ts:R.ts,icon:"1f947",text:who+" set the "+c.name+(R.size?" ("+R.size+"-person)":"")+" record: "+Math.floor(R.sec/60)+":"+("0"+R.sec%60).slice(-2)+"!",kind:"record"})});
   Object.keys(S.awards||{}).forEach(function(k){(S.awards[k]||[]).forEach(function(a){if(/^(lvl|jobs|earned|days):/.test(a.id||"")&&!/^jobs:1$/.test(a.id))out.push({ts:a.ts,icon:"2b06",text:KN(k).name+": "+a.title.replace("!","")+"!",kind:"level"})})});
@@ -157,14 +157,14 @@ function load(){fetch("/api/state").then(function(r){return r.json()}).then(func
   var CMx=S.chore_mode||{},J=openJobs(S);
   document.getElementById("jobshd").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time":E("2b50")+" Jobs open now";
   document.getElementById("jobs").innerHTML=J.length?J.map(function(x){var c=x.c,b=x.b,hot=b.bonus&&x.p>b.base,t=[];
-      if(hot)t.push(E("1f525")+" extra messy +"+(x.p-b.base));
+      if(hot)t.push(E("1f525")+" extra untidy +"+(x.p-b.base));
       if(hot&&Math.floor(Date.now()/20000)%3===0)t.push(E("1f9e9")+" or do part of it for a few "+E("2b50"));   // a third of the time: a piece of a big job still pays
       if(c.before)t.push(E("23f0")+" until "+hhmm(c.before));else if(c.daylight)t.push(E("2600")+" while it's light");
       if(c.only)t.push(c.only.map(function(k){var kk=S.config.kids.find(function(z){return z.id===k});return kk?E(kk.icon):""}).join(""));
       if(b.note)t.push(E("1f4dd")+" "+b.note);
       return '<div class="job'+(hot?' hot':'')+'"><span class="jp">'+(x.p!=null?x.p:"?")+' '+E("2b50")+'</span><span class="ji">'+E(c.icon)+'</span>'+
         '<div><div class="jn">'+c.name+'</div>'+(t.length?'<div class="jt">'+t.join(" · ")+'</div>':'')+'</div></div>'}).join(""):
-    '<div class="none">'+E("2728")+' Everything is clean right now!</div>';
+    '<div class="none">'+E("2728")+' Everything is tidy right now!</div>';
   SNOW=S.now;var shown={};J.forEach(function(x){shown[x.c.name]=1});   // prices already on a job tile aren't news
   var NF=newsFeed(S).filter(function(x){return !(x.kind==="price"&&Object.keys(shown).some(function(nm){return x.text.indexOf(nm+" is worth")===0}))});
   var sig=JSON.stringify(NF.map(function(x){return x.text}));NEWS=NF.slice(0,10);if(sig!==window._ns){window._ns=sig;NEWSI=0;drawNews()}
