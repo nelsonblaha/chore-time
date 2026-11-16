@@ -1420,6 +1420,15 @@ class AbandonedJob(Case):
         st = a.state()
         self.assertEqual((st["active"], st["paused"], st["balance"]["ava"]), ({}, {}, 0))
 
+    def test_grown_up_cancels_a_job_saved_for_later(self):
+        a = App(base_config())
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "other"})[0], 200)
+        self.assertEqual(a.post("/api/pause", {"kid": "ava"})[0], 200)
+        self.assertEqual(a.state()["paused"]["ava"]["chore"], "other")
+        code, r = a.post("/api/abandon", {"kid": "ava", "chore": "other", "paused": True, "by": "jordan"})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(a.state()["paused"], {})
+
 
 class CertifiedSlot(Case):
     """Church reading: kids claim a Sunday; a grown-up confirms it after the service; weeks away are skipped."""

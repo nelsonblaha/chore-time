@@ -656,9 +656,12 @@ function render(){
   var PZ=S.paused||{},pz="";
   Object.keys(PZ).forEach(function(k){var z=PZ[k],c=choreOf(z.chore),tm=(z.team||[k]).map(function(x){return E(kidOf(x).icon)+" "+esc(kidOf(x).name)}).join(" + ");
     pz+='<div class="card"><div class="row"><span class="big">'+E(c.icon)+'</span><div><b>'+tm+'</b> · '+esc(z.title||c.name)+' <span class="tag">⏸ partly done</span><div class="mute">saved '+ago(z.ts)+(z.notimer?'':' · worked '+Math.round(z.elapsed/60)+' min')+' · held until '+new Date(z.until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</div></div></div>'+
-      '<div class="row" style="margin-top:6px"><button data-pzp="'+k+'">Give partial points…</button><button data-pzk="'+k+'">Keep 7 more days</button><button class="no" data-pzr="'+k+'">Release (anyone can do it)</button>'.replace(/^.*$/,c.shared?'':'$&')+'</div></div>'});
+      '<div class="row" style="margin-top:6px"><button data-pzp="'+k+'">Give partial points…</button><button data-pzk="'+k+'">Keep 7 more days</button><button data-pzr="'+k+'">Release (anyone can do it)</button>'.replace(/<button data-pzr.*$/,c.shared?'':'$&')+'<button class="no" data-pzx="'+k+'">🛑 They abandoned it</button></div></div>'});
   $("pzbox").innerHTML=pz?'<h2 class="h2b">⏸ Partly done — saved for later</h2>'+pz:'';
   document.querySelectorAll("[data-pzr]").forEach(function(b){b.onclick=function(){if(confirm("Release it? Anyone can then do this chore."))post("/api/release",{kid:b.dataset.pzr},"Released")}});
+  document.querySelectorAll("[data-pzx]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzx,z=PZ[k];
+    if(confirm("Cancel "+(z.title||choreOf(z.chore).name)+" for "+(z.team||[k]).map(function(m){return kidOf(m).name}).join(" + ")+"? No stars; it's gone from their screens."))
+      post("/api/abandon",{kid:k,chore:z.chore,paused:true},"Cancelled: abandoned")}});
   document.querySelectorAll("[data-pzk]").forEach(function(b){b.onclick=function(){var z=PZ[b.dataset.pzk];post("/api/keep",{kid:b.dataset.pzk,chore:z.chore,until:Math.max(z.until,Date.now()/1000)+7*86400},"Kept 7 more days")}});
   document.querySelectorAll("[data-pzp]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzp,z=PZ[k],v=prompt("Partial points for "+kidOf(k).name+" ("+choreOf(z.chore).name+")?","1");if(!v)return;
     post("/api/adjust",{kid:k,points:+v,reason:"partly did "+choreOf(z.chore).name},"+"+v+" for "+kidOf(k).name)}});
