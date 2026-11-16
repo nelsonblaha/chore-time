@@ -15,7 +15,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -767,6 +767,104 @@ class RobotLocator(unittest.TestCase):
             L.learn(v, 24000, 25000, "Corridor")
         L.learn(v, 24010, 25010, "Kitchen")                                      # map refresh lag near a boundary
         self.assertEqual(L.classify(v, 24005, 25005)[0], "Corridor")
+
+    def test_a_tie_is_unknown_not_a_guess(self):
+        L, v = self.L, "vacuum.robot"
+        L.learn(v, 100, 100, "Kitchen")
+        L.learn(v, 110, 110, "Family Room")
+        self.assertEqual(L.classify(v, 100, 100), (None, {"Kitchen": 1, "Family Room": 1}))
+
+
+class RobotLocatorFreshness(unittest.TestCase):
+    """Off-cleaning the room must come from a recent position or read unknown: never the frozen map room, never an
+    old fix (a lamp following the robot would light a room it left an hour ago)."""
+    V, R, P = "vacuum.robot", "sensor.robot_current_room", "sensor.robot_room_live"
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO))
+        import locator
+        self.loc = locator
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.now, self.pos, self.out = 1000.0, None, []
+        self.vac = {"state": "returning", "last_changed": self.iso(900)}
+        self.ha = {self.V: lambda: self.vac, self.R: lambda: {"state": "Family Room"}}
+        self.g = {"HOUSE": {"robot_locator": {"robots": {self.V: {"room_sensor": self.R, "publish": self.P}}}},
+                  "DATA": self.tmp, "ha_token": lambda: "t",
+                  "ha_get": lambda e, tok: self.ha[e](),
+                  "ha_post_state": lambda e, st, a, tok: self.out.append(dict(a, state=st))}
+        real = locator.time.time
+        locator.time.time = lambda: self.now
+        self.addCleanup(setattr, locator.time, "time", real)
+        self.L = self.fresh()
+
+    def iso(self, ts):
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+    def fresh(self):
+        L = self.loc.Locator(self.g)
+        L.position = lambda vac: self.pos
+        for x in range(9000, 11000, 100):
+            L.learn(self.V, x, 10000, "Kitchen")
+        return L
+
+    def tick(self, at):
+        self.now = at
+        self.L.tick()
+        return self.out[-1]
+
+    def test_returning_without_a_position_is_unknown_not_the_frozen_map_room(self):
+        s = self.tick(1000)
+        self.assertEqual((s["state"], s["source"], s["why"]), ("unknown", "unknown", "no position yet"))
+        self.assertIsNone(s["observed_at"])
+
+    def test_a_fix_expires_when_the_robot_stops_answering(self):
+        self.pos = (10000, 10000)
+        s = self.tick(1000)
+        self.assertEqual((s["state"], s["source"], s["observed_at"], s["expires_at"]), ("Kitchen", "position", 1000, 1060))
+        self.pos = None                                       # "map failure" from here on
+        self.assertEqual(self.tick(1030)["state"], "Kitchen")  # still within a minute
+        for later in (1065, 4600, 87400):
+            s = self.tick(later)
+            self.assertEqual((s["state"], s["why"]), ("unknown", "position too old"))
+
+    def test_a_fix_from_before_the_robot_changed_state_is_not_used(self):
+        self.pos = (10000, 10000)
+        self.vac = {"state": "paused", "last_changed": self.iso(900)}
+        self.assertEqual(self.tick(1000)["state"], "Kitchen")
+        self.pos = None
+        self.vac = {"state": "returning", "last_changed": self.iso(1010)}
+        self.assertEqual(self.tick(1020)["why"], "no position yet")
+
+    def test_a_restart_never_brings_back_an_old_fix(self):
+        (self.tmp / "robot_map.json").write_text(json.dumps({"_last": {self.V: {"room": "Kitchen", "src": "position",
+                                                                                "xy": [10000, 10000], "votes": {"Kitchen": 1}}}}))
+        self.L = self.fresh()
+        self.assertEqual(self.tick(1000)["state"], "unknown")
+
+    def test_unlearned_spot_is_unknown(self):
+        self.pos = (40000, 40000)
+        self.assertEqual(self.tick(1000)["why"], "unlearned")
+
+    def test_cleaning_uses_the_map_and_docked_is_unknown_unless_a_dock_room_is_set(self):
+        self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+        s = self.tick(1000)
+        self.assertEqual((s["state"], s["source"], s["observed_at"]), ("Family Room", "map", 1000))
+        self.vac = {"state": "docked", "last_changed": self.iso(1100)}
+        self.assertEqual(self.tick(1200)["why"], "robot docked")
+        self.g["HOUSE"]["robot_locator"]["robots"][self.V]["dock_room"] = "Corridor"
+        self.L = self.fresh()
+        self.assertEqual(self.tick(1300)["state"], "Corridor")
+
+    def test_unchanged_is_resent_as_a_heartbeat(self):
+        self.pos = (10000, 10000)
+        self.tick(1000)
+        self.now = 1005
+        self.L.tick()
+        self.assertEqual(len(self.out), 1)                     # nothing new to say yet
+        s = self.tick(1031)
+        self.assertEqual(len(self.out), 2)
+        self.assertEqual((s["observed_at"], s["published_at"]), (1031, 1031))   # a fresh fix, re-sent
 
 
 class HouseTasks(unittest.TestCase):
