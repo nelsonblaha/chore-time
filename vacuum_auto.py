@@ -23,6 +23,7 @@ SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
 MOP = set()      # segments that get vacuum + mop; the rest vacuum only
 SENSORS = {}     # person-evidence sensor -> the segment it sits in (the robot trips its own room's sensors)
+HELD = set()     # of those, sensors whose On holds for many minutes (a thermostat's motion): only the turn-on counts
 
 
 def configure(v):
@@ -44,6 +45,8 @@ def configure(v):
     SEG_ROOMS = {seg: list(x["rooms"]) for seg, x in (v.get("segments") or {}).items() if x.get("rooms")}
     MOP = {seg for seg, x in (v.get("segments") or {}).items() if x.get("mop")}
     SENSORS = dict(v.get("sensors") or {})
+    global HELD
+    HELD = set(v.get("held_sensors") or []) & set(SENSORS)
     global VOICE, NIGHT
     VOICE = v.get("voice_volume")
     global NIGHT_CARPET_OFF, SEG_LIGHTS
@@ -178,14 +181,21 @@ class Pilot:
             return "max_plus"
         return "turbo"
 
-    def quiet_for(self, exclude=()):
-        """seconds since the last person evidence downstairs (0 = someone there now), and its source"""
+    def quiet_for(self, exclude=(), held=True):
+        """seconds since the last person evidence downstairs (0 = someone there now), and its source.
+        A held sensor's On is the moment it turned on, not someone there now; with held=False (a run under way, when
+        the robot itself trips them and they stay On for half an hour) held sensors are left out."""
         now, q, who, seen = time.time(), 10 ** 9, None, 0
         for e, seg in SENSORS.items():
-            if seg in exclude:
+            if seg in exclude or (e in HELD and not held):
                 continue
             s = self.get(e)
             st = s.get("state")
+            if st == "on" and e in HELD:
+                seen += 1
+                if now - epoch(s) < q:
+                    q, who = max(0, now - epoch(s)), e
+                continue
             if st == "on":
                 return 0, e
             if st == "off":
@@ -575,7 +585,7 @@ class Pilot:
             if D["phase"] == "running" and not D.get("saw_clean") and now - D.get("group_started", now) > 300:
                 self.finish("never started cleaning (state %s)" % vs, now)
         elif ph == "between":       # next group only if downstairs is still empty
-            q, who = self.quiet_for()
+            q, who = self.quiet_for(held=False)
             if now - D.get("run_started", now) > MAX_RUN_S:
                 self.finish("run too old to continue", now)
             elif q >= BETWEEN_QUIET_S:
@@ -585,7 +595,7 @@ class Pilot:
             elif now - D.get("between_since", now) > PARK_DOCK_S:
                 self.finish("people back between rooms", now)
         elif ph == "paused":
-            q, who = self.quiet_for(exclude={D.get("cur")} - {None})
+            q, who = self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
             if vs == "cleaning":                      # someone resumed it by hand
                 D["phase"] = "running"
                 self.log("resumed_elsewhere")

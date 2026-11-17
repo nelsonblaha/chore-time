@@ -234,8 +234,12 @@
       "binary_sensor.living_room_presence": "Living Room",
       "binary_sensor.family_room_motion": "Family Room",
       "binary_sensor.entry_motion": "Entry",
-      "binary_sensor.stairs_motion": "Entry"
+      "binary_sensor.stairs_motion": "Entry",
+      "binary_sensor.kitchen_thermostat_motion": "Kitchen"
     },
+    "held_sensors": [
+      "binary_sensor.kitchen_thermostat_motion"
+    ],
     "voice_volume": "number.downstairs_robot_volume",
     "night_from_h": 20,
     "night_until_h": 7,

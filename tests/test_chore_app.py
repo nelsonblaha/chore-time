@@ -562,6 +562,25 @@ class Vacuum(unittest.TestCase):
     def status(self):
         return self.p.segment_status()
 
+    def test_a_held_sensor_counts_from_when_it_turned_on(self):
+        """A thermostat's motion stays On for half an hour: its On is the moment someone moved, not someone there now."""
+        T = "binary_sensor.kitchen_thermostat_motion"
+        self.S(T, "on", 25 * 60)
+        q, who = self.p.quiet_for()
+        self.assertEqual((round(q), who), (25 * 60, T))
+        self.S(T, "on", 60)
+        self.assertEqual(round(self.p.quiet_for()[0]), 60)                # a fresh turn-on still holds the start back
+        self.S("binary_sensor.kitchen_motion", "on", 5)
+        self.assertEqual(self.p.quiet_for()[0], 0)                        # an ordinary sensor's On still means "there now"
+
+    def test_a_held_sensor_the_robot_tripped_does_not_stall_a_run(self):
+        T = "binary_sensor.kitchen_thermostat_motion"
+        self.S(T, "on", 60)                                               # the robot just mopped the kitchen
+        self.assertEqual(self.p.quiet_for(held=False)[0], 3000)           # between groups / paused: left out
+        self.p.D.update(phase="paused", paused_at=self.now[0], cur="Family Room", groups=[{"mode": "vacuum", "rooms": ["Family Room"]}], gi=0, pauses=[])
+        self.S(self.va.VAC, "paused")
+        self.assertIn("vacuum.send_command", self.tick(30))              # resumes
+
     def test_every_room_at_least_every_three_days(self):
         self.p.D["visits"].update({"Living Room": self.now[0] - 4 * 86400, "Family Room": self.now[0] - 86400})
         self.board["family_room"]["last_clean"] = self.now[0] - 2 * 86400   # tidied before the robot came
