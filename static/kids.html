@@ -290,9 +290,16 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
 <canvas id="fx"></canvas>
 
 <script>
-/* watchdog: independent of the main script, so a crash there can never strand a Hub on an old/broken page */
-(function(){var v0=null;function chk(){var x=new XMLHttpRequest();x.open("GET","/api/state",true);x.onload=function(){try{var v=JSON.parse(x.responseText).version;
-  if(v0===null)v0=v;else if(v!==v0&&!(document.getElementById("m")&&document.getElementById("m").classList.contains("on"))&&!(document.getElementById("timer")&&document.getElementById("timer").classList.contains("on")))location.replace(location.pathname+"?v="+Date.now())}catch(e){}};x.send()}
+/* watchdog: independent of the main script, so a crash there can never strand a Hub on an old/broken page.
+   Inside Home Assistant (/local/) the version comes from sensor.chore_state, and the reload waits a minute so the
+   new copy has reached HA's /local/ folder; other query parameters (?kid=) are kept. */
+(function(){var HA=location.pathname.indexOf("/local/")===0,v0=null,due=0;
+  function on(id){var n=document.getElementById(id);return n&&n.classList.contains("on")}
+  function go(){var q=HA?location.search.replace(/([?&])v=[^&]*(&|$)/,"$1").replace(/[?&]$/,""):"";location.replace(location.pathname+(q?q+"&":"?")+"v="+Date.now())}
+  function seen(v){if(v==null)return;if(v0===null){v0=v;return}if(v===v0||on("m")||on("timer"))return;
+    if(!HA)return go();if(!due)due=Date.now()+60000;if(Date.now()>=due)go()}
+  function chk(){if(HA){try{var st=window.parent.document.querySelector("home-assistant").hass.states["sensor.chore_state"];seen(st&&st.attributes.version)}catch(e){}return}
+    var x=new XMLHttpRequest();x.open("GET","/api/state",true);x.onload=function(){try{seen(JSON.parse(x.responseText).version)}catch(e){}};x.send()}
   chk();setInterval(chk,5000)})();
 </script>
 <script>
@@ -301,7 +308,7 @@ var CUSTOM_ICONS={"x-chandelier":"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A
 var _q=[],_sess=Math.random().toString(36).slice(2,8);
 function L(ev,data){var o={ev:ev,page:location.pathname,sess:_sess,t:Date.now()/1000};if(typeof kid!=="undefined"&&kid)o.kid=kid;if(data)for(var k in data)o[k]=data[k];_q.push(o);if(_q.length>=20)flushL()}
 function flushL(){if(!_q.length)return;var b=JSON.stringify(_q);_q=[];try{fetch("/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:b,keepalive:true})}catch(e){}}
-setInterval(flushL,3000);addEventListener("pagehide",flushL);
+setInterval(function(){flushL()},3000);addEventListener("pagehide",function(){flushL()});   // late-bound: HA mode replaces flushL
 addEventListener("error",function(e){L("js_error",{msg:String(e.message),line:e.lineno})});
 document.addEventListener("click",function(e){var n=e.target.closest("[data-c],[data-k],[data-r],[data-f],[data-tv],[data-p],[data-x],[data-u],[data-a],[data-i],[data-n],button,.homebtn,#exit,.x,.btn");
   L("tap",{target:n?(n.id||n.className||n.tagName):String(e.target.tagName),data:n?Object.assign({},n.dataset):null,x:Math.round(e.clientX),y:Math.round(e.clientY)})},true);
@@ -1365,8 +1372,9 @@ document.addEventListener("click",function(e){
 // per-kid: what's new + big news are shown when THAT kid opens their screen, until they tap OK
 function kidNews(k,done){var n=S.whatsnew;if(n&&(S.news_seen_kids||{})[k]!==n.v){showNews(n,done)}else done()}
 function kidAnnounce(k,done){var seen=(S.ann_seen_kids||{})[k]||[],l=(S.announce_all||[]).filter(function(a){return seen.indexOf(a.id)<0});if(l.length)showAnnounce(l,done);else done()}
-function stale(){return S&&VER&&S.version!==VER}
-function reloadNow(){flushL();setTimeout(function(){location.replace(location.pathname+"?v="+Date.now()+(kid?"&kid="+kid:""))},250)}
+var staleAt=0;   // in Home Assistant the new page reaches /local/ just after the server changes: give it a minute
+function stale(){if(!(S&&VER&&S.version!==VER)){staleAt=0;return false}if(!HA_MODE)return true;staleAt=staleAt||Date.now();return Date.now()-staleAt>=60000}
+function reloadNow(){flushL();setTimeout(function(){var k=kid||LOCK_KID;location.replace(location.pathname+"?v="+Date.now()+(k?"&kid="+k:""))},250)}
 setInterval(function(){ // self-update: reload as soon as no pop-up is open; keeps the same kid's screen
   if(!stale()||$("m").classList.contains("on")||$("news").classList.contains("on")||$("timer").classList.contains("on"))return;L("self_reload",{from:VER,to:S.version});reloadNow()},2000);
 load().then(function(){VER=S.version;var q=(location.search.match(/[?&]kid=([a-z]+)/)||[])[1];if(q&&S.config.kids.some(function(k){return k.id===q}))openKid(q)});setInterval(function(){if(!busy&&!$("m").classList.contains("on"))load()},5000);
