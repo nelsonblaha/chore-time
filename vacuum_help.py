@@ -119,11 +119,14 @@ def need(robot, read):
 
 
 def robot_room(robot, read):
-    """The robot's room name: the first sensor that knows it."""
+    """The robot's room name: the first sensor that really knows it now. A room only held over a blank reading
+    (the locator's held_since) is a guess, and a stuck robot is often somewhere else: never blame a room on a guess."""
     for ent in robot.get("room") or []:
-        s = read(ent).get("state")
-        if s not in OFF:
-            return s
+        st = read(ent)
+        s, a = st.get("state"), st.get("attributes") or {}
+        if s in OFF or a.get("held_since"):
+            continue
+        return s
     return None
 
 

@@ -106,6 +106,18 @@ class RobotHeroJobs(Case):
         self.assertIn("center button", note)
         self.assertNotIn("Home button", note)
 
+    def test_a_held_room_is_not_blamed(self):
+        # 11-18: the map room blanked 8 s before the robot got stuck; the locator held "Living Room", but it was in the
+        # entry hall. A held room is a guess: the rescue says "stuck" without a room and marks nothing untidy.
+        self.app.pass_report("zoe", "kitchen", points=4)
+        self.app.set("sensor.down_robot_room_live", "Kitchen", held_since=1)
+        self.app.set(ROOM, "unknown")
+        self.app.set(ERR, "wheels_jammed", ago=60)
+        self.tick()
+        st = self.app.state()
+        self.assertTrue(st["board"]["kitchen"]["clean_until"])
+        self.assertIn("It is stuck:", st["board"]["help_rescue_down"]["note"])
+
     def test_maintenance_never_opens_a_job(self):
         # worn parts, filters, the dust bag and other dock upkeep are grown-up work
         for err, dock in (("filter_blocked", "ok"), ("no_dustbin", "ok"), ("side_brush_error", "ok"),
