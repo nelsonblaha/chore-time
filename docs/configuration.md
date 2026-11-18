@@ -159,10 +159,11 @@ vacuum floor, `gesture` is `single`, `double` or `long`, `rooms` contains exact 
 `X-Vacuum-Button` header; requests fail closed when the local token file is missing. The response is
 `{ok, rooms, why}` and always lists the exact accepted segments, including for whole-floor mode. The queue never preempts a
 clean already in progress, a paused/returning robot, or a recharge or mop-wash dock break; it waits for
-confirmed completion before starting the next item and survives an app restart. When any accessible
-room is marked untidy, a long press queues the remaining accessible allowed segments in order and
-skips untidy or blocked ones. With no accessible untidy room, it uses the robot's genuine whole-floor
-start.
+confirmed completion before starting the next item and survives an app restart. Rooms already active
+or queued are deduplicated while still appearing in the response. When any accessible room is marked
+untidy, a long press queues the remaining accessible allowed segments in order, one room at a time,
+and skips untidy or blocked ones. With no accessible untidy room, it uses the robot's genuine
+whole-floor start; that decision is checked again when the request reaches the head of the queue.
 
 ### Spoken announcements
 

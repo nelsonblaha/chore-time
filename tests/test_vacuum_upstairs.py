@@ -211,6 +211,17 @@ class Upstairs(unittest.TestCase):
         launch = next(d for svc, d in self.tick() if svc == "script.vacuum_clean_rooms")
         self.assertEqual(launch["rooms"], ["Hall"])
 
+    def test_button_deduplicates_rooms_already_active_or_queued(self):
+        self.button(rooms=["Bath"], request_id="one")
+        result = self.button("double", ["Bath", "Hall"], "two")
+        self.assertEqual(result["rooms"], ["Bath", "Hall"])
+        self.assertIn("already pending Bath", result["why"])
+        self.assertEqual([x["rooms"] for x in self.p.D["manual_queue"]], [["Bath"], ["Hall"]])
+        again = self.button(rooms=["Bath"], request_id="three")
+        self.assertEqual(again["rooms"], ["Bath"])
+        self.assertEqual(again["why"], "already pending: Bath")
+        self.assertEqual(len(self.p.D["manual_queue"]), 2)
+
     def test_fifo_never_preempts_another_clean_pause_return_or_dock_break(self):
         self.button(rooms=["Bath"])
         for state, cleaning in (("cleaning", "on"), ("paused", "on"), ("returning", "on"), ("docked", "on")):
@@ -242,6 +253,22 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(result["rooms"], ["Hall", "Study", "Study Closet"])
         self.assertIn("Bath (untidy)", result["why"])
         self.assertIn("Bedroom", result["why"])
+        calls = self.tick()
+        launch = next(d for svc, d in calls if svc == "script.vacuum_clean_rooms")
+        self.assertEqual(launch["rooms"], ["Hall"])
+        self.assertEqual([g["rooms"] for g in self.p.D["groups"]], [["Hall"], ["Study"], ["Study Closet"]])
+
+    def test_queued_native_floor_rechecks_untidy_rooms_at_launch(self):
+        result = self.button("long", [], "whole-later")
+        self.assertEqual(result["rooms"], ["Hall", "Bedroom", "Bath", "Study", "Study Closet"])
+        self.assertTrue(self.p.D["manual_queue"][0]["whole_floor"])
+        self.tidy["bath"] = {"state": "untidy"}
+        calls = self.tick()
+        self.assertNotIn("vacuum.start", [svc for svc, _ in calls])
+        launch = next(d for svc, d in calls if svc == "script.vacuum_clean_rooms")
+        self.assertEqual(launch["rooms"], ["Hall"])
+        self.assertFalse(self.p.D["manual_queue"][0]["whole_floor"])
+        self.assertTrue(self.p.D["manual_queue"][0]["one_at_time"])
 
     def test_long_press_uses_genuine_whole_floor_when_no_accessible_room_is_untidy(self):
         self.tidy["study"] = {"state": "untidy"}

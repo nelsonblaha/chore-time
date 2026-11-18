@@ -285,6 +285,36 @@ class Pilot:
                     out.add(seg)
         return out
 
+    def long_selection(self, supplied=None):
+        """Current long-press admission: native whole floor, or safe one-segment-at-a-time fallback."""
+        status = self.segment_status()
+        closed = self.closed_segments()
+        untidy = self.untidy_segments()
+        accessible_untidy = untidy - closed
+        skipped = []
+        if not accessible_untidy:
+            rooms = []
+            for seg in SEGMENTS:
+                why = (status.get(seg) or {}).get("why", "")
+                blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
+                if seg not in closed and not blocked_other:
+                    rooms.append(seg)
+            return rooms, True, skipped
+
+        rooms = []
+        for seg in supplied or list(SEGMENTS):
+            why = (status.get(seg) or {}).get("why", "")
+            blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
+            if seg in closed:
+                skipped.append(seg + " (closed off)")
+            elif blocked_other:
+                skipped.append(seg + " (" + why + ")")
+            elif seg in untidy:
+                skipped.append(seg + " (untidy)")
+            else:
+                rooms.append(seg)
+        return rooms, False, skipped
+
     def button_request(self, body):
         """Idempotently append one physical-button selection to this floor's durable FIFO."""
         gesture = str(body.get("gesture") or "")
@@ -309,54 +339,42 @@ class Pilot:
             return {"ok": False, "rooms": [], "why": "this gesture selected no rooms"}
 
         skipped = []
-        rooms = supplied
-        whole_floor = False
         if gesture == "long":
-            status = self.segment_status()
-            closed = self.closed_segments()
-            untidy = self.untidy_segments()
-            accessible_untidy = untidy - closed
-            if not accessible_untidy:
-                rooms, whole_floor = [], True
-                for seg in SEGMENTS:
-                    why = (status.get(seg) or {}).get("why", "")
-                    blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
-                    if seg not in closed and not blocked_other:
-                        rooms.append(seg)
-            else:
-                candidates = supplied or list(SEGMENTS)
-                rooms = []
-                for seg in candidates:
-                    why = (status.get(seg) or {}).get("why", "")
-                    blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
-                    if seg in closed:
-                        skipped.append(seg + " (closed off)")
-                    elif blocked_other:
-                        skipped.append(seg + " (" + why + ")")
-                    elif seg in untidy:
-                        skipped.append(seg + " (untidy)")
-                    else:
-                        rooms.append(seg)
+            rooms, whole_floor, skipped = self.long_selection(supplied)
+        else:
+            rooms, whole_floor = supplied, False
         if not rooms:
             why = "no accessible allowed rooms"
             if skipped:
                 why += ": " + "; ".join(skipped)
             return {"ok": False, "rooms": [], "why": why}
 
+        pending = {r for x in D["manual_queue"] for r in (x.get("rooms") or [])}
+        already = [r for r in rooms if r in pending]
+        existing_whole = any(x.get("whole_floor") or x.get("native_requested") for x in D["manual_queue"])
+        queue_rooms = rooms if whole_floor else [r for r in rooms if r not in pending]
+        append_item = bool(queue_rooms) and not (whole_floor and existing_whole)
         now = time.time()
-        item = {"id": request_id, "gesture": gesture, "rooms": rooms, "whole_floor": whole_floor, "created": now,
-                "attempts": 0, "next_attempt": 0}
-        D["manual_queue"].append(item)
+        if append_item:
+            item = {"id": request_id, "gesture": gesture, "rooms": queue_rooms, "whole_floor": whole_floor,
+                    "native_requested": whole_floor, "requested_rooms": supplied if gesture == "long" else None,
+                    "one_at_time": gesture == "long" and not whole_floor, "created": now,
+                    "attempts": 0, "next_attempt": 0}
+            D["manual_queue"].append(item)
         seen[request_id] = {"rooms": rooms, "ts": now}
         for old, _ in sorted(seen.items(), key=lambda x: x[1].get("ts", 0))[:-200]:
             seen.pop(old, None)
-        self.log("manual_queued", request_id=request_id, gesture=gesture, rooms=rooms, skipped=skipped,
-                 position=len(D["manual_queue"]))
+        self.log("manual_queued" if append_item else "manual_deduplicated", request_id=request_id,
+                 gesture=gesture, rooms=rooms, queued=queue_rooms if append_item else [], already=already,
+                 skipped=skipped, position=len(D["manual_queue"]))
         self.save()
         behind = D.get("phase") != "idle" or self.get(VAC).get("state") not in ("docked", "idle", "charging") \
             or self.get(IN_CLEAN).get("state") == "on"
-        why = "queued whole floor" if whole_floor else "queued"
-        why += " behind current robot work" if behind else " next"
+        why = ("queued whole floor" if whole_floor else "queued") if append_item else "already pending"
+        if append_item:
+            why += " behind current robot work" if behind else " next"
+        if already:
+            why += ("; already pending " if append_item else ": ") + ", ".join(already)
         if skipped:
             why += "; skipped " + ", ".join(skipped)
         return {"ok": True, "rooms": rooms, "why": why}
@@ -704,15 +722,22 @@ class Pilot:
         sealed = self.sealed_segments()
         return [seg for seg, d in self.segment_status().items() if d.get("explore") and seg not in sealed]
 
-    def start(self, rooms, now, explore=False, run_kind="auto", request_id=None, whole_floor=False):
+    def start(self, rooms, now, explore=False, run_kind="auto", request_id=None, whole_floor=False,
+              one_at_time=False):
         a = self.get(VAC).get("attributes") or {}
         self.D["saved"] = {"fan": a.get("fan_speed"), "mode": self.get(MODE_SEL).get("state")}
         vac = [r for r in rooms if r not in MOP]
         mop = [r for r in rooms if r in MOP]
-        groups = ([{"mode": "whole_floor", "rooms": []}] if whole_floor else
-                  ([{"mode": "vacuum", "rooms": vac}] if vac else []) +
-                  ([{"mode": "vac_and_mop", "rooms": mop}] if mop else []))
-        if not whole_floor and self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
+        if whole_floor:
+            groups = [{"mode": "whole_floor", "rooms": []}]
+        elif one_at_time:
+            smart = self.smart_now()
+            groups = [{"mode": "smart_mode" if smart else ("vac_and_mop" if r in MOP else "vacuum"), "rooms": [r]}
+                      for r in rooms]
+        else:
+            groups = ([{"mode": "vacuum", "rooms": vac}] if vac else []) + \
+                     ([{"mode": "vac_and_mop", "rooms": mop}] if mop else [])
+        if not whole_floor and not one_at_time and self.smart_now():   # robot chooses vacuum/mop per room, one pass
             groups = [{"mode": "smart_mode", "rooms": list(rooms)}]
         self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None,
                       clean_first=0, clean_last=0, saw_clean=False, docked_since=0, docking_since=0,
@@ -720,8 +745,18 @@ class Pilot:
                       manual_active=request_id if run_kind == "manual" else None)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
         self.log("start", rooms=rooms, saved=self.D["saved"], explore=explore,
-                 run_kind=run_kind, request_id=request_id, whole_floor=whole_floor)
+                 run_kind=run_kind, request_id=request_id, whole_floor=whole_floor,
+                 one_at_time=one_at_time)
         self.launch(now)
+
+    def refresh_native_request(self, item):
+        """A native long press can become a segmented fallback while it waits in the FIFO."""
+        rooms, whole_floor, skipped = self.long_selection(item.get("requested_rooms") or [])
+        item.update(rooms=rooms, whole_floor=whole_floor, one_at_time=not whole_floor,
+                    launch_blocked=None if rooms else "no accessible allowed rooms")
+        self.log("manual_rechecked", request_id=item.get("id"), rooms=rooms,
+                 whole_floor=whole_floor, skipped=skipped)
+        self.save()
 
     def manual_wait(self, vs, incl, now):
         """Why the FIFO head cannot launch yet; None means the robot is genuinely free."""
@@ -932,14 +967,19 @@ class Pilot:
             if manual:
                 item = manual[0]
                 wait = self.manual_wait(vs, incl, now)
+                if not wait and item.get("native_requested"):
+                    self.refresh_native_request(item)
+                    wait = item.get("launch_blocked")
                 info.update(manual_queue=[{"id": x.get("id"), "gesture": x.get("gesture"), "rooms": x.get("rooms"),
-                                          "attempts": x.get("attempts", 0)} for x in manual],
+                                          "attempts": x.get("attempts", 0), "whole_floor": bool(x.get("whole_floor"))}
+                                         for x in manual],
                             eligible=item.get("rooms") or [])
                 if wait:
                     info["why"] = "manual clean queued: " + wait
                 else:
                     self.start(item["rooms"], now, run_kind="manual", request_id=item["id"],
-                               whole_floor=bool(item.get("whole_floor")))
+                               whole_floor=bool(item.get("whole_floor")),
+                               one_at_time=bool(item.get("one_at_time")))
                 ph = D["phase"]
             else:
                 D["manual_active"] = None
