@@ -1481,7 +1481,8 @@ def derive():
     for gate_ in must_first.values():
         if gate_.get("rewards") and gate_.get("chore") in board:
             board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
-    return {"version": ver, "ver_tv": ver_tv, "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
+    return {"version": ver, "ver_tv": ver_tv, "sound_effects": HOUSE.get("sound_effects") is not False,
+            "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
             "wind_down": wind_down_state(c),

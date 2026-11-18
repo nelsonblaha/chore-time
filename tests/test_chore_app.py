@@ -157,6 +157,12 @@ class SharedVsExclusive(Case):
         self.assertEqual(code, 409, r)
 
 
+class SoundSettings(Case):
+    def test_house_can_mute_every_kids_interface_sound_effect(self):
+        self.s.HOUSE["sound_effects"] = False
+        self.assertIs(self.app.state()["sound_effects"], False)
+
+
 # ---------------------------------------------------------------- prices
 class Prices(Case):
     def test_whole_downstairs_boost_rounds_half_up_at_three_rooms(self):
