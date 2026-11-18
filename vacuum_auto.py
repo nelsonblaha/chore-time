@@ -33,6 +33,7 @@ MAP_SELECT = MAP_NAME = None
 FLOOR = "downstairs"
 BACKOFF = True
 PIN_MAP = False
+PROGRESS = CLEAN_TIME = None
 EXPLORE = {}
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
@@ -86,7 +87,8 @@ def configure(v):
     PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
     NAME = v.get("name", "Vacuum autopilot")
     OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
-    global FLOOR, BACKOFF, PIN_MAP, EXPLORE
+    global FLOOR, BACKOFF, PIN_MAP, EXPLORE, PROGRESS, CLEAN_TIME
+    PROGRESS, CLEAN_TIME = v.get("progress"), v.get("clean_time")   # the robot's own % done and seconds this clean
     # tidiness check: while the kids are here (and tomorrow too), now and then the robot explores a room marked untidy
     # to find out how untidy it really is; if it gets stuck, that's the proof, and the kids rescue it (a rescue job)
     EXPLORE = v.get("explore") or {}
@@ -751,6 +753,8 @@ class Pilot:
                 tag = "🔍 tidiness check of %s (the robot explores it; if it gets stuck the kids rescue it): " % ", ".join(pr) if pr else ""
                 if not rooms:
                     info.setdefault("why", "nothing due: every room is cleaned, blocked or not asked for")
+                elif not ok_robot and vs in ("cleaning", "returning", "paused"):
+                    info["why"] = self.by_hand(vs, room)
                 elif not ok_robot:
                     info["why"] = "not starting: the robot is %s%s" % (vs, ", charging" if vs == "docked" else "")
                 elif held:
@@ -856,7 +860,8 @@ class Pilot:
                     D["docking_since"] = 0
                     self.finish("docked", now)
         if "why" not in info:
-            info["why"] = self.doing(D, vs)
+            info["why"] = self.doing(D, vs) if ph != "idle" or vs not in ("cleaning", "returning", "paused") else self.by_hand(vs, room)
+        info.update(self.robot_now(vs))
         self.publish(info, vs, room)
         self.save()
 
@@ -867,6 +872,32 @@ class Pilot:
         if isinstance(who, str) and "." in who:
             return (self.get(who).get("attributes") or {}).get("friendly_name") or who
         return who
+
+    def robot_now(self, vs):
+        """battery, the robot's own % done and minutes into this clean (the last two only while it is out)"""
+        num = lambda e: (lambda x: float(x) if x not in (None, "", "unknown", "unavailable") else None)(self.get(e).get("state")) if e else None
+        try:
+            out = {"battery": num(BATTERY)}
+            if vs in ("cleaning", "returning", "paused", "error"):
+                out["progress"] = num(PROGRESS)
+                t = num(CLEAN_TIME)
+                out["clean_min"] = None if t is None else round(t / 60)
+            return out
+        except (TypeError, ValueError):
+            return {}
+
+    def by_hand(self, vs, room):
+        """the robot is out on a clean the autopilot did not start (Clean now, the app, a remote)"""
+        what = {"cleaning": "cleaning %s" % (room or "a room"), "returning": "heading back to its dock",
+                "paused": "paused in %s" % (room or "a room")}[vs]
+        return "%s (a clean started by hand, not by the autopilot)%s" % (what, self.progress_text(vs))
+
+    def progress_text(self, vs):
+        n = self.robot_now(vs)
+        bits = ["%d%% done" % n["progress"] if n.get("progress") is not None else None,
+                "%d min so far" % n["clean_min"] if n.get("clean_min") is not None else None,
+                "battery %d%%" % n["battery"] if n.get("battery") is not None else None]
+        return "".join(" · " + b for b in bits if b)
 
     def doing(self, D, vs):
         """one sentence: what a run is doing now"""
@@ -881,7 +912,7 @@ class Pilot:
         tag = "🔍 tidiness check: " if D.get("explore") else ""
         if ph == "running":
             if vs == "cleaning":
-                return tag + "cleaning %s%s" % (D.get("cur") or "(room unknown)", togo)
+                return tag + "cleaning %s%s%s" % (D.get("cur") or "(room unknown)", togo, self.progress_text(vs))
             if vs == "error" and D.get("explore"):
                 return tag + "the robot is stuck in %s (untidy confirmed): waiting for the kids to rescue it" % (D.get("cur") or "a room")
             return "run under way: the robot is %s%s" % (vs, togo)
