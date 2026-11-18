@@ -166,6 +166,7 @@ class Pilot:
         self.D.setdefault("visits", {})
         self.D.setdefault("phase", "idle")
         self.D.setdefault("runs", [])
+        self.D.setdefault("incomplete", [])
         self.tok = g["ha_token"]()
         self.last_pub = None
         if not self.D["visits"]:
@@ -368,6 +369,37 @@ class Pilot:
         sealed = self.sealed_segments()
         return [seg for seg, d in self.segment_status().items() if d["eligible"] and seg not in sealed]
 
+    def remaining_rooms(self):
+        """Segments not yet proved complete in the current run.
+
+        A group is complete only after the robot returns to its dock normally. Merely spending
+        DWELL_S in a room is useful visit history, but it is not proof that an interrupted
+        segment clean finished.
+        """
+        groups = self.D.get("groups") or []
+        i = int(self.D.get("gi") or 0)
+        if self.D.get("phase") == "between":
+            i += 1
+        return list(dict.fromkeys(r for g in groups[i:] for r in (g.get("rooms") or [])))
+
+    def completed(self, rooms):
+        """Remove successfully completed segments from the persistent retry set."""
+        done = set(rooms)
+        self.D["incomplete"] = [r for r in (self.D.get("incomplete") or []) if r not in done]
+        if not self.D["incomplete"]:
+            self.D.pop("incomplete_since", None)
+            self.D.pop("incomplete_why", None)
+
+    def remember_incomplete(self, rooms, why, now):
+        """Keep interrupted work visible and eligible even if dwell tracking credited a visit."""
+        rooms = list(dict.fromkeys(rooms))
+        if not rooms:
+            return
+        old = self.D.get("incomplete") or []
+        self.D["incomplete"] = list(dict.fromkeys(old + rooms))
+        self.D["incomplete_since"] = self.D.get("incomplete_since") or now
+        self.D["incomplete_why"] = why
+
     def room_requests(self):
         """A persisted, explicit request is satisfied only by a later real visit.
 
@@ -398,6 +430,7 @@ class Pilot:
         busy = {a.get("chore") for a in st["active"].values()} | {z.get("chore") for z in st["paused"].values()}
         now = time.time()
         requests = self.room_requests()
+        incomplete = set(self.D.get("incomplete") or [])
         all_spaces = self.g["HOUSE"].get("tidy_spaces") or []
         tidy = st.get("tidy_spaces") or {}
         out = {}
@@ -410,6 +443,10 @@ class Pilot:
             sch = SCHEDULE.get(seg) or {}
             d = {"chores": cids, "rooms": rooms, "last_robot": last, "mop": seg in MOP, "eligible": False}
             d["requested"] = seg in requests
+            d["incomplete"] = seg in incomplete
+            if d["incomplete"]:
+                d["incomplete_since"] = self.D.get("incomplete_since")
+                d["incomplete_why"] = self.D.get("incomplete_why")
             d["blocked"] = False
             xs = [b.get(c) or {} for c in cids]
             tidied = max([x.get("last_clean") or 0 for x in xs] or [0])
@@ -428,6 +465,8 @@ class Pilot:
             elif messy:
                 d["why"] = "marked untidy (%s): tidy it first" % ", ".join(messy)
                 d["blocked"] = True
+            elif seg in incomplete:
+                d["eligible"], d["why"] = True, "unfinished from an interrupted run"
             elif seg in requests:
                 d["eligible"], d["why"] = True, "requested: clean when vacant"
             elif sch.get("nightly_after") and self.nightly_due(sch, last):
@@ -570,7 +609,8 @@ class Pilot:
         if self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
             groups = [{"mode": "smart_mode", "rooms": list(rooms)}]
         self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None,
-                      clean_first=0, clean_last=0, explore=explore)
+                      clean_first=0, clean_last=0, saw_clean=False, docked_since=0, docking_since=0,
+                      resume_fallback=False, explore=explore)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
         self.log("start", rooms=rooms, saved=self.D["saved"], explore=explore)
         self.launch(now)
@@ -590,6 +630,13 @@ class Pilot:
                 self.log("failed_start", span=span, streak=n, map_other=other)
             else:
                 D.update(fail_streak=0, backoff_until=0)
+        groups = D.get("groups") or []
+        run_rooms = list(dict.fromkeys(r for g in groups for r in (g.get("rooms") or [])))
+        if not D.get("explore"):
+            if why == "done":
+                self.completed(run_rooms)
+            else:
+                self.remember_incomplete(self.remaining_rooms(), why, now)
         if D.get("explore"):
             rooms = ", ".join(r for g in (D.get("groups") or []) for r in g.get("rooms", []))
             why = "🔍 tidiness check of %s: %s" % (rooms, "the robot made it through (floor passable)" if why == "done" else
@@ -805,6 +852,7 @@ class Pilot:
                     elif now - D.get("run_started", now) > MAX_RUN_S:
                         self.finish("run too old to continue", now)
                     elif D["gi"] + 1 < len(D["groups"]):
+                        self.completed(D["groups"][D["gi"]].get("rooms") or [])
                         D.update(phase="between", between_since=now)
                     else:
                         self.finish("done", now)
@@ -956,6 +1004,8 @@ class Pilot:
                      "map_other": self.other_map()} if MAP_SELECT else {}),
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
+                 "incomplete": {"rooms": D.get("incomplete") or [], "since": D.get("incomplete_since"),
+                                "why": D.get("incomplete_why")},
                  "visits": {k: datetime.fromtimestamp(t).strftime("%a %H:%M") for k, t in D["visits"].items()},
                  "segments": self.segment_status(), "suction_now": self.tier(), "phase": D["phase"],
                  "last_event": D.get("last_event"), "runs": D["runs"][-5:],

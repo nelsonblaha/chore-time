@@ -708,6 +708,66 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.entry_motion", "on")  # ...and stays in the entry hall
         self.assertIn("vacuum.return_to_base", self.tick(610))
 
+    def test_presence_interruption_stays_incomplete_even_after_dwell_credit(self):
+        self.run_into_living_room()
+        for _ in range(13):
+            self.tick(10)                                      # enough to credit an ordinary visit
+        self.S(self.va.ROOM_SENSOR, "Family Room")             # leaving the room records the dwell visit
+        self.tick()
+        self.assertIn("Living Room", self.p.D["visits"])
+        self.S("binary_sensor.front_door", "on")
+        self.assertIn("vacuum.pause", self.tick())
+        self.S(self.va.VAC, "paused")
+        self.S("binary_sensor.entry_motion", "on")
+        self.assertIn("vacuum.return_to_base", self.tick(610))
+        self.S(self.va.VAC, "docked")
+        self.S(self.va.IN_CLEAN, "off")
+        self.tick()
+        self.assertEqual(self.p.D["phase"], "idle")
+        self.assertIn("Living Room", self.p.D["incomplete"])
+        st = self.status()["Living Room"]
+        self.assertTrue(st["eligible"])
+        self.assertTrue(st["incomplete"])
+        self.assertIn("unfinished", st["why"])
+
+    def test_incomplete_job_is_retried_at_the_next_vacancy(self):
+        self.p.D.update(incomplete=["Living Room"], incomplete_since=self.now[0] - 600,
+                        incomplete_why="docked: person stayed downstairs", last_attempt=0)
+        self.p.D["visits"]["Living Room"] = self.now[0]
+        self.board["kitchen"]["last_clean"] = 0
+        self.board["family_room"]["last_clean"] = 0
+        self.p.D["visits"].update({"Kitchen": self.now[0], "Family Room": self.now[0],
+                                    "Entry": self.now[0], "Hall": self.now[0]})
+        self.S("binary_sensor.kitchen_motion", "off", 1300)
+        self.assertIn(self.va.CLEAN_SCRIPT, self.tick())
+        self.assertEqual([r for g in self.p.D["groups"] for r in g["rooms"]], ["Living Room"])
+
+    def test_successful_retry_clears_the_incomplete_marker(self):
+        self.p.D.update(incomplete=["Living Room"], incomplete_since=self.now[0] - 600,
+                        incomplete_why="interrupted", groups=[{"mode": "vacuum", "rooms": ["Living Room"]}],
+                        gi=0, phase="running", run_started=self.now[0] - 300, pauses=[], saved={})
+        self.p.finish("done", self.now[0])
+        self.assertEqual(self.p.D["incomplete"], [])
+
+    def test_failed_retry_keeps_the_incomplete_marker(self):
+        self.p.D.update(incomplete=["Living Room"], incomplete_since=self.now[0] - 600,
+                        incomplete_why="interrupted", groups=[{"mode": "vacuum", "rooms": ["Living Room"]}],
+                        gi=0, phase="running", run_started=self.now[0] - 30, clean_first=self.now[0] - 20,
+                        clean_last=self.now[0] - 10, pauses=[], saved={})
+        self.p.finish("done", self.now[0])
+        self.assertEqual(self.p.D["incomplete"], ["Living Room"])
+        self.assertIn("gave up", self.p.D["incomplete_why"])
+
+    def test_dock_service_does_not_erase_the_active_plan(self):
+        self.run_into_living_room()
+        groups = self.p.D["groups"]
+        self.S(self.va.VAC, "docked")
+        self.S(self.va.IN_CLEAN, "on")
+        self.S(self.va.BATTERY, "40")
+        self.tick(180)
+        self.assertEqual(self.p.D["phase"], "running")
+        self.assertEqual(self.p.D["groups"], groups)
+
     def finish_first_group(self):
         self.run_into_living_room()
         self.S(self.va.VAC, "docked")
