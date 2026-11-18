@@ -292,5 +292,36 @@
         "publish": "sensor.downstairs_robot_room_live"
       }
     }
+  },
+  "vacuum_help": {
+    "points": {
+      "rescue": 3,
+      "water": 2
+    },
+    "robots": [
+      {
+        "id": "down",
+        "name": "Downstairs robot",
+        "floor": "Downstairs",
+        "error": "sensor.downstairs_robot_vacuum_error",
+        "dock_error": "sensor.downstairs_robot_dock_error",
+        "water": [
+          "binary_sensor.downstairs_robot_dock_clean_water_box",
+          "binary_sensor.downstairs_robot_dock_dirty_water_box"
+        ],
+        "room": [
+          "sensor.downstairs_robot_room_live",
+          "sensor.downstairs_robot_current_room"
+        ],
+        "rooms": {
+          "Kitchen": [
+            "kitchen"
+          ],
+          "Living room": [
+            "living_room"
+          ]
+        }
+      }
+    ]
   }
 }

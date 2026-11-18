@@ -31,6 +31,7 @@ def _load_house():
 
 HOUSE = _load_house()
 import envelopes  # noqa: E402
+import vacuum_help  # noqa: E402
 envelopes.configure(HOUSE.get("envelopes"), str(DATA / "envelopes_printed.json"))
 import schedule  # noqa: E402
 schedule.configure(HOUSE.get("kid_calendar"), str(DATA / "kid_calendar.json"))
@@ -331,6 +332,7 @@ def cfg():
         c.setdefault("chores", []).append(dict(GET_DRESSED))   # built in; never saved unless the config is edited
     have = {x.get("id") for x in c.get("chores") or []}
     c["chores"] += [cleanup_job(k["id"]) for k in c.get("kids") or [] if "cleanup_" + k["id"] not in have]
+    c["chores"] += [x for x in vacuum_help.chores(HOUSE.get("vacuum_help")) if x["id"] not in have]   # robot hero jobs
     return c
 
 
@@ -343,7 +345,7 @@ def solo_job(ch):
 
 
 def is_system(cid):
-    return cid in SYSTEM_CHORES or str(cid).startswith("cleanup_")
+    return cid in SYSTEM_CHORES or str(cid).startswith(("cleanup_", "help_"))
 
 
 def save_cfg(c):
@@ -1418,7 +1420,10 @@ def derive():
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
-            "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
+            "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, sorted(evs + [
+                {"type": "space_tidy", "space": x, "tidy": True, "by": r["kid"], "ts": r["inspected_ts"]}   # a robot rescue tidied it
+                for r in reports.values() if r["status"] == "inspected" and not r.get("partial") for x in r.get("spaces") or []],
+                key=lambda e: e["ts"]), time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
                           started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
@@ -1967,11 +1972,13 @@ class H(BaseHTTPRequestHandler):
             acked = set(seen.get("ann:" + self.client_address[0], []))
             st["news_seen_kids"] = {k["id"]: seen.get("kid:" + k["id"]) for k in st["config"]["kids"]}
             st["ann_seen_kids"] = {k["id"]: seen.get("ann:kid:" + k["id"], []) for k in st["config"]["kids"]}
+            shut = {x["id"] for x in st["config"]["chores"] if x.get("closed")}   # e.g. a robot hero job that closed again
             st["announce_all"] = [{"id": b["bonus_id"], "chore": cid, "price": b["price"], "base": b["base"]}
-                                  for cid, b in st["board"].items() if b.get("bonus") and b.get("bonus_id") and not b["clean_until"]]
+                                  for cid, b in st["board"].items() if b.get("bonus") and b.get("bonus_id") and not b["clean_until"]
+                                  and cid not in shut]
             st["announce"] = [{"id": b["bonus_id"], "chore": cid, "price": b["price"], "base": b["base"]}
                               for cid, b in st["board"].items()
-                              if b["bonus"] and b["bonus_id"] and not b["clean_until"] and b["bonus_id"] not in acked]
+                              if b["bonus"] and b["bonus_id"] and not b["clean_until"] and b["bonus_id"] not in acked and cid not in shut]
             return self.send(200, st)
         if p == "/api/house_jobs":   # the grown-ups' house jobs (Grocy), ranked for one screen or overall
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -2189,6 +2196,12 @@ class H(BaseHTTPRequestHandler):
                 extra["old_toy"] = str(b.get("old_toy") or "other")[:20]
             if ch_.get("bundle"):
                 extra["covers"] = bd["covers"]
+            if ch_.get("help") == "rescue":   # a robot rescue also tidies the room it got stuck in
+                op = next((e for e in reversed(read_events()) if e["type"] == "reopen" and e.get("chore") == b["chore"]), {})
+                sp = [x for x in HOUSE.get("tidy_spaces") or [] if x["id"] in (op.get("spaces") or [])]
+                if sp:
+                    extra["covers"] = vacuum_help.covers_for(b["chore"], sp, st["board"], st["active"], st["paused"], b["kid"])
+                    extra["spaces"] = [x["id"] for x in sp if not x.get("chores")]
             if b["chore"] != "other" and not ch_.get("shared") and (any(a["chore"] == b["chore"] and b["kid"] not in (a.get("team") or [k])
                                               for k, a in st["active"].items()) or
                                           any(z["chore"] == b["chore"] and b["kid"] not in z["team"] for z in st["paused"].values())):
@@ -4414,6 +4427,8 @@ def start_modules():
         if (HOUSE.get("robot_locator") or {}).get("robots"):
             import locator
             go("robot-locator", locator.run, globals())   # which room each robot is in, even off-cleaning
+        if (HOUSE.get("vacuum_help") or {}).get("robots"):
+            go("vacuum-help", vacuum_help.run, globals())   # hero jobs: rescue a stuck robot, change its water
     if GROCY.get("url"):
         go("grocy-chores", watch_grocy_chores)
         import house_tasks

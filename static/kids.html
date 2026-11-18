@@ -369,7 +369,7 @@ function liveCelebrate(){ // inspections/awards that land while a kid is on thei
     modal('<div class="big">'+E("1f50d")+E(insp(ins.inspecting.by).icon)+'</div><div class="q">'+insp(ins.inspecting.by).name+' is inspecting '+E(ins.chore_icon)+' '+ins.chore_name+' now!</div>');addOk();return}
   if(newAwards().length){L("live_awards");showNewAwards()}}
 function K(){return S.config.kids.find(function(k){return k.id===kid})}
-function insp(id){return S.config.inspectors.find(function(i){return i.id===id})||{name:id,icon:"1f50d"}}
+function insp(id){return S.config.inspectors.find(function(i){return i.id===id})||(id==="vacuum"?{name:"Robot",icon:"1f916"}:{name:id,icon:"1f50d"})}
 function trophies(id){if(!S)return"";var b=S.balance,e=S.earned||{},ks=S.config.kids.map(function(k){return k.id});
   var tb=Math.max.apply(null,ks.map(function(k){return b[k]})),te=Math.max.apply(null,ks.map(function(k){return e[k]||0}));
   return (tb>0&&b[id]===tb?'<span class="tr gold" title="Right now">'+E("1f3c6")+'</span>':'')+(te>0&&(e[id]||0)===te?'<span class="tr silver" title="All-time">'+E("1f3c6")+'</span>':'')}
