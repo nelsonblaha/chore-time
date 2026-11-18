@@ -68,10 +68,18 @@ class RobotHeroJobs(Case):
         self.assertEqual(self.job("help_rescue_down").get("closed"), "on_demand")
         self.assertNotIn("help_rescue_down", [a["chore"] for a in st["announce_all"]])
 
+    def test_main_brush_rescue_with_base_pay_does_not_claim_room_tidying(self):
+        self.app.set(ERR, "main_brush_jammed", ago=60)
+        self.tick()
+        ev = self.app.pass_report("max", "help_rescue_down", points=3)
+        report = next(h for h in self.app.state()["history"] if h.get("id") == ev["id"])
+        self.assertNotIn("partial_of", report)
+        self.assertNotIn("tidied part", report["chore_name"])
+
     def test_a_room_without_jobs_is_marked_untidy(self):
         self.app.post("/api/space_tidy", {"space": "porch", "tidy": True, "by": "jordan"})
         self.app.set(ROOM, "Porch")
-        self.app.set(ERR, "wheels_jammed", ago=60)
+        self.app.set(ERR, "main_brush_jammed", ago=60)
         self.tick()
         st = self.app.state()
         self.assertEqual(st["tidy_spaces"]["porch"]["state"], "untidy")
@@ -98,15 +106,23 @@ class RobotHeroJobs(Case):
         self.assertEqual(b["price"], 2)
         self.assertIn("empty its dirty water tank and fill its clean water tank", b["note"])
         self.assertEqual(self.job("help_rescue_down").get("closed"), "on_demand")
+        ev = self.app.pass_report("ava", "help_water_down", points=2)
+        self.assertNotIn("partial_of", ev)
 
     def test_a_wedged_bumper_says_how_to_free_it(self):
         # "jiggle the laser turret on top of the robot and press the center button to go again"
+        self.app.pass_report("zoe", "kitchen", points=4)
         self.app.set(ERR, "vertical_bumper_pressed", ago=60)
         self.tick()
-        note = self.app.state()["board"]["help_rescue_down"]["note"]
+        st = self.app.state()
+        note = st["board"]["help_rescue_down"]["note"]
         self.assertIn("jiggle the laser tower", note)
         self.assertIn("center button", note)
         self.assertNotIn("Home button", note)
+        self.assertNotIn("tidy", note.lower())
+        self.assertTrue(st["board"]["kitchen"]["clean_until"])
+        ev = self.app.pass_report("ava", "help_rescue_down", points=3)
+        self.assertNotIn("partial_of", ev)
 
     def test_a_held_room_is_not_blamed(self):
         # 11-18: the map room blanked 8 s before the robot got stuck; the locator held "Living Room", but it was in the

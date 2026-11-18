@@ -1,9 +1,9 @@
 """Help the robot! Hero jobs that open by themselves when a robot vacuum needs a kid.
 
-  * Rescue: the robot is stuck (tangled brush, trapped, jammed wheels, stranded...). The job: free it, press the Home
-    button on top so it can go home, and (when it got stuck on something) tidy at least part of that room: the rescue
-    pays its own stars plus partial stars for the part tidied, which come off the room's own job. Stuck on something
-    in a room (a brush or wheel jam, trapped, bumper stuck) also marks that room untidy at once.
+  * Rescue: the robot is stuck (tangled brush, trapped, jammed wheels, stranded...). The job is to free it and send it
+    home. A main-brush jam also asks the kid to tidy part of that room: the rescue pays its own stars plus partial stars
+    for that tidying, which come off the room's own job, and the room is marked untidy at once. Other rescues do not
+    claim or offer room-cleaning credit.
   * Water: the dock's clean water tank is empty or its dirty water tank is full. The job: change the water.
 
 Dirty sensors are a quick kid job. Worn parts, filters, the dust bag and other dock upkeep stay grown-up maintenance.
@@ -16,7 +16,7 @@ kid has started or reported the job within CLOSE_AFTER_S, the job closes again; 
 
 house.json:
   "vacuum_help": {
-    "points": {"rescue": 3, "water": 2},          # rescue: plus whatever the inspector gives for the part tidied
+    "points": {"rescue": 3, "water": 2},          # main-brush rescue: plus any inspected room-tidying credit
     "robots": [{"id": "down", "name": "Downstairs Robot", "floor": "Downstairs",
                 "error": "sensor.downstairs_robot_vacuum_error",
                 "dock_error": "sensor.downstairs_robot_dock_error",                      # optional
@@ -48,9 +48,9 @@ STUCK = {
     "low_battery": "its battery ran out",
     "return_to_dock_fail": "it can't find its way home",
 }
-# Stuck ON something in the room: the room is untidy.
-TIDY = {"main_brush_jammed", "side_brush_jammed", "wheels_jammed", "robot_trapped", "bumper_stuck",
-        "vertical_bumper_pressed", "wheels_suspended", "robot_tilted", "vibrarise_jammed"}
+# Room-tidying is part of the mission only when the main brush caught room clutter. A bumper press, water job, wheel
+# problem, or other rescue earns only its rescue points and must not imply that the kid cleaned the room.
+TIDY_CREDIT = {"main_brush_jammed"}
 # How a kid gets it going again, when it's more than "pull it free, press Home".
 FIX = {
     "vertical_bumper_pressed": ["If it is still under something, pull it out (usually it isn't anymore).",
@@ -84,8 +84,8 @@ def chores(cfg):
                   "floor": r.get("floor", "Other"), "help_robot": r["id"], "order": -50}
         out.append(dict(common, id=rescue_id(r), name="Rescue " + r["name"] + "!", icon="1f9b8", help="rescue",
                         desc="A robot hero mission: free " + r["name"] + " and press the Home button on top so it can go "
-                             "home. It comes with tidying: tidy at least part of the room where it got stuck, for "
-                             "extra stars for that part."))
+                             "home. If its main brush is tangled, also tidy at least part of that room for extra stars "
+                             "for the part you cleaned."))
         if r.get("sensors_left"):   # trusted: no inspection; the kid's "yes, I did it" resets the robot's reminder
             out.append(dict(common, id=sensors_id(r), name="Clean " + r["name"] + "'s sensors", icon="1f9fd", help="sensors",
                             quick=True, trust=True, photo=r.get("sensors_photo"),
@@ -156,7 +156,7 @@ def rescue_note(robot, n, spaces, room, base=3):
         "Press the Home button on top so it can go home."
     steps = list(FIX[n["error"]]) if n["error"] in FIX else \
         ([] if n["error"] in CARRY else ["Free it: pull out whatever it is caught on."]) + [step2]
-    tidy = bool(spaces) and n["error"] in TIDY
+    tidy = bool(spaces) and n["error"] in TIDY_CREDIT
     if tidy:
         steps.append("Then tidy at least part of " + where + " so it never gets stuck there again!")
     pay = ("%d⭐ for the rescue, plus stars for the part of %s you tidy. The rescue comes with tidying: do at least "
@@ -253,7 +253,7 @@ class Helper:
                         changed = True
                     sp = [s for s in spaces_all if s["id"] in (K.get("spaces") or [])]
                     if kind == "rescue" and not K.get("untidy"):
-                        if cur["error"] in TIDY:
+                        if cur["error"] in TIDY_CREDIT:
                             for ev in untidy_events(sp, st["board"], st.get("tidy_spaces") or {}, robot, K.get("room")):
                                 g["append"](ev)
                         K["untidy"] = True
@@ -267,7 +267,8 @@ class Helper:
                             price = int(pts.get("rescue", 3)) if kind == "rescue" else int(pts.get("water", 2))
                             g["append"]({"type": "reopen", "chore": cid, "by": "vacuum", "note": note,
                                          "help": kind, "episode": ep,
-                                         "spaces": (K.get("spaces") or []) if cur.get("error") in TIDY else []})
+                                         "tidy_credit": kind == "rescue" and cur.get("error") in TIDY_CREDIT,
+                                         "spaces": (K.get("spaces") or []) if cur.get("error") in TIDY_CREDIT else []})
                             g["append"]({"type": "price", "chore": cid, "points": price, "by": "vacuum"})
                             g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": kind, "action": "open", "price": price})
                             K["opened"] = True

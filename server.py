@@ -1230,6 +1230,11 @@ def derive():
             bal[e["kid"]] += int(e["points"])
             earned[e["kid"]] += int(e["points"])
     for r in reports.values():
+        if r.get("partial_of") and r["status"] == "inspected" \
+                and int(r.get("awarded") or 0) <= int(r.get("rescue_base") or 0):
+            # The kid received rescue pay only. Do not retain or display a claim that they also tidied the room.
+            r.pop("partial_of", None)
+            r.pop("rescue_base", None)
         ch = chores.get(r["chore"], {})
         r["chore_name"] = r.get("label") or (r.get("note") and r["chore"] == "other" and r["note"].capitalize()) \
             or ch.get("name", r["chore"])
@@ -1239,7 +1244,7 @@ def derive():
             r["chore_name"] = "Toy goodbye: " + (r.get("label") or (r.get("note") or "a toy").capitalize())
         if r.get("covers") and ch.get("bundle"):
             r["chore_name"] += " (" + ", ".join(chores.get(x, {}).get("name", x) for x in r["covers"]) + ")"
-        if r.get("partial_of"):   # a robot rescue + tidying part of the room: the inspector adds stars for that part
+        if r.get("partial_of"):
             r["chore_name"] += " + tidied part of " + ", ".join(chores.get(x, {}).get("name", x) for x in r["partial_of"])
         if r["chore"] == "toy_swap":
             kc = next((k for k in c["kids"] if k["id"] == r["kid"]), {})
@@ -2381,10 +2386,10 @@ class H(BaseHTTPRequestHandler):
                 extra["old_toy"] = str(b.get("old_toy") or "other")[:20]
             if ch_.get("bundle"):
                 extra["covers"] = bd["covers"]
-            if ch_.get("help") == "rescue":   # a robot rescue comes with tidying part of the room it got stuck in
+            if ch_.get("help") == "rescue":   # only a main-brush rescue may include separately inspected room tidying
                 op = next((e for e in reversed(read_events()) if e["type"] == "reopen" and e.get("chore") == b["chore"]), {})
                 sp = [x for x in HOUSE.get("tidy_spaces") or [] if x["id"] in (op.get("spaces") or [])]
-                if sp:
+                if op.get("tidy_credit") and sp:
                     extra["partial_of"] = vacuum_help.partial_of(sp)
                     extra["rescue_base"] = bd["price"]
             if b["chore"] != "other" and not ch_.get("shared") and (any(a["chore"] == b["chore"] and b["kid"] not in (a.get("team") or [k])
