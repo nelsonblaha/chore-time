@@ -280,6 +280,17 @@
       "Entry": [
         "input_select.front_hall_lights_mode"
       ]
+    },
+    "map_select": "select.robot_selected_map",
+    "map_name": "Downstairs",
+    "pin_map": true,
+    "room_requests": "input_text.robot_room_requests",
+    "progress": "sensor.robot_cleaning_progress",
+    "clean_time": "sensor.robot_cleaning_time",
+    "explore": {
+      "school_from_h": 15,
+      "free_from_h": 9,
+      "until_h": 19
     }
   },
   "grocy": null,
@@ -323,5 +334,7 @@
         }
       }
     ]
-  }
+  },
+  "arrival_grace_hour": 19,
+  "demo_state": "sensor.chore_demo_state"
 }

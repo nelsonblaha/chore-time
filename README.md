@@ -24,6 +24,7 @@ Sticker charts stop working around the third week. Chore Time keeps working beca
 - 🔍 **Grown-ups inspect, not nag.** A notification lands on your phone and watch with one-tap *Pass +3*, *Not yet* or *0⭐*.
 - 📺 **Stars buy real screen time.** The TV is locked until a kid spends stars on a show, a movie or video games. Then it unlocks, counts down, warns at five minutes, and locks again by itself.
 - 💡 **The house reacts.** Lights in the room being cleaned go bright white, and a few colour bulbs glow in that kid's colour. When a room passes inspection, the robot vacuum cleans its newly clear floor the next time nobody's around.
+- 🦸 **The robots need the kids too.** A robot vacuum stuck on a sock opens a flashing *Rescue the robot!* job (stars for the rescue, plus stars for tidying the part of the room that trapped it), and an empty water tank opens a *Fresh water* job.
 - 🌙 **Bedtime is built in.** At bedtime the screens stop offering jobs and rewards and send everyone to bed (after brushing their teeth).
 
 It's one small Python server with no database and no build step. It runs on a Raspberry Pi, a NAS or the box your Home Assistant lives on.
@@ -89,8 +90,10 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 - **Propose a price.** For open-ended jobs ("write a letter"), the kid suggests a number of stars.
 
 **Fun that keeps them coming back**
-- Tiered achievements (bronze → diamond), personal bests and house records per job, streaks that skip days a kid was away, a news ticker ("Max set the Sweep the stairs record: 7:00!").
+- Tiered achievements (bronze → diamond), personal bests and house records per job, streaks that skip days a kid was away (and the day they got home too late to do a job), a news ticker ("Max set the Sweep the stairs record: 7:00!").
 - A presents stash for trading old toys, and a "give away a toy" flow.
+
+- **Show a visitor:** `kids.html?sandbox=<url>` is a read-only demo of the real screens from a copy of the state with private details removed. Visitors tap around freely, the grown-up login pretends to ask the watch, and nothing they do reaches the real chart.
 
 **Screen time, enforced**
 - TV rewards unlock a specific TV, or every TV. The clock starts when the kid actually starts watching, and back-to-back purchases queue.
@@ -103,6 +106,13 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 - Bright white light and open shades in the room being cleaned. Selected colour bulbs show the working kid's colour (one kid asked for their colour plus a "family purple" pair, so that's a setting).
 - A room waiting for inspection glows in the inspecting grown-up's colour.
 - **Vacuum autopilot** with goals: the kitchen every night, the dining room on nights dinner was eaten there (one long sit at the table, as seen by its motion sensor, not people passing through), every other room at least every 3 days, and any room right after its tidy passes (the floor is clear). Any robot run, even one started by a room's button, resets that room's clock. It only goes once the floor has been empty for 20 minutes. Quiet suction and a muted robot voice at night. It pauses for a *person* coming onto the floor (a door opening, the stairs, or walking through rooms), not for the robot setting off its own sensors. It docks if the person stays.
+  - **One autopilot per robot**, e.g. an upstairs one that reads floor vacancy from a presence tracker, cleans around a room shut off by closed doors, and skips guest rooms and rooms marked untidy.
+  - **It always says why**, in a sentence: "waiting for downstairs to be empty: quiet 7 of 20 minutes (someone in Family Room)", "cleaning Great Room, 2 rooms to go · 30% done · battery 83%", or "a clean started by hand".
+  - **Clean now / Clean when vacant** per room, autopilot on or off.
+  - **Tidiness check:** while the kids are around for a day or more, the robot now and then explores a room marked untidy. If it gets stuck, the mess is confirmed and the kids get a rescue job.
+  - **Robust to real robots:** a robot that sets off and gives up in seconds is a failed start (with a back-off), not "done". It is kept on the right map, never commanded while it is mapping, and a run whose robot docks with its task left unfinished ends cleanly.
+- **Robot locator:** a live "which room is the robot in" sensor that learns room outlines from the robot's position while it cleans, holds the last room through the robot's own brief blank readings, and never trusts the robot's frozen room off-cleaning.
+- **Room eye** (optional, cameras): cameras learn what each room looks like tidy from the grown-ups' tidy/untidy clicks, mark a messy room untidy, and queue new spots for a grown-up to label (hazard for the robot or not). They can also take a **before and after picture** for an inspection, with the lights full white and the shades open, never while a chosen grown-up is home. Pictures with people in them are never kept as samples.
 - An optional **Grocy** integration uses Grocy as the master chore list, with chore completions written back. The grown-ups get their side too: due house jobs, one-off tasks and batteries to replace, ranked per screen by room, mirrored to a Home Assistant to-do list you can tick or add to by voice.
 
 ## Install for your house
@@ -114,7 +124,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
    cp example-config/chores.json example-config/house.json ~/.local/share/chore-time/
    ```
 2. **Edit `chores.json`:** your kids (name, colour, emoji), grown-ups, jobs and rewards. Delete what you don't use.
-3. **Edit `house.json`**, or delete it to run with no smart-home features at all. Each section turns on a module: `home_assistant`, `adults`, `tvs`, `hubs`, `launchers`, `lights`, `vacuum`, `grocy`. See [docs/configuration.md](docs/configuration.md).
+3. **Edit `house.json`**, or delete it to run with no smart-home features at all. Each section turns on a module: `home_assistant`, `adults`, `tvs`, `hubs`, `launchers`, `lights`, `vacuum` (and `vacuum_more` for more robots), `vacuum_help`, `robot_locator`, `room_eye`, `grocy`, `demo_state`. See [docs/configuration.md](docs/configuration.md).
 4. **Run it:**
    ```bash
    python3 server.py                      # core only: standard library, nothing to install
@@ -132,7 +142,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
 - **Tested against real life:** every test in [`tests/`](tests) comes from something that went wrong in a real family. For example: a personal job vanished because a sibling's report was waiting for inspection, a console on HDMI never locked because the lock page kept running in the background, and a bedtime rule paused a kid mid-toothbrush.
 
 ```bash
-python3 -m unittest discover -s tests      # ~65 tests, ~15 s, no network
+python3 -m unittest discover -s tests      # ~200 tests, ~1 min, no network (numpy + Pillow for the room eye ones)
 node tools/smoke.js                        # renders every page against a running server
 ```
 
