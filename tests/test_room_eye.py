@@ -260,9 +260,16 @@ class RoomEyeLive(Case):
         ph = self.eye.photos_for(ref=ev["id"])
         self.assertEqual(len(ph), 1)                              # one pair
         self.assertTrue(ph[0]["before"] and ph[0]["after"])
+        # Inspection media stays in the private store. The LAN server has no photo routes.
+        import urllib.error
         import urllib.request
-        r = urllib.request.urlopen(self.app.base + "/api/inspect_photo/%s/after.jpg" % ph[0]["key"], timeout=10)
-        self.assertEqual((r.status, r.headers["Content-Type"]), (200, "image/jpeg"))
+        for path in ("/api/inspect_photos", "/api/inspect_photo/%s/after.jpg" % ph[0]["key"]):
+            for headers in ({}, {"X-HA-User": "guest", "Referer": self.app.base + "/inspect"}):
+                req = urllib.request.Request(self.app.base + path, headers=headers)
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(req, timeout=10)
+                self.assertEqual(error.exception.code, 404)
+                error.exception.close()
 
     def test_no_pictures_while_the_named_grownup_is_home(self):
         self.tick(0.01)

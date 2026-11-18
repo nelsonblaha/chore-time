@@ -2054,27 +2054,6 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"items": shown if shown is not None else (GUARD.get("house_tasks") or [])[:20],
                                    "private": meta.get("private", []), "to_review": meta.get("to_review", 0),
                                    "on": "house_tasks" in GUARD})
-        if p == "/api/inspect_photos":   # before/after pictures for the grown-ups' inspection: [{key, before, after}]
-            import room_eye
-            e_ = room_eye.EYE
-            q_ = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            got = e_.photos_for(ref=(q_.get("ref") or [None])[0], chore=(q_.get("chore") or [None])[0],
-                                kid=(q_.get("kid") or [None])[0]) if e_ else []
-            return self.send(200, {"photos": [{k: x.get(k) for k in ("key", "cam", "before", "after", "ref")} for x in got]})
-        m_ = re.match(r"^/api/inspect_photo/([0-9a-f]{16})/(before|after)\.jpg$", p)
-        if m_:
-            import room_eye
-            f_ = Path(DATA) / "room_eye" / "inspect" / m_.group(1) / (m_.group(2) + ".jpg")
-            if not f_.exists():
-                return self.send(404, {"error": "no picture"})
-            b_ = f_.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
-            self.send_header("Cache-Control", "private, max-age=3600")
-            self.send_header("Content-Length", str(len(b_)))
-            self.end_headers()
-            self.wfile.write(b_)
-            return
         if p == "/api/room_eye":   # cameras learning tidy rooms: label queue (no pictures here), recent checks, counts
             import room_eye
             e_ = room_eye.EYE
