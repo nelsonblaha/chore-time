@@ -316,7 +316,8 @@ document.addEventListener("click",function(e){var n=e.target.closest("[data-c],[
 L("load",{w:innerWidth,h:innerHeight,ua:navigator.userAgent.slice(0,120),q:location.search});
 var TW="https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/";
 function cp(code){return code.split("-").map(function(h){return String.fromCodePoint(parseInt(h,16))}).join("")}
-function E(code){if(!code)return"";if(CUSTOM_ICONS[code])return '<img class="e" src="'+CUSTOM_ICONS[code]+'" alt="">';return '<img class="e" src="'+TW+code+'.svg" alt="'+cp(code)+'" onerror="this.outerHTML=this.alt">'}
+var NO_CDN=/[?&]sandbox=/.test(location.search);   // a visitor's demo: emoji as text, no outside requests
+function E(code){if(!code)return"";if(CUSTOM_ICONS[code])return '<img class="e" src="'+CUSTOM_ICONS[code]+'" alt="">';if(NO_CDN)return '<span class="e">'+cp(code)+'</span>';return '<img class="e" src="'+TW+code+'.svg" alt="'+cp(code)+'" onerror="this.outerHTML=this.alt">'}
 function hydrate(root){(root||document).querySelectorAll(".eh").forEach(function(n){n.outerHTML=E(n.dataset.c)})}
 hydrate();
 var S=null,kid=null,idleT=null,seen={},busy=false,page=0;
