@@ -138,6 +138,21 @@ class RobotHeroJobs(Case):
         self.tick()
         self.assertEqual(self.job("help_sensors_down").get("closed"), "on_demand")
 
+    def test_a_floorplan_reset_closes_an_active_sensor_job_without_stars(self):
+        self.app.set("sensor.down_robot_sensor_time_left", "-234")
+        self.tick()
+        before = self.app.state()["balance"]["max"]
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "help_sensors_down"})[0], 200)
+        self.assertEqual(self.app.state()["active"]["max"]["chore"], "help_sensors_down")
+
+        self.app.set("sensor.down_robot_sensor_time_left", "108000")
+        self.tick()
+        st = self.app.state()
+        self.assertEqual(self.job("help_sensors_down").get("closed"), "on_demand")
+        self.assertNotIn("max", st["active"])
+        self.assertEqual(st["balance"]["max"], before)
+        self.assertFalse(any(e[0] == "button.press" for e in self.app.calls))
+
     def test_maintenance_never_opens_a_job(self):
         # worn parts, filters, the dust bag and other dock upkeep are grown-up work
         for err, dock in (("filter_blocked", "ok"), ("no_dustbin", "ok"), ("side_brush_error", "ok"),

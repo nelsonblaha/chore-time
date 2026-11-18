@@ -318,9 +318,24 @@ class Helper:
                 g["append"]({"type": "price", "chore": cid, "points": price, "by": "vacuum"})
                 g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "sensors", "action": "open", "price": price})
                 changed = True
-        elif bd.get("opened") and not busy(cid, st):
+        elif bd.get("opened"):
+            # A grown-up can reset this reminder from the floorplan (or the robot itself). End any kid's
+            # in-progress copy of the job without creating a report: the work is resolved, but no stars were earned.
+            ended = set()
+            for paused, jobs in ((False, st.get("active") or {}), (True, st.get("paused") or {})):
+                for kid, job in jobs.items():
+                    if job.get("chore") != cid:
+                        continue
+                    team = tuple(job.get("team") or [kid])
+                    key = (paused, team)
+                    if key in ended:
+                        continue
+                    ended.add(key)
+                    g["append"]({"type": "abandon", "kid": kid, "team": list(team), "chore": cid,
+                                 "paused": paused, "by": "vacuum", "why": "sensor reminder reset elsewhere"})
             g["append"]({"type": "close_od", "chore": cid, "by": "vacuum"})
-            g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "sensors", "action": "close"})
+            g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "sensors", "action": "close",
+                       "why": "reminder reset", "abandoned": len(ended)})
             changed = True
         return changed
 
