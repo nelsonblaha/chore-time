@@ -106,8 +106,14 @@ def achievements(c, reports, earned, aw):
         days_ = sorted({datetime.fromtimestamp(r["ts"]).date() for r in mine})
         today = date.today()
         hd = (GUARD.get("home_days") or load_home_days()).get(k)
+        arr = (GUARD.get("home_arrivals") or load_home_arrivals()).get(k) or {}
+        late = HOUSE.get("arrival_grace_hour", 19)
+
         def away(d):   # a day the kid wasn't home never breaks the streak; unknown history = home
-            return hd is not None and d.isoformat() not in hd and d < today
+            # an arrival day counts as away too when they got home at or after the grace hour (too late for a job)
+            if hd is None or d >= today:
+                return False
+            return d.isoformat() not in hd or (arr.get(d.isoformat()) or "00:00") >= "%02d:00" % late
         cur = 0
         d = today if today in days_ else today - timedelta(days=1)
         for _ in range(400):
@@ -3651,6 +3657,7 @@ def watch_tvs():
 
 
 HOME_DAYS = DATA / "home_days.json"   # {kid: [ "YYYY-MM-DD", ... ]} days the kid's HA home switch was on at some point
+HOME_ARRIVALS = DATA / "home_arrivals.json"   # {kid: {"YYYY-MM-DD": "HH:MM"}} when a kid got home after a day away
 
 
 def load_home_days():
@@ -3664,11 +3671,24 @@ def save_home_days(hd):
     HOME_DAYS.write_text(json.dumps({k: sorted(v) for k, v in hd.items()}))
 
 
+def load_home_arrivals():
+    """{kid: {date: "HH:MM"}}: when a kid got home on a day after a day away"""
+    try:
+        return json.loads(HOME_ARRIVALS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_home_arrivals(ar):
+    HOME_ARRIVALS.write_text(json.dumps(ar, sort_keys=True))
+
+
 def watch_home_days():
     """Record which days each kid was home (streaks skip days away). Backfill from HA history once (~10 days kept)."""
     from datetime import datetime, date, timedelta
     tok = ha_token()
     hd = load_home_days()
+    ar = load_home_arrivals()
     kids = cfg()["kids"]
     try:
         start = (datetime.now() - timedelta(days=12)).strftime("%Y-%m-%dT00:00:00")
@@ -3688,10 +3708,13 @@ def watch_home_days():
                 a = datetime.fromisoformat(r["last_changed"]).astimezone()
                 b = datetime.fromisoformat(rows[i + 1]["last_changed"]).astimezone() if i + 1 < len(rows) else datetime.now().astimezone()
                 d = a.date()
+                if (d - timedelta(days=1)).isoformat() not in hd.get(k, set()) and d.isoformat() not in hd.get(k, set()):
+                    ar.setdefault(k, {}).setdefault(d.isoformat(), a.strftime("%H:%M"))   # home after a day away
                 while d <= b.date():
                     hd.setdefault(k, set()).add(d.isoformat())
                     d += timedelta(days=1)
         save_home_days(hd)
+        save_home_arrivals(ar)
     except Exception as ex:  # noqa: BLE001
         print("home-days backfill failed", ex, flush=True)
     while True:
@@ -3701,11 +3724,14 @@ def watch_home_days():
                 if k.get("home_entity") and ha_get(k["home_entity"], tok).get("state") == "on":
                     t = date.today().isoformat()
                     if t not in hd.setdefault(k["id"], set()):
+                        if (date.today() - timedelta(days=1)).isoformat() not in hd[k["id"]]:
+                            ar.setdefault(k["id"], {})[t] = datetime.now().strftime("%H:%M")   # home after a day away
+                            save_home_arrivals(ar)
                         hd[k["id"]].add(t)
                         changed = True
             if changed:
                 save_home_days(hd)
-            GUARD["home_days"] = hd
+            GUARD["home_days"], GUARD["home_arrivals"] = hd, ar
         except Exception as ex:  # noqa: BLE001
             print("home-days error", ex, flush=True)
         time.sleep(300)
