@@ -14,7 +14,9 @@ attributes:
   source       map (cleaning: the integration's own room) | position (learned outline) | dock | unknown
                (a camera sighting from room_eye teaches the outline and gives a fresh position fix)
   why          when unknown: no position yet, position too old, unlearned, tied, robot <state>
-  observed_at  when the room was last actually seen (epoch seconds); expires_at = observed_at + 60 s
+  observed_at  when the room was last actually seen (epoch seconds); expires_at = observed_at + 60 s. While cleaning, a
+               map room that blanks for a moment keeps the last room for up to 5 minutes (why: last room held,
+               held_since: when it was really seen), so a map doesn't jump the robot home and back
   robot, robot_changed   the vacuum's state and when it entered it (a fix from before that is never used)
   x, y, votes, learned_cells, learned_points, published_at
 Off-cleaning the map room is never used (it is frozen there); a failed or missing position, an unlearned spot or a
@@ -34,10 +36,11 @@ SEARCH = 3          # look this many cells around an unlearned position
 LEARN_S = 30
 LOCATE_S = 15
 POS_TTL = 60        # a room is trusted this long after it was seen
+HOLD_S = 300        # while cleaning, a blank map room keeps the last room seen this long (the integration blanks often)
 HEARTBEAT_S = 30    # re-send an unchanged sensor this often
 AWAY_STATES = ("returning", "paused", "idle", "error")
 DOCK_STATES = ("docked", "charging")
-STAMPS = ("observed_at", "expires_at", "published_at")
+STAMPS = ("observed_at", "expires_at", "published_at", "held_since")
 
 
 def epoch(s):
@@ -60,6 +63,7 @@ class Locator:
         self.tok = g["ha_token"]()
         self.last = {}          # vacuum -> last position call ts
         self.fix = {}           # vacuum -> {"xy", "room", "votes", "at"}: the newest successful position (memory only)
+        self.seen = {}          # vacuum -> (map room, when) last seen while cleaning
         self.pub = {}           # vacuum -> last published signature
         self.pub_at = {}        # vacuum -> when it was last sent
 
@@ -107,10 +111,16 @@ class Locator:
         out = {"room": "unknown", "source": "unknown", "why": "", "xy": None, "votes": {}, "observed_at": None}
         if st == "cleaning":
             self.fix.pop(vac, None)
-            if room_now in (None, "", "unknown", "unavailable"):
-                out["why"] = "no map room"
-            else:
+            held = self.seen.get(vac)
+            if room_now not in (None, "", "unknown", "unavailable"):
+                self.seen[vac] = (room_now, now)
                 out.update(room=room_now, source="map", observed_at=now)
+            elif held and held[1] >= since and now - held[1] <= HOLD_S:
+                # the map room blanked for a moment (it does, mid-clean): the robot is still where it was last seen
+                out.update(room=held[0], source="map", observed_at=now, held_since=held[1],
+                           why="map room blank: last room held")
+            else:
+                out["why"] = "no map room"
             return out
         if st in DOCK_STATES:
             self.fix.pop(vac, None)
@@ -193,6 +203,7 @@ class Locator:
                  "robot": st, "robot_changed": int(since) if since else None,
                  "observed_at": int(seen) if seen else None, "expires_at": int(seen + POS_TTL) if seen else None,
                  "x": xy[0] if xy else None, "y": xy[1] if xy else None, "votes": loc["votes"],
+                 "held_since": int(loc["held_since"]) if loc.get("held_since") else None,
                  "learned_cells": len(cells), "learned_points": sum(sum(c.values()) for c in cells.values())}
         sig = json.dumps([loc["room"], {k: v for k, v in attrs.items() if k not in STAMPS}], sort_keys=True, default=str)
         if sig == self.pub.get(vac) and now - self.pub_at.get(vac, 0) < HEARTBEAT_S:

@@ -886,6 +886,18 @@ class RobotLocatorFreshness(unittest.TestCase):
         self.assertEqual((s["observed_at"], s["published_at"]), (1031, 1031))   # a fresh fix, re-sent
 
 
+    def test_a_blank_map_room_mid_clean_holds_the_last_room(self):
+        # 11-18: the integration's room blanked to unknown for 30 s to 2.5 min at a time while the robot cleaned the
+        # living room, and the floor plan jumped it back to its dock each time
+        self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+        self.ha[self.R] = lambda: {"state": "Great Room"}
+        self.tick(1000)
+        self.ha[self.R] = lambda: {"state": "unknown"}
+        self.tick(1060)
+        self.assertEqual((self.out[-1]["state"], self.out[-1]["why"]), ("Great Room", "map room blank: last room held"))
+        self.tick(1000 + self.loc.HOLD_S + 1)                    # blank too long: unknown after all
+        self.assertEqual(self.out[-1]["state"], "unknown")
+
 class HouseTasks(unittest.TestCase):
     """The grown-ups' side: Grocy chores/tasks/batteries with Home Assistant context, faked."""
 
