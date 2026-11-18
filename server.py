@@ -340,7 +340,13 @@ def cfg():
         c.setdefault("chores", []).append(dict(GET_DRESSED))   # built in; never saved unless the config is edited
     have = {x.get("id") for x in c.get("chores") or []}
     c["chores"] += [cleanup_job(k["id"]) for k in c.get("kids") or [] if "cleanup_" + k["id"] not in have]
-    c["chores"] += [x for x in vacuum_help.chores(HOUSE.get("vacuum_help")) if x["id"] not in have]   # robot hero jobs
+    built_help = {x["id"]: x for x in vacuum_help.chores(HOUSE.get("vacuum_help"))}
+    # Old config edits accidentally persisted generated robot jobs. Overlay their canonical metadata so a new
+    # field/fix reaches those homes too, while retaining any unrelated local extension keys.
+    for ch in c["chores"]:
+        if ch.get("id") in built_help:
+            ch.update(built_help.pop(ch["id"]))
+    c["chores"] += list(built_help.values())
     return c
 
 

@@ -2,6 +2,7 @@
 
     python3 -m unittest discover -s tests -v        (from the repo root)
 """
+import json
 import time
 import unittest
 
@@ -137,6 +138,18 @@ class RobotHeroJobs(Case):
         self.app.set("sensor.down_robot_sensor_time_left", "108000")             # the reminder is back up
         self.tick()
         self.assertEqual(self.job("help_sensors_down").get("closed"), "on_demand")
+
+    def test_generated_sensor_metadata_overlays_a_stale_persisted_job(self):
+        path = self.app.dir / "chores.json"
+        cfg = json.loads(path.read_text())
+        cfg["chores"].append({"id": "help_sensors_down", "name": "Old copy", "quick": False,
+                              "local_extension": "kept"})
+        path.write_text(json.dumps(cfg))
+        jobs = [x for x in self.s.cfg()["chores"] if x["id"] == "help_sensors_down"]
+        self.assertEqual(len(jobs), 1)
+        self.assertTrue(jobs[0]["quick"])
+        self.assertEqual(jobs[0]["name"], "Clean Robo's sensors")
+        self.assertEqual(jobs[0]["local_extension"], "kept")
 
     def test_a_floorplan_reset_closes_an_active_sensor_job_without_stars(self):
         self.app.set("sensor.down_robot_sensor_time_left", "-234")
