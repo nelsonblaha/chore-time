@@ -1,7 +1,8 @@
 """Room eye: cameras that learn what a tidy room looks like, mark messy rooms untidy, and help find the robots.
 
 Only while a camera is already on (the house's own camera policy decides that, e.g. "the floor is empty"):
-  * Every few hours (every_h, default 4) per camera: turn the room's lights full white for a moment, take one picture,
+  * Every few hours (every_h, default 4) per camera: turn the room's lights full white for a moment (snapshot, white,
+    picture, restore the snapshot), take one picture,
     compare it with the room's TIDY pictures, and if enough of it changed, mark the room untidy (live).
   * A grown-up's "tidy" / "untidy" click on a room this camera sees (the map's Mark tidy, a reopened or marked-clean
     room job, a passed inspection) adds a labelled picture: tidy ones become the references, untidy ones calibrate how
@@ -20,7 +21,7 @@ house.json:
   "room_eye": {
     "capture_url": "http://127.0.0.1:8791",       # GET /cameras, POST /capture {camera, purpose} -> image/jpeg
     "every_h": 4, "settle_s": 5,
-    "cameras": {"sun_room": {"spaces": ["sun_room"], "lights": ["input_select.sun_room_lights_mode"],
+    "cameras": {"sun_room": {"spaces": ["sun_room"], "lights": ["light.sun_room"],
                              "motion": "binary_sensor.sun_room_camera_motion",
                              "robots": {"vacuum.downstairs_robot": "Sun Room"}}}
   }
@@ -42,6 +43,7 @@ NOISE_X = 1.6            # ... and this many times more than the tidy pictures d
 LABEL_TTL_S = 86400
 QUEUE_MAX = 40
 TEACH_QUIET_S = 30
+WHITE_K = 5000           # "full white": daylight white at full brightness
 BOOT = 3                 # trust the map's tidy/untidy state for a camera's first pictures of each kind       # no robot teaching right after our own light flash (the light change looks like motion)
 ADULT_BY_SKIP = {"vacuum", "dinner", "grocy", "camera", "auto"}
 
@@ -209,21 +211,24 @@ class Eye:
 
     # ---- lights
     def flash(self, cam):
-        """lights full white; returns what to restore"""
-        g, was = self.g, {}
-        for ent in self.cfg["cameras"][cam].get("lights") or []:
-            cur = g["ha_get"](ent, self.tok).get("state")
-            if cur not in (None, "unavailable", "unknown", "white"):
-                was[ent] = cur
-            g["ha_call"]("input_select.select_option", {"entity_id": ent, "option": "white"}, self.tok)
+        """Snapshot the room's lights (and a group's bulbs), turn them full white for the picture. Never through the
+        house's light-mode selects: a mode write there means a person's request (sticky White, a re-armed timer)."""
+        g, lights = self.g, self.cfg["cameras"][cam].get("lights") or []
+        if not lights:
+            return None
+        snap = []
+        for ent in lights:
+            snap += [ent] + list((g["ha_get"](ent, self.tok).get("attributes") or {}).get("entity_id") or [])
+        scene = "room_eye_" + cam
+        g["ha_call"]("scene.create", {"scene_id": scene, "snapshot_entities": list(dict.fromkeys(snap))}, self.tok)
+        g["ha_call"]("light.turn_on", {"entity_id": lights, "brightness": 255, "color_temp_kelvin": WHITE_K, "transition": 0}, self.tok)
         self.flashed_at[cam] = time.time()
-        if self.cfg["cameras"][cam].get("lights"):
-            self.sleep(float(self.cfg.get("settle_s", 5)))
-        return was
+        self.sleep(float(self.cfg.get("settle_s", 5)))
+        return "scene." + scene
 
-    def unflash(self, cam, was):
-        for ent, opt in was.items():
-            self.g["ha_call"]("input_select.select_option", {"entity_id": ent, "option": opt}, self.tok)
+    def unflash(self, cam, scene):
+        if scene:
+            self.g["ha_call"]("scene.turn_on", {"entity_id": scene, "transition": 0}, self.tok)
         self.flashed_at[cam] = time.time()
 
     def shoot(self, cam, purpose):

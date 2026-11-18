@@ -218,7 +218,12 @@ class Pilot:
             fresh = False
         if not fresh:
             return "presence tracker unavailable", set()
-        rooms = ((a.get("floors") or {}).get(OCC["floor"]) or {}).get("rooms") or []
+        fl = (a.get("floors") or {}).get(OCC["floor"]) or {}
+        if fl.get("state") == "vacant":             # the tracker's own floor verdict
+            return None, set()
+        if fl.get("state") != "occupied":            # unknown / missing: someone may be there
+            return "floor %s" % (fl.get("state") or "unknown"), set()
+        rooms = fl.get("rooms") or []
         sealed = set()
         for r in rooms:
             info = (a.get("rooms") or {}).get(r) or {}
@@ -243,7 +248,9 @@ class Pilot:
             self.D["occ_quiet_since"] = None
             return 0, who
         if not self.D.get("occ_quiet_since"):
-            self.D["occ_quiet_since"] = now
+            fl = ((self.get(OCC["sensor"]).get("attributes") or {}).get("floors") or {}).get(OCC["floor"]) or {}
+            since = fl.get("since") if fl.get("state") == "vacant" else None
+            self.D["occ_quiet_since"] = float(since) if isinstance(since, (int, float)) and since <= now else now
         return now - self.D["occ_quiet_since"], "presence tracker"
 
     def quiet_for(self, exclude=(), held=True):

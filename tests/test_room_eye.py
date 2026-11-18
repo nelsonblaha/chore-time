@@ -12,7 +12,7 @@ from PIL import Image
 
 from test_chore_app import Case
 
-LIGHT = "input_select.porch_lights_mode"
+LIGHT = "light.kitchen"
 CAM = {"capture_url": "http://fake", "every_h": 4, "settle_s": 0,
        "cameras": {"cam1": {"spaces": ["kitchen_space"], "lights": [LIGHT], "motion": "binary_sensor.cam1_motion",
                             "robots": {"vacuum.robo": "Kitchen"}}}}
@@ -63,7 +63,7 @@ class RoomEyeLive(Case):
         self.re = room_eye
         self.s.HOUSE["tidy_spaces"] = SPACES
         self.s.HOUSE["room_eye"] = CAM
-        self.app.set(LIGHT, "auto")
+        self.app.set(LIGHT, "off", entity_id=["light.kitchen_1", "light.kitchen_2"])
         self.app.set("vacuum.robo", "docked")
         self.eye = room_eye.Eye(vars(self.s), CAM)
         room_eye.EYE = self.eye
@@ -89,8 +89,11 @@ class RoomEyeLive(Case):
     def test_trust_the_map_while_new_then_check_and_mark_mess_live(self):
         self.teach_tidy()
         self.assertEqual(self.samples("tidy"), 3)                 # the first pictures are labelled by the map
-        opts = [c[1]["option"] for c in self.app.calls if c[0] == "input_select.select_option"]
-        self.assertEqual(opts[:2], ["white", "auto"])             # full white for the picture, then back as it was
+        first = [c for c in self.app.calls if c[0] in ("scene.create", "light.turn_on", "scene.turn_on")][:3]
+        self.assertEqual([c[0] for c in first], ["scene.create", "light.turn_on", "scene.turn_on"])   # snapshot, white, back
+        self.assertEqual(first[0][1]["snapshot_entities"], [LIGHT, "light.kitchen_1", "light.kitchen_2"])
+        self.assertEqual((first[1][1]["brightness"], first[1][1]["color_temp_kelvin"]), (255, 5000))
+        self.assertFalse([c for c in self.app.calls if c[0] == "input_select.select_option"])   # never the mode selects
         self.next_pic = picture(light=5, seed=11)
         self.tick()
         self.assertEqual(self.eye.S["checks"][-1]["verdict"], "tidy")

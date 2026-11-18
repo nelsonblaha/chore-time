@@ -70,11 +70,11 @@ class Upstairs(unittest.TestCase):
     def S(self, e, st, ago=0, **attrs):
         self.H[e] = {"state": st, "attributes": attrs, "last_changed": iso(self.now[0] - ago)}
 
-    def occ(self, who, fresh=True, roster=True):
+    def occ(self, who, fresh=True, roster=True, floor=None):
         """who = {room: state}; everything else clear"""
         rooms = {r: {"state": who.get(r, "clear"), "people": ["X"] if who.get(r) in ("occupied", "still") else []} for r in ROOMS}
         self.S(OCC, "ok", valid_until=self.now[0] + (90 if fresh else -10), roster_complete=roster,
-               floors={"upstairs": {"state": "occupied" if who else "vacant", "rooms": ROOMS}}, rooms=rooms)
+               floors={"upstairs": {"state": floor or ("occupied" if who else "vacant"), "rooms": ROOMS}}, rooms=rooms)
 
     def tick(self, dt=30):
         self.now[0] += dt
@@ -124,7 +124,9 @@ class Upstairs(unittest.TestCase):
         calls = self.tick()
         self.assertIn("vacuum.pause", [c[0] for c in calls])
 
-    def test_a_stale_tracker_or_incomplete_roster_never_starts(self):
+    def test_a_stale_tracker_or_incomplete_roster_or_unknown_floor_never_starts(self):
+        self.occ({}, floor="unknown")
+        self.assertIsNone(self.run_until_start()[0])
         self.occ({}, fresh=False)
         self.assertIsNone(self.run_until_start()[0])
         self.occ({}, roster=False)
