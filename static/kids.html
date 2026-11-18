@@ -361,11 +361,14 @@ if(SANDBOX!=null){
   SANDBOX=decodeURIComponent(SANDBOX)||"states";HA_MODE=false;
   E=function(code){if(!code)return"";if(CUSTOM_ICONS[code])return '<img class="e" src="'+CUSTOM_ICONS[code]+'" alt="">';return '<span class="e">'+cp(code)+'</span>'};
   var SB=null,SB_ASKED=0;
+  function sbShift(o,d){if(Array.isArray(o)){for(var i=0;i<o.length;i++)o[i]=sbShift(o[i],d);return o}   // a static snapshot (demo_now): move its times to now
+    if(o&&typeof o==="object"){for(var k in o)o[k]=sbShift(o[k],d);return o}return typeof o==="number"&&o>1.5e9&&o<2.5e9?o+d:o}
+
   api=function(path,body){
     if(!body){if(SB)return Promise.resolve(SB);
       return fetch(SANDBOX,{cache:"no-store",credentials:"same-origin"}).then(function(r){return r.json()}).then(function(j){
         var st=(j.states||j)["sensor.chore_demo_state"];if(!st)throw "no demo state";
-        SB=JSON.parse(JSON.stringify(st.attributes));SB.whatsnew=null;SB.whatsnew_all=[];SB.announce=[];SB.announce_all=[];
+        SB=JSON.parse(JSON.stringify(st.attributes));if(SB.demo_now)SB=sbShift(SB,Date.now()/1000-SB.demo_now);SB.whatsnew=null;SB.whatsnew_all=[];SB.announce=[];SB.announce_all=[];
         SB.kid_open=SB.kid_open||{};SB.news_seen_kids={};SB.ann_seen_kids={};SB.now=Date.now()/1000;return SB})}
     var a=path.replace("/api/","").split("?")[0];
     if(a==="goal"){SB.goals=SB.goals||{};SB.goals[body.kid]=body.reward;return Promise.resolve({ok:true,state:SB})}

@@ -1555,7 +1555,7 @@ def push_state_sensor(state=None, last_result=None):
              "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"), "tidy_spaces": state.get("tidy_spaces", {}),
              "reward_ready": state.get("reward_ready"), "timers": state.get("timers"),
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
-             "awards": state.get("awards"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
+             "awards": state.get("awards"), "awards_seen": state.get("awards_seen"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "wind_down": state.get("wind_down"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"),
