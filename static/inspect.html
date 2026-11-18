@@ -201,14 +201,31 @@ if(HA_MODE){
     var hit=I.find(function(i){return nm.indexOf(String(i.name).toLowerCase())>=0||nm.indexOf(i.id)>=0});if(hit)haUserMe=hit.id}catch(e){}
   if(haUserMe)me=haUserMe;
 }
+/* Sandbox: a visitor's read-only demo (see kids.html): the real page from sensor.chore_demo_state, nothing is saved or sent */
+var SANDBOX=(location.search.match(/[?&]sandbox=([^&?]*)/)||[])[1];
+if(SANDBOX!=null){
+  SANDBOX=decodeURIComponent(SANDBOX)||"states";HA_MODE=false;
+  E=function(c){if(c&&CUSTOM_ICONS[c])return '<img class="e" src="'+CUSTOM_ICONS[c]+'" alt="">';return c?'<span class="e">'+cp(c)+'</span>':""};
+  var SB=null;
+  api=function(path,body){
+    if(!body){if(SB)return Promise.resolve(SB);
+      return fetch(SANDBOX,{cache:"no-store",credentials:"same-origin"}).then(function(r){return r.json()}).then(function(j){
+        var st=(j.states||j)["sensor.chore_demo_state"];if(!st)throw "no demo state";SB=JSON.parse(JSON.stringify(st.attributes));SB.now=Date.now()/1000;return SB})}
+    return Promise.resolve({ok:false,error:"Demo: nothing is saved",state:SB})};
+  flushL=function(){_q=[]};
+  document.addEventListener("DOMContentLoaded",function(){var b=document.createElement("div");
+    b.textContent="👀 Demo grown-ups' page: look around, nothing is saved";
+    b.style.cssText="position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:90;background:rgba(0,0,0,.65);color:#fff;font:600 15px system-ui;padding:6px 14px;border-radius:14px;pointer-events:none";
+    document.body.appendChild(b)});
+}
 if(ON_HUB){if(qby)me=qby;
   document.addEventListener("DOMContentLoaded",function(){});
   var BK=(location.search.match(/[?&]back=([a-z]+)/)||[])[1];
-  var BACK=BK==="now"?"/now":BK==="kids"&&HA_MODE?"/local/chore-kids.html":"/";   // the kitchen Hub's grown-up board comes back to itself; HA's Kids tab too
-  var hubIdle=null;function hubPoke(){clearTimeout(hubIdle);hubIdle=setTimeout(function(){location.href=BACK+"?v="+Date.now()},300000)}
+  var BACK=SANDBOX!=null?"chore-kids.html?sandbox="+encodeURIComponent(SANDBOX):BK==="now"?"/now":BK==="kids"&&HA_MODE?"/local/chore-kids.html":"/";   // the kitchen Hub's grown-up board comes back to itself; HA's Kids tab too
+  var hubIdle=null;function hubPoke(){clearTimeout(hubIdle);hubIdle=setTimeout(function(){location.href=BACK+(BACK.indexOf("?")>=0?"&":"?")+"v="+Date.now()},300000)}
   document.addEventListener("click",hubPoke,true);document.addEventListener("touchstart",hubPoke,{passive:true});hubPoke();
   setTimeout(function(){var d=document.createElement("button");d.textContent=BACK==="/now"?"✅ Done":"✅ Done — back to kids";d.className="ok";
-    d.style.cssText="position:fixed;top:10px;right:12px;z-index:70;font-size:22px;padding:10px 18px";d.onclick=function(){location.href=BACK+"?v="+Date.now()};document.body.appendChild(d)},50)}
+    d.style.cssText="position:fixed;top:10px;right:12px;z-index:70;font-size:22px;padding:10px 18px";d.onclick=function(){location.href=BACK+(BACK.indexOf("?")>=0?"&":"?")+"v="+Date.now()};document.body.appendChild(d)},50)}
 function toast(t){if(!t)return;$("toast").textContent=t;$("toast").classList.add("on");setTimeout(function(){$("toast").classList.remove("on")},1800)}
 function post(p,b,msg){if(!me){toast("Pick who you are first");return Promise.resolve()}b.by=me;return api(p,b).then(function(r){if(r.ok){S=r.state;render();if(msg)toast(msg)}else toast(r.error||"failed")})}
 function kidOf(id){return S.config.kids.find(function(k){return k.id===id})||{name:id}}
@@ -754,6 +771,7 @@ setInterval(function(){document.querySelectorAll(".cdu2[data-since]").forEach(fu
 var HOUSE_DONE={};
 function houseData(){
   if(HA_MODE){var h=hass(),st=h&&h.states["sensor.house_tasks"];return Promise.resolve(st?{on:true,items:st.attributes.items||[],private:st.attributes.private||[],to_review:st.attributes.to_review||0}:{on:false})}
+  if(SANDBOX!=null)return Promise.resolve({on:false});
   return fetch("/api/house_jobs?display=").then(function(r){return r.json()}).catch(function(){return {on:false}})}
 function hwhen(i){if(i.overdue)return '<span class="tag warn">overdue</span>';if(!i.due)return "";
   var d=new Date(i.due*1000);return '<span class="mute">'+(d.toDateString()===new Date().toDateString()?"today":d.toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"}))+'</span>'}

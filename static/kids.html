@@ -293,7 +293,8 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
 /* watchdog: independent of the main script, so a crash there can never strand a Hub on an old/broken page.
    Inside Home Assistant (/local/) the version comes from sensor.chore_state, and the reload waits a minute so the
    new copy has reached HA's /local/ folder; other query parameters (?kid=) are kept. */
-(function(){var HA=location.pathname.indexOf("/local/")===0,v0=null,due=0;
+(function(){if(/[?&]sandbox=/.test(location.search))return;   // a visitor's demo never reloads itself
+  var HA=location.pathname.indexOf("/local/")===0,v0=null,due=0;
   function on(id){var n=document.getElementById(id);return n&&n.classList.contains("on")}
   function go(){var q=HA?location.search.replace(/([?&])v=[^&]*(&|$)/,"$1").replace(/[?&]$/,""):"";location.replace(location.pathname+(q?q+"&":"?")+"v="+Date.now())}
   function seen(v){if(v==null)return;if(v0===null){v0=v;return}if(v===v0||on("m")||on("timer"))return;
@@ -351,6 +352,34 @@ if(HA_MODE){
   flushL=function(){_q=[]};                                            // usage logs are for the Hubs
 }
 if(LOCKED)document.documentElement.classList.add("locked");
+/* Sandbox: a visitor's read-only demo (e.g. on a guest floor plan), ?sandbox=<states url>. The real screen, from a copy of
+   the state without private details (sensor.chore_demo_state, read once); taps change only this page, never the chart,
+   and nothing is sent anywhere. The grown-up button pretends to ask the watch, then opens the grown-ups' page in the same mode. */
+var SANDBOX=(location.search.match(/[?&]sandbox=([^&?]*)/)||[])[1];
+if(SANDBOX!=null){
+  SANDBOX=decodeURIComponent(SANDBOX)||"states";HA_MODE=false;
+  E=function(code){if(!code)return"";if(CUSTOM_ICONS[code])return '<img class="e" src="'+CUSTOM_ICONS[code]+'" alt="">';return '<span class="e">'+cp(code)+'</span>'};
+  var SB=null,SB_ASKED=0;
+  api=function(path,body){
+    if(!body){if(SB)return Promise.resolve(SB);
+      return fetch(SANDBOX,{cache:"no-store",credentials:"same-origin"}).then(function(r){return r.json()}).then(function(j){
+        var st=(j.states||j)["sensor.chore_demo_state"];if(!st)throw "no demo state";
+        SB=JSON.parse(JSON.stringify(st.attributes));SB.whatsnew=null;SB.whatsnew_all=[];SB.announce=[];SB.announce_all=[];
+        SB.kid_open=SB.kid_open||{};SB.news_seen_kids={};SB.ann_seen_kids={};SB.now=Date.now()/1000;return SB})}
+    var a=path.replace("/api/","").split("?")[0];
+    if(a==="goal"){SB.goals=SB.goals||{};SB.goals[body.kid]=body.reward;return Promise.resolve({ok:true,state:SB})}
+    if(a==="adult_request"){SB_ASKED=Date.now();return Promise.resolve({ok:true,nonce:"demo"})}
+    if(a==="adult_status")return new Promise(function(res){setTimeout(function(){res({status:"ok"})},Math.max(0,3000-(Date.now()-SB_ASKED)))});   // the grown-up "answers" in 3 s
+    if(/_seen$|^exit$|^log$/.test(a))return Promise.resolve({ok:true,state:SB});
+    return Promise.resolve({ok:false,error:"This is a demo: nothing really changes",state:SB})};
+  adultPage=function(by){return "chore-inspect.html?sandbox="+encodeURIComponent(SANDBOX)+"&hub=1&back=kids&by="+(by||((S&&S.config.inspectors||[])[0]||{}).id||"")};
+  flushL=function(){_q=[]};
+  getSeen=function(){return 1e12};setSeen=function(){};showNewAwards=function(){};   // no pile of old results and level-ups
+  document.addEventListener("DOMContentLoaded",function(){var b=document.createElement("div");
+    b.textContent="👀 Demo: look around, nothing you tap changes the real chart";
+    b.style.cssText="position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:90;background:rgba(0,0,0,.65);color:#fff;font:600 15px system-ui;padding:6px 14px;border-radius:14px;pointer-events:none";
+    document.body.appendChild(b)});
+}
 var lastSig=null;
 function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");location.href=adultPage(s.adult_go);return}   // approved on the watch, even if this page reloaded meanwhile
   var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
@@ -1306,6 +1335,7 @@ function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();
   L("go_home",{why:typeof why==="string"?why:"tap"});$("awards").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
 $("exit").onclick=function(){L("hub_exit");$("exit").style.background="#ffe082";$("exit").innerHTML=E("1f44b")+" Bye!";api("/api/exit",{})};
+if(SANDBOX!=null)$("exit").onclick=function(){try{window.parent.postMessage({chore_demo:"close"},"*")}catch(e){}};   // the demo's host closes it
 var IDLE_MS=300000; // back to "Who are you?" after 5 min untouched
 function poke(){clearTimeout(idleT);idleT=setTimeout(function(){if($("timer").classList.contains("on")&&!tmrHidden[(tmrCur||"").split(":")[0]])return poke();
   $("news").classList.remove("on");goHome("idle")},IDLE_MS)}

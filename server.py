@@ -1499,6 +1499,40 @@ def room_log(state):
     return res
 
 
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "last_result")
+DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
+
+
+def demo_attrs(attrs):
+    """sensor.chore_state for a visitor's demo (house.json demo_state names the sensor): no free text written by
+    the family, no other household, no where-the-kids-are, no addresses for letters, nothing a screen didn't show"""
+    d = json.loads(json.dumps({k: v for k, v in attrs.items() if k not in DEMO_DROP}, default=str))
+    d["friendly_name"] = "Chore demo state"
+    c = d.get("config") or {}
+    c.pop("households", None)
+    c["kids"] = [{k: x.get(k) for k in ("id", "name", "color", "icon")} for x in c.get("kids") or []]
+    c["inspectors"] = [{k: x.get(k) for k in ("id", "name", "icon")} for x in (c.get("inspectors") or [])[:1]]   # the lead grown-up only
+    for ch in c.get("chores") or []:
+        for k in ("note", "home_entity"):
+            ch.pop(k, None)
+    for h in d.get("history") or []:
+        for k in DEMO_FREE_TEXT:
+            h.pop(k, None)
+    for b in (d.get("board") or {}).values():
+        if isinstance(b, dict):
+            for k in DEMO_FREE_TEXT:
+                b.pop(k, None)
+    if isinstance(d.get("chore_mode"), dict):
+        d["chore_mode"]["home"] = []
+    for k in ("dress", "chores_first"):
+        if isinstance(d.get(k), dict):
+            d[k].pop("items", None)
+            for v in d[k].values():
+                if isinstance(v, dict):
+                    v.pop("items", None)
+    return d
+
+
 def push_state_sensor(state=None, last_result=None):
     """sensor.chore_state: everything the HA-served inspection page needs (kept well under 16 KB)."""
     if not HA_URL:   # no Home Assistant configured
@@ -1538,6 +1572,15 @@ def push_state_sensor(state=None, last_result=None):
             GUARD["room_log_sig"], GUARD["room_log_ts"] = sig, time.time()
     except Exception as ex:  # noqa: BLE001
         print("room log push failed", ex, flush=True)
+    if HOUSE.get("demo_state"):   # a visitor's read-only demo of the kids' screen: the same, minus private details
+        try:
+            demo = demo_attrs(attrs)
+            sig = json.dumps(demo, sort_keys=True, default=str)
+            if sig != GUARD.get("demo_sig") and time.time() - GUARD.get("demo_ts", 0) > 60:
+                ha_post_state(HOUSE["demo_state"], str(int(time.time())), demo, tok)
+                GUARD["demo_sig"], GUARD["demo_ts"] = sig, time.time()
+        except Exception as ex:  # noqa: BLE001
+            print("demo state push failed", ex, flush=True)
     body = json.dumps({"state": str(int(time.time())), "attributes": attrs}).encode()
     req = urllib.request.Request(f"{HA_URL}/api/states/sensor.chore_state", data=body,
                                  headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
