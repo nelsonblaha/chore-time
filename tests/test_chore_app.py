@@ -886,6 +886,29 @@ class RobotLocatorFreshness(unittest.TestCase):
         self.assertEqual((s["observed_at"], s["published_at"]), (1031, 1031))   # a fresh fix, re-sent
 
 
+    def test_motion_during_an_autopilot_run_teaches_the_robots_room(self):
+        # "use motion detectors to feed into the self-improving vacuum location system"
+        rc = self.g["HOUSE"]["robot_locator"]["robots"][self.V]
+        rc["motion"], rc["motion_when"] = {"binary_sensor.den_motion": "Den"}, "sensor.auto"
+        self.L = self.fresh()
+        auto, m = {"state": "running"}, {"state": "off"}
+        self.ha["sensor.auto"], self.ha["binary_sensor.den_motion"] = (lambda: auto), (lambda: m)
+        self.pos = (30000, 30000)                              # somewhere never learned
+        self.tick(1000)
+        m["state"] = "on"
+        self.tick(1010)
+        self.assertIsNone(self.L.classify(self.V, 30000, 30000)[0])   # not yet: a person would pause the run first
+        self.tick(1080)
+        self.assertEqual(self.L.classify(self.V, 30000, 30000)[0], "Den")
+        m["state"] = "off"
+        self.tick(1100)
+        auto["state"] = "paused"                               # a person came in: their motion teaches nothing
+        m["state"] = "on"
+        self.pos = (50000, 50000)
+        self.tick(1110)
+        self.tick(1200)
+        self.assertIsNone(self.L.classify(self.V, 50000, 50000)[0])
+
     def test_a_blank_map_room_mid_clean_holds_the_last_room(self):
         # 11-18: the integration's room blanked to unknown for 30 s to 2.5 min at a time while the robot cleaned the
         # living room, and the floor plan jumped it back to its dock each time

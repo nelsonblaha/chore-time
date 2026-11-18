@@ -22,7 +22,9 @@ attributes:
 Off-cleaning the map room is never used (it is frozen there); a failed or missing position, an unlearned spot or a
 tie between rooms reads unknown. Fixes are kept in memory only, so a restart never brings back an old one. The
 sensor is re-sent at least every 30 s, so a consumer can expire it on its own clock if this stops.
-Optional per robot: "dock_room", the room reported while docked or charging (otherwise unknown).
+Optional per robot: "dock_room", the room reported while docked or charging (otherwise unknown). "motion"
+({motion sensor: robot room name}) and "motion_when" (the autopilot's status sensor): during an autopilot run a
+motion sensor turning on is the robot passing, and teaches its outline that room (confirmed a minute later).
 """
 import json
 import time
@@ -36,6 +38,7 @@ SEARCH = 3          # look this many cells around an unlearned position
 LEARN_S = 30
 LOCATE_S = 15
 POS_TTL = 60        # a room is trusted this long after it was seen
+MOTION_CONFIRM_S = 60   # a motion sighting counts only if the run is still going (not paused for a person) this long after
 HOLD_S = 300        # while cleaning, a blank map room keeps the last room seen this long (the integration blanks often)
 HEARTBEAT_S = 30    # re-send an unchanged sensor this often
 AWAY_STATES = ("returning", "paused", "idle", "error")
@@ -64,6 +67,8 @@ class Locator:
         self.last = {}          # vacuum -> last position call ts
         self.fix = {}           # vacuum -> {"xy", "room", "votes", "at"}: the newest successful position (memory only)
         self.seen = {}          # vacuum -> (map room, when) last seen while cleaning
+        self.mprev = {}         # motion sensor -> last state
+        self.mwait = []         # motion sightings waiting to be confirmed: {vacuum, room, xy, at}
         self.pub = {}           # vacuum -> last published signature
         self.pub_at = {}        # vacuum -> when it was last sent
 
@@ -165,15 +170,45 @@ class Locator:
             xy = self.position(vac)
             if not xy:
                 continue
-            for _ in range(3):
+            for _ in range(int(t.get("weight", 3))):
                 self.learn(vac, *xy, t["room"])
-            self.fix[vac] = {"xy": xy, "room": t["room"], "votes": {t["room"]: "camera"}, "at": now}
+            self.fix[vac] = {"xy": xy, "room": t["room"], "votes": {t["room"]: t.get("how", "camera")}, "at": now}
             changed = True
+        return changed
+
+    def motion(self, now):
+        """Motion sensors as robot sightings: while this floor's autopilot is on a run (the floor was empty 20 minutes,
+        and the autopilot pauses for a person), a room's motion sensor turning on is the robot passing. Its position
+        then learns that room (1 vote: a motion sensor sees more than its own room), once the run is still going a
+        minute later (a person would have paused it)."""
+        changed = False
+        for vac, rc in self.cfg.items():
+            sensors, when = rc.get("motion") or {}, rc.get("motion_when")
+            if not sensors or not when:
+                continue
+            running = self.g["ha_get"](when, self.tok).get("state") == "running"
+            for ent, room in sensors.items():
+                st = self.g["ha_get"](ent, self.tok).get("state")
+                rising = st == "on" and self.mprev.get(ent) == "off"
+                self.mprev[ent] = st
+                if rising and running:
+                    xy = self.position(vac)
+                    if xy:
+                        self.mwait.append({"vacuum": vac, "room": room, "xy": xy, "at": now, "when": when})
+        keep = []
+        for w in self.mwait:
+            if now - w["at"] < MOTION_CONFIRM_S:
+                keep.append(w)
+            elif self.g["ha_get"](w["when"], self.tok).get("state") == "running":
+                self.learn(w["vacuum"], *w["xy"], w["room"])
+                changed = True
+        self.mwait = keep
         return changed
 
     def tick(self):
         now = time.time()
         changed = self.teach(now)
+        changed = self.motion(now) or changed
         for vac, rc in self.cfg.items():
             vs = self.g["ha_get"](vac, self.tok)
             st, since = vs.get("state"), epoch(vs)
