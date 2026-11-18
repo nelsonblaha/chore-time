@@ -98,6 +98,8 @@ PREV_GRACE_S = 90            # sensors of the room it just left still belong to 
 RETRY_S = 30 * 60
 BETWEEN_QUIET_S = 5 * 60     # the next group of rooms needs 5 quiet minutes, not the 20 s a paused room needs to resume
 MAX_RUN_S = 3 * 3600         # a run older than this never launches another group (a stuck robot freed hours later goes home)
+LEFTOVER_S = 10 * 60         # docked this long, charged, yet still "cleaning": the robot left its task unfinished
+LEFTOVER_BATTERY = 90        # (it resumes a recharge stop well before this; a mop wash takes a few minutes)
 SEG_LIGHTS = {}   # segment -> room light-mode selects, lit white while the robot finds its way home
 NIGHT_CARPET_OFF = False   # turn the robot's Carpet Boost off at night (vacuum.night_carpet_boost_off)
 VOICE = None          # optional robot voice-volume number: 0 at night, daytime level restored in the morning
@@ -322,6 +324,18 @@ class Pilot:
         if len(segs) >= 2:
             return "walked through " + ", ".join(sorted(segs))
         return None
+
+    def leftover(self, vs, incl, now):
+        """Docked LEFTOVER_S+, battery LEFTOVER_BATTERY+, and the cleaning flag still on: the robot keeps an unfinished
+        task it will never resume by itself (seen 11-17: a paused/resumed segment run docked at 19:52 and the flag stayed
+        on all night). That is not "busy": the run is over and a new one may start."""
+        if vs != "docked" or incl != "on":
+            return False
+        try:
+            full = not BATTERY or float(self.get(BATTERY).get("state") or 0) >= LEFTOVER_BATTERY
+        except (TypeError, ValueError):
+            full = False
+        return full and now - epoch(self.get(VAC)) >= LEFTOVER_S
 
     def eligible(self):
         sealed = self.sealed_segments()
@@ -630,7 +644,7 @@ class Pilot:
                 info["eligible"] = rooms
                 q, who = self.quiet_for() if rooms else (None, None)
                 info["quiet_min"] = None if q is None else round(min(q, 99 * 3600) / 60)
-                ok_robot = vs == "docked" and incl != "on" and \
+                ok_robot = vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
                     (not BATTERY or float(self.get(BATTERY).get("state") or 0) >= 50) and (not ERROR or self.get(ERROR).get("state") in ("none", None))
                 if rooms and not ok_robot:
                     info["why"] = "robot busy/not ready"
@@ -656,8 +670,11 @@ class Pilot:
                         self.call("vacuum.set_fan_speed", {"entity_id": VAC, "fan_speed": t})
                         D["fan"] = t
                         self.log("fan", fan=t)
-            done = D.get("saw_clean") and vs == "docked" and incl != "on"
-            if done:
+            left = self.leftover(vs, incl, now)
+            done = D.get("saw_clean") and vs == "docked" and (incl != "on" or left)
+            if done and left:
+                self.finish("docked with the robot's task left unfinished (its cleaning flag stayed on)", now)
+            elif done:
                 D["docked_since"] = D.get("docked_since") or now
                 if now - D["docked_since"] >= 60:
                     if D.get("trouble"):
@@ -712,7 +729,7 @@ class Pilot:
                     D["phase"] = "docking"
                     self.log("resume_failed")
         elif ph == "docking":
-            if vs == "docked" and incl != "on":
+            if vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)):
                 self.finish("docked: person stayed downstairs", now)
             elif vs == "docked":
                 D["docking_since"] = D.get("docking_since") or now
