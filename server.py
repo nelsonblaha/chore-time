@@ -1183,6 +1183,8 @@ def derive():
             r["chore_name"] = "Toy goodbye: " + (r.get("label") or (r.get("note") or "a toy").capitalize())
         if r.get("covers") and ch.get("bundle"):
             r["chore_name"] += " (" + ", ".join(chores.get(x, {}).get("name", x) for x in r["covers"]) + ")"
+        if r.get("partial_of"):   # a robot rescue + tidying part of the room: the inspector adds stars for that part
+            r["chore_name"] += " + tidied part of " + ", ".join(chores.get(x, {}).get("name", x) for x in r["partial_of"])
         if r["chore"] == "toy_swap":
             kc = next((k for k in c["kids"] if k["id"] == r["kid"]), {})
             on = r.get("label") or r.get("old_toy_name") or next(
@@ -1223,6 +1225,9 @@ def derive():
         # partly-done work already paid since the last full cleaning comes off the price (a 6-point room with 2 already paid for a part costs 4)
         part_paid = sum(int(r.get("awarded") or 0) for r in reports.values()
                         if r.get("partial") and r["chore"] == cid and r["status"] == "inspected" and (r.get("inspected_ts") or 0) > last_ok)
+        part_paid += sum(max(0, int(r.get("awarded") or 0) - int(r.get("rescue_base") or 0)) // len(r["partial_of"])   # a robot
+                         for r in reports.values() if cid in (r.get("partial_of") or []) and r["status"] == "inspected"   # rescue's
+                         and (r.get("inspected_ts") or 0) > last_ok)                                                     # tidy part
         if part_paid and price is not None and not is_rest:
             price = max(0, price - part_paid)
             bonus = True if price != ch.get("points") else bonus
@@ -1420,10 +1425,7 @@ def derive():
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
             "history": history[:200], "now": time.time(),
-            "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, sorted(evs + [
-                {"type": "space_tidy", "space": x, "tidy": True, "by": r["kid"], "ts": r["inspected_ts"]}   # a robot rescue tidied it
-                for r in reports.values() if r["status"] == "inspected" and not r.get("partial") for x in r.get("spaces") or []],
-                key=lambda e: e["ts"]), time.time()),
+            "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
                           started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
@@ -2196,12 +2198,12 @@ class H(BaseHTTPRequestHandler):
                 extra["old_toy"] = str(b.get("old_toy") or "other")[:20]
             if ch_.get("bundle"):
                 extra["covers"] = bd["covers"]
-            if ch_.get("help") == "rescue":   # a robot rescue also tidies the room it got stuck in
+            if ch_.get("help") == "rescue":   # a robot rescue comes with tidying part of the room it got stuck in
                 op = next((e for e in reversed(read_events()) if e["type"] == "reopen" and e.get("chore") == b["chore"]), {})
                 sp = [x for x in HOUSE.get("tidy_spaces") or [] if x["id"] in (op.get("spaces") or [])]
                 if sp:
-                    extra["covers"] = vacuum_help.covers_for(b["chore"], sp, st["board"], st["active"], st["paused"], b["kid"])
-                    extra["spaces"] = [x["id"] for x in sp if not x.get("chores")]
+                    extra["partial_of"] = vacuum_help.partial_of(sp)
+                    extra["rescue_base"] = bd["price"]
             if b["chore"] != "other" and not ch_.get("shared") and (any(a["chore"] == b["chore"] and b["kid"] not in (a.get("team") or [k])
                                               for k, a in st["active"].items()) or
                                           any(z["chore"] == b["chore"] and b["kid"] not in z["team"] for z in st["paused"].values())):

@@ -1,21 +1,22 @@
 """Help the robot! Hero jobs that open by themselves when a robot vacuum needs a kid.
 
   * Rescue: the robot is stuck (tangled brush, trapped, jammed wheels, stranded...). The job: free it, press the Home
-    button on top so it can go home, then tidy the room it got stuck in. Stuck on something in a room (a brush or
-    wheel jam, trapped, bumper stuck) also marks that room untidy at once, so the map and the autopilot see it.
+    button on top so it can go home, and (when it got stuck on something) tidy at least part of that room: the rescue
+    pays its own stars plus partial stars for the part tidied, which come off the room's own job. Stuck on something
+    in a room (a brush or wheel jam, trapped, bumper stuck) also marks that room untidy at once.
   * Water: the dock's clean water tank is empty or its dirty water tank is full. The job: change the water.
 
 Nothing else opens a job: worn parts, filters, the dust bag and other dock upkeep stay grown-up maintenance.
 
 Each job is a built-in on-demand chore per robot ("help_rescue_<id>", "help_water_<id>"). It opens with a one-time
 price, so it arrives as BIG NEWS (flashing, with a fanfare) on the kids' screens, and it goes through inspection like
-any job. A rescue covers the room's own jobs, so passing it marks that room tidy too. Jobs never open during bedtime
+any job. Jobs never open during bedtime
 (the room is still marked untidy at once). If the robot gets going again without a kid (a grown-up fixed it) and no
 kid has started or reported the job within CLOSE_AFTER_S, the job closes again; the room stays untidy.
 
 house.json:
   "vacuum_help": {
-    "points": {"rescue": 3, "water": 2},          # rescue: plus the price of the room's own jobs it covers
+    "points": {"rescue": 3, "water": 2},          # rescue: plus whatever the inspector gives for the part tidied
     "robots": [{"id": "down", "name": "Downstairs Robot", "floor": "Downstairs",
                 "error": "sensor.downstairs_robot_vacuum_error",
                 "dock_error": "sensor.downstairs_robot_dock_error",                      # optional
@@ -76,8 +77,9 @@ def chores(cfg):
         common = {"points": None, "cooldown_h": 0, "on_demand": True, "household": r.get("household"),
                   "floor": r.get("floor", "Other"), "help_robot": r["id"], "order": -50}
         out.append(dict(common, id=rescue_id(r), name="Rescue " + r["name"] + "!", icon="1f9b8", help="rescue",
-                        desc="A robot hero mission: free " + r["name"] + ", press the Home button on top so it can go "
-                             "home, then tidy the room where it got stuck."))
+                        desc="A robot hero mission: free " + r["name"] + " and press the Home button on top so it can go "
+                             "home. It comes with tidying: tidy at least part of the room where it got stuck, for "
+                             "extra stars for that part."))
         out.append(dict(common, id=water_id(r), name="Fresh water for " + r["name"], icon="1f4a7", help="water",
                         desc=r["name"] + " is thirsty! Change its water at the dock: empty the dirty tank, fill the "
                              "clean one."))
@@ -129,15 +131,18 @@ def words(spaces, room):
     return " and ".join(names) if names else (room or "")
 
 
-def rescue_note(robot, n, spaces, room):
+def rescue_note(robot, n, spaces, room, base=3):
     where = words(spaces, room)
     step2 = "Carry it gently back onto its dock." if n["error"] in CARRY else \
         "Press the Home button on top so it can go home."
     steps = ([] if n["error"] in CARRY else ["Free it: pull out whatever it is caught on."]) + [step2]
-    if spaces and n["error"] in TIDY:
-        steps.append("Tidy " + where + " so it never gets stuck there again!")
+    tidy = bool(spaces) and n["error"] in TIDY
+    if tidy:
+        steps.append("Then tidy at least part of " + where + " so it never gets stuck there again!")
+    pay = ("%d⭐ for the rescue, plus stars for the part of %s you tidy. The rescue comes with tidying: do at least "
+           "some of it!" % (base, where)) if tidy else "%d⭐ for the rescue." % base
     return (robot["name"] + " needs a hero! " + ("It is stuck in " + where + ": " if where else "It is stuck: ") +
-            STUCK[n["error"]] + ".\n" + "\n".join(steps))
+            STUCK[n["error"]] + ".\n" + "\n".join(steps) + "\n" + pay)
 
 
 def water_note(robot, n):
@@ -162,21 +167,10 @@ def untidy_events(spaces, board, space_rows, robot, room_name):
     return evs
 
 
-def covers_for(cid, spaces, board, active, paused, kid):
-    """What a rescue report covers: the job itself plus the stuck room's own jobs nobody else has taken or done."""
-    taken = {a["chore"] for k, a in list(active.items()) + list(paused.items()) if k != kid}
-    out = [cid]
-    for s in spaces:
-        for j in s.get("chores") or []:
-            b = board.get(j) or {}
-            if j not in out and j not in taken and not b.get("clean_until") and not b.get("pending_by"):
-                out.append(j)
-    return out
-
-
-def rescue_price(base, spaces, board):
-    jobs = list(dict.fromkeys(j for s in spaces for j in s.get("chores") or []))
-    return int(base) + sum(int((board.get(j) or {}).get("base") or 0) for j in jobs)
+def partial_of(spaces):
+    """The stuck room's own jobs: stars a grown-up pays for tidying part of the room on a rescue come off their price
+    (like any partly-done job), so nobody is paid twice for the same part."""
+    return list(dict.fromkeys(j for s in spaces for j in s.get("chores") or []))
 
 
 def busy(cid, st):
@@ -248,9 +242,9 @@ class Helper:
                         if busy(cid, st) or (st["board"].get(cid) or {}).get("opened"):
                             K["opened"] = True        # already open (e.g. from before a restart)
                         else:
-                            note = rescue_note(robot, cur, sp, K.get("room")) if kind == "rescue" else water_note(robot, cur)
-                            price = rescue_price(pts.get("rescue", 3), sp if cur.get("error") in TIDY else [], st["board"]) \
-                                if kind == "rescue" else int(pts.get("water", 2))
+                            note = rescue_note(robot, cur, sp, K.get("room"), int(pts.get("rescue", 3))) if kind == "rescue" \
+                                else water_note(robot, cur)
+                            price = int(pts.get("rescue", 3)) if kind == "rescue" else int(pts.get("water", 2))
                             g["append"]({"type": "reopen", "chore": cid, "by": "vacuum", "note": note,
                                          "help": kind, "episode": ep,
                                          "spaces": (K.get("spaces") or []) if cur.get("error") in TIDY else []})
