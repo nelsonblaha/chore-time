@@ -178,6 +178,88 @@ class Upstairs(unittest.TestCase):
         launch, _ = self.run_until_start()
         self.assertEqual(launch["rooms"], ["Bath"])                  # only the pressed room
 
+    def button(self, gesture="single", rooms=None, request_id="press-1"):
+        return self.p.button_request({"gesture": gesture, "rooms": rooms or [], "request_id": request_id})
+
+    def finish_manual_clean(self):
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        self.tick(10)
+        self.tick(70)                                                # confirmed real cleaning, not a failed launch
+        self.S("vacuum.up", "returning")
+        self.tick(10)
+        self.S("vacuum.up", "docked")
+        self.S("binary_sensor.up_cleaning", "off")
+        self.tick(10)
+        self.tick(61)                                                # one minute docked confirms completion
+
+    def test_physical_button_fifo_is_durable_idempotent_and_runs_in_order(self):
+        one = self.button(rooms=["Bath"], request_id="one")
+        two = self.button("double", ["Hall"], "two")
+        self.assertTrue(one["ok"] and two["ok"])
+        self.assertEqual(self.button(rooms=["Bedroom"], request_id="one")["why"], "already queued")
+        self.assertEqual([x["id"] for x in self.p.D["manual_queue"]], ["one", "two"])
+        self.p.save()
+        self.assertEqual([x["id"] for x in __import__("json").loads(self.p.path.read_text())["manual_queue"]], ["one", "two"])
+
+        calls = self.tick()
+        launch = next(d for svc, d in calls if svc == "script.vacuum_clean_rooms")
+        self.assertEqual(launch["rooms"], ["Bath"])
+        self.assertEqual(self.p.D["manual_active"], "one")
+        self.finish_manual_clean()
+        self.assertEqual([x["id"] for x in self.p.D["manual_queue"]], ["two"])
+        launch = next(d for svc, d in self.tick() if svc == "script.vacuum_clean_rooms")
+        self.assertEqual(launch["rooms"], ["Hall"])
+
+    def test_fifo_never_preempts_another_clean_pause_return_or_dock_break(self):
+        self.button(rooms=["Bath"])
+        for state, cleaning in (("cleaning", "on"), ("paused", "on"), ("returning", "on"), ("docked", "on")):
+            self.S("vacuum.up", state)
+            self.S("binary_sensor.up_cleaning", cleaning)
+            calls = self.tick()
+            self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
+            self.assertNotIn("vacuum.return_to_base", [svc for svc, _ in calls])
+        self.S("binary_sensor.up_cleaning", "off")
+        calls = self.tick()
+        self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
+
+    def test_failed_manual_launch_stays_at_fifo_head_and_retries(self):
+        self.button(rooms=["Bath"])
+        self.tick()
+        self.tick(301)                                               # never entered cleaning
+        head = self.p.D["manual_queue"][0]
+        self.assertEqual(head["attempts"], 1)
+        self.assertIn("never started", head["last_failure"])
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(299)])
+        calls = self.tick(2)
+        self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
+
+    def test_long_press_skips_accessible_untidy_and_other_blocked_rooms(self):
+        self.tidy["bath"] = {"state": "untidy"}
+        self.S("input_boolean.bedroom_guest", "on")
+        result = self.button("long", [], "whole-1")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["rooms"], ["Hall", "Study", "Study Closet"])
+        self.assertIn("Bath (untidy)", result["why"])
+        self.assertIn("Bedroom", result["why"])
+
+    def test_long_press_uses_genuine_whole_floor_when_no_accessible_room_is_untidy(self):
+        self.tidy["study"] = {"state": "untidy"}
+        self.S("binary_sensor.study_hall_door", "off")
+        self.S("binary_sensor.study_bath_door", "off")
+        result = self.button("long", [], "whole-2")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["rooms"], [])
+        self.assertTrue(self.p.D["manual_queue"][0]["whole_floor"])
+        calls = self.tick()
+        self.assertIn(("vacuum.start", {"entity_id": "vacuum.up"}), calls)
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
+
+    def test_button_validation_rejects_unknown_rooms_and_empty_short_gestures(self):
+        self.assertFalse(self.button(rooms=["Not a room"])["ok"])
+        self.assertFalse(self.button(rooms=[])["ok"])
+        self.assertFalse(self.p.button_request({"gesture": "triple", "rooms": ["Bath"], "request_id": "x"})["ok"])
+
     def gives_up_at_once(self):
         launch, _ = self.run_until_start()
         self.assertIsNotNone(launch)

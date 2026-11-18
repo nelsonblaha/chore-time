@@ -19,6 +19,7 @@ More robots: each gets its own copy (server loads this module once per house.jso
   tvs             which TVs count as someone here ([] = none on this floor)
 """
 import json
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
@@ -158,6 +159,8 @@ class Pilot:
     def __init__(self, g, key="vacuum"):
         self.g = g
         configure(g["HOUSE"][key])
+        self.floor = FLOOR
+        self.lock = threading.RLock()
         self.path = g["DATA"] / ("vacuum_auto.json" if key == "vacuum" else "vacuum_auto_%s.json" % key)
         try:
             self.D = json.loads(self.path.read_text())
@@ -167,8 +170,11 @@ class Pilot:
         self.D.setdefault("phase", "idle")
         self.D.setdefault("runs", [])
         self.D.setdefault("incomplete", [])
+        self.D.setdefault("manual_queue", [])
+        self.D.setdefault("manual_seen", {})
         self.tok = g["ha_token"]()
         self.last_pub = None
+        g.setdefault("VACUUM_PLANNERS", {})[self.floor] = self
         if not self.D["visits"]:
             self.backfill()
 
@@ -261,6 +267,94 @@ class Pilot:
     def sealed_segments(self):
         _, sealed = self.occ_presence() if OCC else (None, set())
         return {seg for r in sealed for seg in ((OCC.get("seal") or {}).get(r) or {}).get("segments") or []}
+
+    def closed_segments(self):
+        """Robot rooms behind entrances that are all positively closed, occupied or not."""
+        return {seg for seal in (OCC.get("seal") or {}).values()
+                if seal.get("doors") and all(self.get(d).get("state") == "off" for d in seal["doors"])
+                for seg in (seal.get("segments") or [])}
+
+    def untidy_segments(self):
+        st = self.g["derive"]()
+        tidy = st.get("tidy_spaces") or {}
+        out = set()
+        for seg, rooms in SEG_ROOMS.items():
+            for space in self.g["HOUSE"].get("tidy_spaces") or []:
+                mapped = set(space.get("map_rooms") or [space["id"]])
+                if mapped & set(rooms) and (tidy.get(space["id"]) or {}).get("state") == "untidy":
+                    out.add(seg)
+        return out
+
+    def button_request(self, body):
+        """Idempotently append one physical-button selection to this floor's durable FIFO."""
+        gesture = str(body.get("gesture") or "")
+        request_id = str(body.get("request_id") or "").strip()[:160]
+        supplied = body.get("rooms")
+        if gesture not in ("single", "double", "long"):
+            return {"ok": False, "rooms": [], "why": "unknown gesture"}
+        if not request_id:
+            return {"ok": False, "rooms": [], "why": "request_id is required"}
+        if not isinstance(supplied, list) or any(not isinstance(r, str) for r in supplied):
+            return {"ok": False, "rooms": [], "why": "rooms must be a list"}
+        supplied = list(dict.fromkeys(supplied))
+        unknown = [r for r in supplied if r not in SEGMENTS]
+        if unknown:
+            return {"ok": False, "rooms": [], "why": "unknown room: " + unknown[0]}
+        D = self.D
+        D.setdefault("manual_queue", [])
+        seen = D.setdefault("manual_seen", {})
+        if request_id in seen:
+            return {"ok": True, "rooms": seen[request_id]["rooms"], "why": "already queued"}
+        if gesture != "long" and not supplied:
+            return {"ok": False, "rooms": [], "why": "this gesture selected no rooms"}
+
+        skipped = []
+        rooms = supplied
+        whole_floor = False
+        if gesture == "long":
+            status = self.segment_status()
+            closed = self.closed_segments()
+            untidy = self.untidy_segments()
+            accessible_untidy = untidy - closed
+            if not accessible_untidy:
+                rooms, whole_floor = [], True
+            else:
+                candidates = supplied or list(SEGMENTS)
+                rooms = []
+                for seg in candidates:
+                    why = (status.get(seg) or {}).get("why", "")
+                    blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
+                    if seg in closed:
+                        skipped.append(seg + " (closed off)")
+                    elif blocked_other:
+                        skipped.append(seg + " (" + why + ")")
+                    elif seg in untidy:
+                        skipped.append(seg + " (untidy)")
+                    else:
+                        rooms.append(seg)
+        if not rooms and not whole_floor:
+            why = "no accessible allowed rooms"
+            if skipped:
+                why += ": " + "; ".join(skipped)
+            return {"ok": False, "rooms": [], "why": why}
+
+        now = time.time()
+        item = {"id": request_id, "gesture": gesture, "rooms": rooms, "whole_floor": whole_floor, "created": now,
+                "attempts": 0, "next_attempt": 0}
+        D["manual_queue"].append(item)
+        seen[request_id] = {"rooms": rooms, "ts": now}
+        for old, _ in sorted(seen.items(), key=lambda x: x[1].get("ts", 0))[:-200]:
+            seen.pop(old, None)
+        self.log("manual_queued", request_id=request_id, gesture=gesture, rooms=rooms, skipped=skipped,
+                 position=len(D["manual_queue"]))
+        self.save()
+        behind = D.get("phase") != "idle" or self.get(VAC).get("state") not in ("docked", "idle", "charging") \
+            or self.get(IN_CLEAN).get("state") == "on"
+        why = "queued whole floor" if whole_floor else "queued"
+        why += " behind current robot work" if behind else " next"
+        if skipped:
+            why += "; skipped " + ", ".join(skipped)
+        return {"ok": True, "rooms": rooms, "why": why}
 
     def occ_quiet(self):
         now = time.time()
@@ -569,6 +663,11 @@ class Pilot:
 
     def launch(self, now):
         gr = self.D["groups"][self.D["gi"]]
+        if gr["mode"] == "whole_floor":
+            self.call("vacuum.start", {"entity_id": VAC})
+            self.D.update(group_started=now, saw_clean=False, fan=None, docked_since=0)
+            self.log("launch", rooms=[], mode="whole_floor")
+            return
         fan = "smart_mode" if gr["mode"] == "smart_mode" else self.tier()
         self.call("select.select_option", {"entity_id": MODE_SEL, "option": gr["mode"]})
         self.call("vacuum.set_fan_speed", {"entity_id": VAC, "fan_speed": fan})
@@ -600,23 +699,67 @@ class Pilot:
         sealed = self.sealed_segments()
         return [seg for seg, d in self.segment_status().items() if d.get("explore") and seg not in sealed]
 
-    def start(self, rooms, now, explore=False):
+    def start(self, rooms, now, explore=False, run_kind="auto", request_id=None, whole_floor=False):
         a = self.get(VAC).get("attributes") or {}
         self.D["saved"] = {"fan": a.get("fan_speed"), "mode": self.get(MODE_SEL).get("state")}
         vac = [r for r in rooms if r not in MOP]
         mop = [r for r in rooms if r in MOP]
-        groups = ([{"mode": "vacuum", "rooms": vac}] if vac else []) + ([{"mode": "vac_and_mop", "rooms": mop}] if mop else [])
-        if self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
+        groups = ([{"mode": "whole_floor", "rooms": []}] if whole_floor else
+                  ([{"mode": "vacuum", "rooms": vac}] if vac else []) +
+                  ([{"mode": "vac_and_mop", "rooms": mop}] if mop else []))
+        if not whole_floor and self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
             groups = [{"mode": "smart_mode", "rooms": list(rooms)}]
         self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None,
                       clean_first=0, clean_last=0, saw_clean=False, docked_since=0, docking_since=0,
-                      resume_fallback=False, explore=explore)
+                      resume_fallback=False, explore=explore, run_kind=run_kind,
+                      manual_active=request_id if run_kind == "manual" else None)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
-        self.log("start", rooms=rooms, saved=self.D["saved"], explore=explore)
+        self.log("start", rooms=rooms, saved=self.D["saved"], explore=explore,
+                 run_kind=run_kind, request_id=request_id, whole_floor=whole_floor)
         self.launch(now)
+
+    def manual_wait(self, vs, incl, now):
+        """Why the FIFO head cannot launch yet; None means the robot is genuinely free."""
+        q = self.D.get("manual_queue") or []
+        if not q:
+            return None
+        item = q[0]
+        if now < item.get("next_attempt", 0):
+            return "retrying at %s" % datetime.fromtimestamp(item["next_attempt"]).strftime("%H:%M")
+        if vs not in ("docked", "idle", "charging"):
+            return "waiting for current robot work (%s)" % vs
+        if incl == "on":
+            return "waiting for the robot's current task to finish its dock break"
+        if ERROR and self.get(ERROR).get("state") not in ("none", None):
+            return "waiting for robot error to clear"
+        try:
+            if BATTERY and float(self.get(BATTERY).get("state") or 0) < 50:
+                return "charging to 50% before the next queued clean"
+        except (TypeError, ValueError):
+            return "waiting for a valid battery reading"
+        return None
+
+    def finish_manual(self, ok, why, now):
+        D = self.D
+        request_id = D.get("manual_active")
+        queue = D.setdefault("manual_queue", [])
+        item = next((x for x in queue if x.get("id") == request_id), None)
+        if not item:
+            return
+        if ok:
+            D["manual_queue"] = [x for x in queue if x.get("id") != request_id]
+            self.log("manual_done", request_id=request_id, rooms=item.get("rooms"))
+            return
+        item["attempts"] = int(item.get("attempts") or 0) + 1
+        waits = (5 * 60, 15 * 60, 30 * 60, 60 * 60)
+        item["next_attempt"] = now + waits[min(item["attempts"], len(waits)) - 1]
+        item["last_failure"] = why
+        self.log("manual_retry", request_id=request_id, rooms=item.get("rooms"), attempts=item["attempts"],
+                 next_attempt=item["next_attempt"], why=why)
 
     def finish(self, why, now):
         D = self.D
+        run_kind = D.get("run_kind") or "auto"
         if (why == "done" or why.startswith("docked with the robot's task")) and "clean_first" in D:   # (a run from before this rule: not judged)
             span = (D.get("clean_last") or 0) - (D.get("clean_first") or 0)
             if span < FAILED_START_S:   # it set off and gave up at once (e.g. a map that no longer matches the house)
@@ -624,15 +767,18 @@ class Pilot:
                 why = "started %s and gave up after %d s%s" % (
                     datetime.fromtimestamp(D.get("run_started") or now).strftime("%H:%M"), max(0, span),
                     "; the robot went back to its %r map" % other.strip() if other else "")
-                n = D.get("fail_streak", 0) + 1
-                D.update(fail_streak=n, backoff_until=now + BACKOFF_S[min(n, len(BACKOFF_S)) - 1] if BACKOFF else 0,
-                         failed_at=now)
-                self.log("failed_start", span=span, streak=n, map_other=other)
-            else:
+                if run_kind != "manual":
+                    n = D.get("fail_streak", 0) + 1
+                    D.update(fail_streak=n, backoff_until=now + BACKOFF_S[min(n, len(BACKOFF_S)) - 1] if BACKOFF else 0,
+                             failed_at=now)
+                    self.log("failed_start", span=span, streak=n, map_other=other)
+            elif run_kind != "manual":
                 D.update(fail_streak=0, backoff_until=0)
         groups = D.get("groups") or []
         run_rooms = list(dict.fromkeys(r for g in groups for r in (g.get("rooms") or [])))
-        if not D.get("explore"):
+        if run_kind == "manual":
+            self.finish_manual(why == "done", why, now)
+        elif not D.get("explore"):
             if why == "done":
                 self.completed(run_rooms)
             else:
@@ -650,8 +796,10 @@ class Pilot:
             self.call("vacuum.set_fan_speed", {"entity_id": VAC, "fan_speed": sv["fan"]})
         self.call("input_boolean.turn_off", {"entity_id": ACTIVE})
         self.D["runs"] = (self.D["runs"] + [{"start": self.D.get("run_started"), "end": now, "why": why,
-                                             "groups": self.D.get("groups"), "pauses": self.D.get("pauses")}])[-30:]
-        self.D.update(phase="idle", groups=[], gi=0, paused_at=0, trouble=None)
+                                             "groups": self.D.get("groups"), "pauses": self.D.get("pauses"),
+                                             "kind": run_kind, "request_id": self.D.get("manual_active")}])[-30:]
+        self.D.update(phase="idle", groups=[], gi=0, paused_at=0, trouble=None,
+                      run_kind=None, manual_active=None)
         self.log("finish", why=why)
 
     def return_lights(self, vs, now):
@@ -773,6 +921,24 @@ class Pilot:
         ph = D["phase"]
         info = {}
         if ph == "idle":
+            # Physical button work is a separate durable FIFO. It always gets first admission, but it never
+            # interrupts an autopilot run, a different manual clean, a pause, or a recharge/mop-wash dock break.
+            manual = D.setdefault("manual_queue", [])
+            if manual:
+                item = manual[0]
+                wait = self.manual_wait(vs, incl, now)
+                info.update(manual_queue=[{"id": x.get("id"), "gesture": x.get("gesture"), "rooms": x.get("rooms"),
+                                          "attempts": x.get("attempts", 0)} for x in manual],
+                            eligible=item.get("rooms") or [])
+                if wait:
+                    info["why"] = "manual clean queued: " + wait
+                else:
+                    self.start(item["rooms"], now, run_kind="manual", request_id=item["id"],
+                               whole_floor=bool(item.get("whole_floor")))
+                ph = D["phase"]
+            else:
+                D["manual_active"] = None
+        if ph == "idle" and not D.get("manual_queue"):
             on = self.get(ENABLE).get("state") == "on"
             # the switch governs only the runs the autopilot starts by itself; a room a grown-up pressed
             # "clean when vacant" on still goes at the next vacancy with it off
@@ -828,7 +994,7 @@ class Pilot:
                 D["saw_clean"] = True
                 D["clean_first"] = D.get("clean_first") or now
                 D["clean_last"] = now
-                who = self.person_entered(now)
+                who = None if D.get("run_kind") == "manual" else self.person_entered(now)
                 if who:
                     self.call("vacuum.pause", {"entity_id": VAC})
                     D.update(phase="paused", paused_at=now)
@@ -860,11 +1026,11 @@ class Pilot:
                 D["docked_since"] = 0
             if D["phase"] == "running" and not D.get("saw_clean") and now - D.get("group_started", now) > 300:
                 self.finish("never started cleaning (state %s)" % vs, now)
-        elif ph == "between":       # next group only if downstairs is still empty
+        elif ph == "between":       # next group only if downstairs is still empty (a manual FIFO job needs no vacancy)
             q, who = self.quiet_for(held=False)
             if now - D.get("run_started", now) > MAX_RUN_S:
                 self.finish("run too old to continue", now)
-            elif q >= BETWEEN_QUIET_S:
+            elif D.get("run_kind") == "manual" or q >= BETWEEN_QUIET_S:
                 D["gi"] += 1
                 D["phase"] = "running"
                 self.launch(now)
@@ -1004,6 +1170,11 @@ class Pilot:
                      "map_other": self.other_map()} if MAP_SELECT else {}),
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
+                 "manual_queue": [{"request_id": x.get("id"), "gesture": x.get("gesture"),
+                                   "rooms": x.get("rooms"), "attempts": x.get("attempts", 0),
+                                   "next_attempt": x.get("next_attempt", 0),
+                                   "whole_floor": bool(x.get("whole_floor"))} for x in (D.get("manual_queue") or [])],
+                 "manual_active": D.get("manual_active"),
                  "incomplete": {"rooms": D.get("incomplete") or [], "since": D.get("incomplete_since"),
                                 "why": D.get("incomplete_why")},
                  "visits": {k: datetime.fromtimestamp(t).strftime("%a %H:%M") for k, t in D["visits"].items()},
@@ -1027,7 +1198,8 @@ def run(g, key="vacuum"):
     p = Pilot(g, key)
     while True:
         try:
-            p.tick()
+            with p.lock:
+                p.tick()
         except Exception as ex:  # noqa: BLE001
             print("vacuum autopilot error", repr(ex), flush=True)
             g["ilog"]({"src": LOG_SRC, "action": "error", "error": repr(ex)})

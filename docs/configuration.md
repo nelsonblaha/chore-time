@@ -150,6 +150,18 @@ Every section is optional. A missing section means that feature is off. `example
 
 Chore Time publishes `sensor.chore_state`, `sensor.chore_points_<kid>`, `sensor.chore_lights` (which bulbs carry a colour, so your lighting can skip them) and `sensor.vacuum_autopilot` (every room's vacuum decision and why).
 
+### Physical vacuum buttons
+
+Home Assistant can append a physical button selection to a robot's durable, per-floor FIFO with
+`POST /api/vacuum/button` and JSON `{floor, gesture, rooms, request_id}`. `floor` is the configured
+vacuum floor, `gesture` is `single`, `double` or `long`, `rooms` contains exact segment names, and
+`request_id` makes retries idempotent. The response is `{ok, rooms, why}`. The queue never preempts a
+clean already in progress, a paused/returning robot, or a recharge or mop-wash dock break; it waits for
+confirmed completion before starting the next item and survives an app restart. When any accessible
+room is marked untidy, a long press queues the remaining accessible allowed segments in order and
+skips untidy or blocked ones. With no accessible untidy room, it uses the robot's genuine whole-floor
+start. This is a LAN endpoint and has no authentication of its own.
+
 ### Spoken announcements
 
 `house.json` → `home_assistant.announce`: `tts` (a TTS entity) and `speaker` (a media player). If the speaker

@@ -2088,6 +2088,19 @@ class H(BaseHTTPRequestHandler):
             b = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self.send(400, {"error": "bad json"})
+        if self.path == "/api/vacuum/button":
+            floor = str(b.get("floor") or "")
+            planner = globals().get("VACUUM_PLANNERS", {}).get(floor)
+            if floor not in ("upstairs", "downstairs"):
+                return self.send(400, {"ok": False, "rooms": [], "why": "unknown floor"})
+            if not planner:
+                return self.send(503, {"ok": False, "rooms": [], "why": "vacuum planner is starting"})
+            with planner.lock:
+                result = planner.button_request(b)
+            ilog({"src": "vacuum_button", "ip": self.client_address[0], "floor": floor,
+                  "gesture": b.get("gesture"), "request_id": str(b.get("request_id") or "")[:160],
+                  "result": result})
+            return self.send(200 if result.get("ok") else 400, result)
         c = cfg()
         kids = {k["id"] for k in c["kids"]}
         chores = {x["id"]: x for x in c["chores"]}
