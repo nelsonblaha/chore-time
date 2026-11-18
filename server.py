@@ -4545,6 +4545,9 @@ def start_modules():
             go("room-lights", watch_bright_rooms)
         if MAE_DASH:
             go("dashboard-mirror", watch_mae_dashboard)
+        if (HOUSE.get("mail_delivery") or {}).get("entity"):
+            import mail_delivery
+            go("mail-delivery", mail_delivery.run, globals())   # doorbell caption -> reopen the Sort mail chore
         if HOUSE.get("vacuum"):
             import vacuum_auto
             go("vacuum", vacuum_auto.run, globals())

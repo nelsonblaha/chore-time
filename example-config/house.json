@@ -13,6 +13,12 @@
       "speaker": "media_player.family_room_speaker"
     }
   },
+  "mail_delivery": {
+    "entity": "sensor.google_home_camera_front_porch",
+    "chore": "mail",
+    "max_age_h": 72,
+    "poll_s": 30
+  },
   "adults": {
     "jordan": {
       "presence": "person.jordan",
