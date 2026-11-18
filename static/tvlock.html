@@ -111,7 +111,8 @@ function openJobs(S){var busy={};Object.keys(S.active||{}).forEach(function(k){b
     if(c.hidden||c.closed||c.id==="other"||c.slot||!tvHouse(S,c)||b.clean_until)return false;
     if(c.shared)return (b.done_today||[]).length<nk;
     return !busy[c.id]&&!(b.pending_by||[]).length}).map(function(c){var b=S.board[c.id]||{};return {c:c,b:b,p:b.price!=null?b.price:c.points}})
-    .sort(function(x,y){return (y.b.bonus&&y.p>y.b.base?1:0)-(x.b.bonus&&x.p>x.b.base?1:0)||(y.p||0)-(x.p||0)}).slice(0,6)}
+    .sort(function(x,y){var h=function(z){return z.c.id.indexOf("help_")===0?1:0};   // a robot to rescue first
+      return h(y)-h(x)||(y.b.bonus&&y.p>y.b.base?1:0)-(x.b.bonus&&x.p>x.b.base?1:0)||(y.p||0)-(x.p||0)}).slice(0,6)}
 function hhmm(t){var p=String(t).split(":"),h=+p[0];return (h%12||12)+":"+p[1]+(h<12?" AM":" PM")}
 var NEWSI=0,NEWS=[],SNOW=0;
 function drawNews(){var el=document.getElementById("newslist");if(!NEWS.length){el.innerHTML='<div class="none">Do a job to make the news!</div>';return}

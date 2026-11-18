@@ -24,6 +24,8 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
 .kidcard:nth-child(2) .face{animation-delay:.4s}.kidcard:nth-child(3) .face{animation-delay:.8s}
 .kidcard .nm{font-size:40px;font-weight:900}
 .kidcard .pts{font-size:34px;font-weight:900;background:rgba(255,255,255,.25);padding:4px 18px;border-radius:30px}
+.tile.hero{border:5px solid #ffca28;box-shadow:0 0 0 4px rgba(255,202,40,.35),0 0 24px rgba(255,202,40,.7);animation:heroPulse 1.6s ease-in-out infinite}
+@keyframes heroPulse{50%{box-shadow:0 0 0 8px rgba(255,202,40,.15),0 0 36px rgba(255,202,40,.95)}}
 .kidcard.adult{flex:.6;max-width:220px}.kidcard.adult .face{font-size:96px}.kidcard.adult .nm{font-size:32px}
 .kidcard .trophy{position:absolute;top:10px;left:14px;font-size:58px;display:flex;gap:4px}
 .tr{display:inline-block;filter:drop-shadow(0 3px 2px rgba(0,0,0,.3))}
@@ -540,9 +542,11 @@ function renderKid(){
     return true}),PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
   var WD=(S.wind_down||{}).on,lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)};   // "Clean up first!" and, from wind-down, Brush teeth lead
-  vis=vis.filter(lead).concat(vis.filter(function(c){return !lead(c)}));   // "Tidy up first!" leads
+  var hero=function(c){return c.id.indexOf("help_")===0};   // a robot that needs rescuing (or water) comes before everything
+  vis=vis.filter(hero).concat(vis.filter(function(c){return !hero(c)&&lead(c)}),vis.filter(function(c){return !hero(c)&&!lead(c)}));   // then "Tidy up first!"
   var ch="";vis.slice(page*PER,page*PER+PER).forEach(function(c){
     var bd=S.board[c.id]||{price:c.points,pending_by:[]},cls="tile",badge="";
+    if(hero(c))cls+=" hero";
     if(bd.clean_until){cls+=" clean"}
     else if(bd.pending_by.length&&(!c.shared||bd.pending_by.indexOf(kid)>=0)){cls+=bd.pending_by.indexOf(kid)>=0?" waiting":" taken";
     }
