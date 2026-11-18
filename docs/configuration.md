@@ -163,7 +163,8 @@ confirmed completion before starting the next item and survives an app restart. 
 or queued are deduplicated while still appearing in the response. When any accessible room is marked
 untidy, a long press queues the remaining accessible allowed segments in order, one room at a time,
 and skips untidy or blocked ones. With no accessible untidy room, it uses the robot's genuine
-whole-floor start; that decision is checked again when the request reaches the head of the queue.
+whole-floor start unless that would enter a reachable room under a standing exclusion. That decision
+is checked again when the request reaches the head of the queue.
 
 ### Spoken announcements
 

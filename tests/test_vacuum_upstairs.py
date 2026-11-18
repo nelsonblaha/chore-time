@@ -282,6 +282,18 @@ class Upstairs(unittest.TestCase):
         self.assertIn(("vacuum.start", {"entity_id": "vacuum.up"}), calls)
         self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
 
+    def test_long_press_segments_around_an_accessible_standing_exclusion(self):
+        self.S("input_boolean.bedroom_guest", "on")
+        result = self.button("long", [], "whole-blocked")
+        self.assertTrue(result["ok"])
+        self.assertFalse(self.p.D["manual_queue"][0]["whole_floor"])
+        self.assertEqual(result["rooms"], ["Hall", "Bath", "Study", "Study Closet"])
+        self.assertIn("Bedroom", result["why"])
+        calls = self.tick()
+        self.assertNotIn("vacuum.start", [svc for svc, _ in calls])
+        launch = next(d for svc, d in calls if svc == "script.vacuum_clean_rooms")
+        self.assertEqual(launch["rooms"], ["Hall"])
+
     def test_button_validation_rejects_unknown_rooms_and_empty_short_gestures(self):
         self.assertFalse(self.button(rooms=["Not a room"])["ok"])
         self.assertFalse(self.button(rooms=[])["ok"])

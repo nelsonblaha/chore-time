@@ -291,23 +291,26 @@ class Pilot:
         closed = self.closed_segments()
         untidy = self.untidy_segments()
         accessible_untidy = untidy - closed
+        blocked_other = set()
+        for seg in SEGMENTS:
+            why = (status.get(seg) or {}).get("why", "")
+            if (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy"):
+                blocked_other.add(seg)
+        accessible_exclusions = blocked_other - closed
         skipped = []
-        if not accessible_untidy:
+        if not accessible_untidy and not accessible_exclusions:
             rooms = []
             for seg in SEGMENTS:
-                why = (status.get(seg) or {}).get("why", "")
-                blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
-                if seg not in closed and not blocked_other:
+                if seg not in closed and seg not in blocked_other:
                     rooms.append(seg)
             return rooms, True, skipped
 
         rooms = []
         for seg in supplied or list(SEGMENTS):
             why = (status.get(seg) or {}).get("why", "")
-            blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
             if seg in closed:
                 skipped.append(seg + " (closed off)")
-            elif blocked_other:
+            elif seg in blocked_other:
                 skipped.append(seg + " (" + why + ")")
             elif seg in untidy:
                 skipped.append(seg + " (untidy)")
