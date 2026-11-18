@@ -10,7 +10,7 @@ Events (one JSON object per line):
 """
 import json
 from tidy_spaces import space_states
-import random, os, re, threading, time, uuid, urllib.request
+import random, os, re, threading, time, uuid, urllib.request, urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -1499,7 +1499,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "last_result")
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
 
@@ -1560,6 +1560,13 @@ def push_state_sensor(state=None, last_result=None):
              "households": state.get("households"), "kid_where": state.get("kid_where"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
+    try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
+        import room_eye
+        if room_eye.EYE and room_eye.EYE.S.get("photos"):
+            attrs["inspect_photos"] = [{k: x.get(k) for k in ("key", "chore", "kid", "ref", "before", "after")} for x in room_eye.EYE.S["photos"][-20:]]
+            attrs["inspect_media"] = ((HOUSE.get("room_eye") or {}).get("inspect_shots") or {}).get("media_source")
+    except Exception:  # noqa: BLE001
+        pass
     if last_result is not None:
         attrs["last_result"] = last_result
     elif GLOBAL_LAST.get("r"):
@@ -2039,6 +2046,27 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"items": shown if shown is not None else (GUARD.get("house_tasks") or [])[:20],
                                    "private": meta.get("private", []), "to_review": meta.get("to_review", 0),
                                    "on": "house_tasks" in GUARD})
+        if p == "/api/inspect_photos":   # before/after pictures for the grown-ups' inspection: [{key, before, after}]
+            import room_eye
+            e_ = room_eye.EYE
+            q_ = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            got = e_.photos_for(ref=(q_.get("ref") or [None])[0], chore=(q_.get("chore") or [None])[0],
+                                kid=(q_.get("kid") or [None])[0]) if e_ else []
+            return self.send(200, {"photos": [{k: x.get(k) for k in ("key", "cam", "before", "after", "ref")} for x in got]})
+        m_ = re.match(r"^/api/inspect_photo/([0-9a-f]{16})/(before|after)\.jpg$", p)
+        if m_:
+            import room_eye
+            f_ = Path(DATA) / "room_eye" / "inspect" / m_.group(1) / (m_.group(2) + ".jpg")
+            if not f_.exists():
+                return self.send(404, {"error": "no picture"})
+            b_ = f_.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("Content-Length", str(len(b_)))
+            self.end_headers()
+            self.wfile.write(b_)
+            return
         if p == "/api/room_eye":   # cameras learning tidy rooms: label queue (no pictures here), recent checks, counts
             import room_eye
             e_ = room_eye.EYE

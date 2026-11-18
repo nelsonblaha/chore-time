@@ -166,7 +166,8 @@ class Eye:
             self.S = json.loads(self.path.read_text())
         except (OSError, ValueError):
             self.S = {}
-        for k, v in (("samples", []), ("queue", []), ("pending", {}), ("last_check", {}), ("seen_ev", 0), ("checks", [])):
+        for k, v in (("samples", []), ("queue", []), ("pending", {}), ("last_check", {}), ("seen_ev", 0), ("checks", []),
+                     ("shots", []), ("photos", [])):
             self.S.setdefault(k, v)
         self.tok = None
         self.flashed_at = {}
@@ -187,10 +188,10 @@ class Eye:
         except Exception:  # noqa: BLE001
             return {}
 
-    def capture(self, cam, purpose):
-        """(jpeg, people) or (None, why)"""
+    def capture(self, cam, purpose, wake=False):
+        """(jpeg, people) or (None, why). wake: the camera service may turn the camera on just for this picture."""
         try:
-            code, hd, b = self.http("POST", "/capture", {"camera": cam, "purpose": purpose})
+            code, hd, b = self.http("POST", "/capture", {"camera": cam, "purpose": purpose, **({"wake": True} if wake else {})})
         except urllib.error.HTTPError as e:
             try:
                 return None, json.loads(e.read()).get("why") or str(e.code)
@@ -210,20 +211,25 @@ class Eye:
         tmp.replace(self.path)
 
     # ---- lights
-    def flash(self, cam):
-        """Snapshot the room's lights (and a group's bulbs), turn them full white for the picture. Never through the
-        house's light-mode selects: a mode write there means a person's request (sticky White, a re-armed timer)."""
-        g, lights = self.g, self.cfg["cameras"][cam].get("lights") or []
-        if not lights:
+    def flash(self, cam, shades=False):
+        """Snapshot the room's lights (and a group's bulbs), turn them full white for the picture; with shades, open the
+        room's shades too (restored from the same snapshot). Never through the house's light-mode selects: a mode write
+        there means a person's request (sticky White, a re-armed timer)."""
+        c = self.cfg["cameras"][cam]
+        g, lights, covers = self.g, c.get("lights") or [], (c.get("shades") or []) if shades else []
+        if not lights and not covers:
             return None
-        snap = []
+        snap = list(covers)
         for ent in lights:
             snap += [ent] + list((g["ha_get"](ent, self.tok).get("attributes") or {}).get("entity_id") or [])
         scene = "room_eye_" + cam
         g["ha_call"]("scene.create", {"scene_id": scene, "snapshot_entities": list(dict.fromkeys(snap))}, self.tok)
-        g["ha_call"]("light.turn_on", {"entity_id": lights, "brightness": 255, "color_temp_kelvin": WHITE_K, "transition": 0}, self.tok)
+        if lights:
+            g["ha_call"]("light.turn_on", {"entity_id": lights, "brightness": 255, "color_temp_kelvin": WHITE_K, "transition": 0}, self.tok)
+        if covers:
+            g["ha_call"]("cover.open_cover", {"entity_id": covers}, self.tok)
         self.flashed_at[cam] = time.time()
-        self.sleep(float(self.cfg.get("settle_s", 5)))
+        self.sleep(float(c.get("shades_s", 20)) if covers else float(self.cfg.get("settle_s", 5)))
         return "scene." + scene
 
     def unflash(self, cam, scene):
@@ -231,12 +237,87 @@ class Eye:
             self.g["ha_call"]("scene.turn_on", {"entity_id": scene, "transition": 0}, self.tok)
         self.flashed_at[cam] = time.time()
 
-    def shoot(self, cam, purpose):
-        was = self.flash(cam)
+    def shoot(self, cam, purpose, wake=False, shades=False):
+        was = self.flash(cam, shades)
         try:
-            return self.capture(cam, purpose)
+            return self.capture(cam, purpose, wake)
         finally:
             self.unflash(cam, was)
+
+    # ---- before and after pictures for an inspection (room_eye.inspect_shots)
+    def shot_events(self, e, by_job):
+        """a kid claims a room job -> a "before" picture; says it's done -> an "after" (each room with a camera)"""
+        if not self.cfg.get("inspect_shots") or e["type"] not in ("start", "report") or e.get("partial"):
+            return
+        cams = list(dict.fromkeys(c for sid in by_job.get(e.get("chore"), []) for c in self.cam_of_space(sid)))
+        for cam in cams:
+            self.S["shots"].append({"cam": cam, "chore": e["chore"], "kid": e.get("kid"), "ts": e["ts"],
+                                    "which": "before" if e["type"] == "start" else "after",
+                                    "ref": e.get("id") if e["type"] == "report" else None})
+
+    def shots_blocked(self):
+        """a grown-up named in inspect_shots.unless_home is home: no pictures"""
+        for who in (self.cfg.get("inspect_shots") or {}).get("unless_home") or []:
+            try:
+                if self.g["adult_home"](who, self.tok):
+                    return "%s is home" % who
+            except Exception:  # noqa: BLE001
+                return "can't tell whether %s is home" % who
+        return None
+
+    def do_shots(self, now):
+        todo, self.S["shots"] = self.S["shots"], []
+        for sh in todo:
+            if now - sh["ts"] > 600:      # too late to show the room as it was then
+                continue
+            why = self.shots_blocked()
+            if why:
+                self.g["ilog"]({"src": "room_eye", "action": "shot_skipped", "chore": sh["chore"], "which": sh["which"], "why": why})
+                continue
+            jpeg, people = self.shoot(sh["cam"], "inspection_" + sh["which"], wake=True, shades=True)
+            if not jpeg:
+                self.g["ilog"]({"src": "room_eye", "action": "shot_failed", "chore": sh["chore"], "which": sh["which"], "why": people})
+                continue
+            self.store_shot(sh, jpeg, now)
+
+    def store_shot(self, sh, jpeg, now):
+        rec = None
+        if sh["which"] == "after":   # pair with this kid's "before" of the same job, within a few hours
+            rec = next((p for p in reversed(self.S["photos"]) if p["chore"] == sh["chore"] and p["kid"] == sh["kid"]
+                        and p["cam"] == sh["cam"] and not p.get("after") and now - p["ts"] < 4 * 3600), None)
+        if not rec:
+            rec = {"key": uuid.uuid4().hex[:16], "cam": sh["cam"], "chore": sh["chore"], "kid": sh["kid"], "ts": sh["ts"]}
+            self.S["photos"].append(rec)
+        d = self.dir / "inspect" / rec["key"]
+        d.mkdir(parents=True, exist_ok=True)
+        (d / (sh["which"] + ".jpg")).write_bytes(jpeg)
+        rec[sh["which"]] = sh["ts"]
+        if sh.get("ref"):
+            rec["ref"] = sh["ref"]
+        media = (self.cfg.get("inspect_shots") or {}).get("media_dir")
+        if media:   # Home Assistant's own (signed-in) media folder, for the grown-ups' page inside HA
+            m = Path(media) / rec["key"]
+            m.mkdir(parents=True, exist_ok=True)
+            (m / (sh["which"] + ".jpg")).write_bytes(jpeg)
+        self.prune(now)
+
+    def prune(self, now):
+        keep_s = float((self.cfg.get("inspect_shots") or {}).get("keep_days", 14)) * 86400
+        media = (self.cfg.get("inspect_shots") or {}).get("media_dir")
+        old = [p for p in self.S["photos"] if now - p["ts"] > keep_s]
+        for p in old:
+            for root in [self.dir / "inspect"] + ([Path(media)] if media else []):
+                d = root / p["key"]
+                for f in d.glob("*.jpg"):
+                    f.unlink()
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
+        self.S["photos"] = [p for p in self.S["photos"] if p not in old]
+
+    def photos_for(self, ref=None, chore=None, kid=None):
+        return [p for p in self.S["photos"] if (ref and p.get("ref") == ref) or (not ref and p["chore"] == chore and p["kid"] == kid)]
 
     # ---- samples
     def keep(self, cam, jpeg, label, why):
@@ -343,6 +424,7 @@ class Eye:
             if e["ts"] <= last:
                 continue
             self.S["seen_ev"] = max(self.S["seen_ev"], e["ts"])
+            self.shot_events(e, by_job)
             label, sids = None, []
             if e["type"] == "space_tidy" and e.get("by") not in ADULT_BY_SKIP:
                 label, sids = ("tidy" if e.get("tidy") else "untidy"), [e.get("space")]
@@ -401,6 +483,8 @@ class Eye:
         for cam, p in list(self.S["pending"].items()):
             if now - p["ts"] > LABEL_TTL_S:
                 del self.S["pending"][cam]
+        if self.S["shots"]:
+            self.do_shots(now)
         on = self.cameras_on() if self.cfg["cameras"] else {}
         self.robots(on, now)
         for cam in self.cfg["cameras"]:

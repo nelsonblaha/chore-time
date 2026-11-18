@@ -69,7 +69,7 @@ class RoomEyeLive(Case):
         room_eye.EYE = self.eye
         self.on, self.people, self.next_pic, self.shots = True, 0, picture(), []
         self.eye.cameras_on = lambda: {"cam1": self.on}
-        self.eye.capture = lambda cam, purpose: (self.shots.append((purpose,)) or self.next_pic, self.people)
+        self.eye.capture = lambda cam, purpose, wake=False: (self.shots.append((purpose,)) or self.next_pic, self.people)
         self.eye.sleep = lambda s: None
         self.t = time.time()
 
@@ -180,6 +180,40 @@ class RoomEyeLive(Case):
         self.app.set("binary_sensor.cam1_motion", "on")
         self.eye.robots({"cam1": True}, time.time())
         self.assertFalse(vars(self.s).get("LOCATOR_TEACH"))
+
+    def test_before_and_after_pictures_for_an_inspection_while_the_grownup_is_away(self):
+        # "cameras used when [a grown-up] isn't home and kids claim an untidy room, to take before and after pictures ...
+        #  camera turns on just long enough to get a snap of each with bright white lights, open shades"
+        self.tick(0.01)
+        self.eye.cfg["inspect_shots"] = {"unless_home": ["sam"]}
+        self.eye.cfg["cameras"]["cam1"]["shades"] = ["cover.k_shade"]
+        self.on, self.shots = False, []                          # the camera is off: the picture wakes it
+        self.s.adult_home = lambda who, tok: False
+        vars(self.s)["adult_home"] = self.s.adult_home
+        self.assertEqual(self.app.post("/api/start", {"kid": "zoe", "chore": "kitchen"})[0], 200)
+        self.tick(0.01)
+        self.assertEqual([x[0] for x in self.shots], ["inspection_before"])
+        calls = [c[0] for c in self.app.calls]
+        self.assertIn("cover.open_cover", calls)                 # shades up, lights white, then back from the snapshot
+        self.assertIn("scene.turn_on", calls)
+        ev = self.app.pass_report("zoe", "kitchen", points=4)
+        self.tick(0.01)
+        self.assertEqual([x[0] for x in self.shots], ["inspection_before", "inspection_after"])
+        ph = self.eye.photos_for(ref=ev["id"])
+        self.assertEqual(len(ph), 1)                              # one pair
+        self.assertTrue(ph[0]["before"] and ph[0]["after"])
+        import urllib.request
+        r = urllib.request.urlopen(self.app.base + "/api/inspect_photo/%s/after.jpg" % ph[0]["key"], timeout=10)
+        self.assertEqual((r.status, r.headers["Content-Type"]), (200, "image/jpeg"))
+
+    def test_no_pictures_while_the_named_grownup_is_home(self):
+        self.tick(0.01)
+        self.eye.cfg["inspect_shots"] = {"unless_home": ["sam"]}
+        self.shots = []
+        vars(self.s)["adult_home"] = lambda who, tok: who == "sam"
+        self.app.post("/api/start", {"kid": "zoe", "chore": "kitchen"})
+        self.tick(0.01)
+        self.assertEqual(self.shots, [])
 
 
 if __name__ == "__main__":

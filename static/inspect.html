@@ -226,6 +226,15 @@ if(ON_HUB){if(qby)me=qby;
   document.addEventListener("click",hubPoke,true);document.addEventListener("touchstart",hubPoke,{passive:true});hubPoke();
   setTimeout(function(){var d=document.createElement("button");d.textContent=BACK==="/now"?"✅ Done":"✅ Done — back to kids";d.className="ok";
     d.style.cssText="position:fixed;top:10px;right:12px;z-index:70;font-size:22px;padding:10px 18px";d.onclick=function(){location.href=BACK+(BACK.indexOf("?")>=0?"&":"?")+"v="+Date.now()};document.body.appendChild(d)},50)}
+// before/after pictures a camera took when the kid claimed the room and when they said it was done (room eye)
+function photosOf(r){return (S.inspect_photos||[]).filter(function(p){return p.ref===r.id||(!p.ref&&p.chore===r.chore&&p.kid===r.kid&&p.before>=r.ts-4*3600)})}
+function photosHtml(r){var ps=photosOf(r);if(!ps.length)return "";
+  return '<div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">'+ps.map(function(p){return ["before","after"].filter(function(w){return p[w]}).map(function(w){
+    return '<figure style="margin:0;flex:1;min-width:140px"><img data-ph="'+p.key+'/'+w+'" style="width:100%;border-radius:10px;background:#0002;min-height:80px" alt=""><figcaption class="mute">'+(w==="before"?"📸 Before":"📸 After")+' · '+new Date(p[w]*1000).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+'</figcaption></figure>'}).join("")}).join("")+'</div>'}
+function fillPhotos(){document.querySelectorAll("img[data-ph]").forEach(function(im){if(im.src)return;var k=im.dataset.ph;
+  if(!HA_MODE){im.src="/api/inspect_photo/"+k+".jpg";return}
+  if(!S.inspect_media){im.replaceWith(document.createTextNode("(picture on the Hub)"));return}
+  hass().callWS({type:"media_source/resolve_media",media_content_id:"media-source://media_source/"+S.inspect_media+"/"+k+".jpg"}).then(function(x){im.src=x.url}).catch(function(){im.alt="(picture unavailable)"})})}
 function toast(t){if(!t)return;$("toast").textContent=t;$("toast").classList.add("on");setTimeout(function(){$("toast").classList.remove("on")},1800)}
 function post(p,b,msg){if(!me){toast("Pick who you are first");return Promise.resolve()}b.by=me;return api(p,b).then(function(r){if(r.ok){S=r.state;render();if(msg)toast(msg)}else toast(r.error||"failed")})}
 function kidOf(id){return S.config.kids.find(function(k){return k.id===id})||{name:id}}
@@ -496,6 +505,7 @@ function render(){
     var split=team?' <span class="tag">👥 '+(r.split&&Object.keys(r.split).length?'deal: '+Object.keys(r.split).map(function(m){return kidOf(m).name+" "+r.split[m]}).join(", ")+', rest to the others':'shared equally')+'</span> <a href="#" data-split="'+r.id+'">edit split</a>':'';
     ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?(r.delivered?' <span class="tag clean">📬 handed over</span>':' <span class="tag warn">✉️ not handed over yet</span>'):'')+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
       (other?'<div class="row" style="margin-top:8px"><input class="lbl" placeholder="What did they do?" value="'+esc(r.note?r.note.charAt(0)+r.note.slice(1).toLowerCase():"")+'" style="flex:1"></div>':'')+
+      photosHtml(r)+
       (r.ask!=null?'<div class="mute" style="margin-top:4px">🙋 asks <b>'+r.ask+' ⭐</b> — go look, then settle</div>':'')+
       (AG?'<div class="'+(agWarn?'tag warn':'mute')+'" style="margin-top:6px;display:inline-block">'+(agWarn?'⚠️ This was a team job: ':'🤝 Last agreed: ')+
         AG.team.map(function(m){return esc(kidOf(m).name)+(AG.split&&AG.split[m]!=null?' '+AG.split[m]+'⭐':'')}).join(' · ')+(agWarn?' (rows added; set 0 to leave someone out)':'')+'</div>':'')+
@@ -517,6 +527,7 @@ function render(){
       '<div class="chips"><button class="ok" data-cert="'+c.id+'" data-ok="1">✅ Yes: +'+(bd.price==null?"?":bd.price)+'⭐</button><button class="no" data-cert="'+c.id+'" data-ok="0">❌ It didn\'t happen</button></div></div>'+ph});
   $("pcount").textContent=pend.length+cert.length;$("pendwrap").style.display=pend.length+cert.length?"":"none";
   $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
+  fillPhotos();
   document.querySelectorAll("[data-cert]").forEach(function(b){b.onclick=function(){var ok=b.dataset.ok==="1";
     post("/api/certify",{chore:b.dataset.cert,ok:ok},ok?"Stars given":"Marked as not done")}});
   document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
