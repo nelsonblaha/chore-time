@@ -36,7 +36,7 @@ STUCK = {
     "wheels_jammed": "its wheels are jammed",
     "robot_trapped": "it is trapped",
     "bumper_stuck": "its bumper is stuck",
-    "vertical_bumper_pressed": "it is wedged under something",
+    "vertical_bumper_pressed": "its top bumper got pushed (often it has already backed out)",
     "wheels_suspended": "its wheels are off the floor",
     "robot_tilted": "it is tipped up",
     "vibrarise_jammed": "its mop is caught",
@@ -53,7 +53,7 @@ TIDY = {"main_brush_jammed", "side_brush_jammed", "wheels_jammed", "robot_trappe
         "vertical_bumper_pressed", "wheels_suspended", "robot_tilted", "vibrarise_jammed"}
 # How a kid gets it going again, when it's more than "pull it free, press Home".
 FIX = {
-    "vertical_bumper_pressed": ["Pull it out from under whatever it is wedged under.",
+    "vertical_bumper_pressed": ["If it is still under something, pull it out (usually it isn't anymore).",
                                 "Gently jiggle the laser tower on top of the robot.",
                                 "Press the center button on top so it goes again."],
 }

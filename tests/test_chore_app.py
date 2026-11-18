@@ -909,6 +909,54 @@ class RobotLocatorFreshness(unittest.TestCase):
         self.tick(1200)
         self.assertIsNone(self.L.classify(self.V, 50000, 50000)[0])
 
+    def fusion_setup(self):
+        rc = self.g["HOUSE"]["robot_locator"]["robots"][self.V]
+        rc["motion"] = {"binary_sensor.hall_motion": "Corridor"}
+        rc["occupancy"] = {"sensor": "sensor.occ", "floor": "down"}
+        self.L = self.fresh()
+        self.m = {"state": "off"}
+        self.ha["binary_sensor.hall_motion"] = lambda: self.m
+        self.ha["sensor.occ"] = lambda: {"state": "ok", "attributes": {"valid_until": self.now + 60,
+                                                                       "floors": {"down": {"state": "vacant"}}}}
+        self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+
+    def test_fusion_trusts_a_fresh_room_sensor_over_a_held_map_room(self):
+        # 11-18: the map room blanked and was held as Great Room; the robot was really in the entry hall, where the
+        # hall's motion sensor (nobody downstairs) saw it
+        self.fusion_setup()
+        self.ha[self.R] = lambda: {"state": "Great Room"}
+        self.tick(1000)
+        self.ha[self.R] = lambda: {"state": "unknown"}
+        self.tick(1070)                                       # held: the map room is over a minute old
+        self.m["state"] = "on"
+        s = self.tick(1075)
+        self.assertEqual((s["state"], s["source"], s["fused_from"]), ("Corridor", "fused", "binary_sensor.hall_motion"))
+        self.assertIsNone(s["held_since"])
+
+    def test_each_source_earns_its_trust(self):
+        # a sensor that keeps naming the wrong room while the robot's map and position agree loses weight
+        self.fusion_setup()
+        self.pos = (10000, 10000)                             # learned Kitchen
+        self.ha[self.R] = lambda: {"state": "Kitchen"}
+        t = 1000
+        for i in range(6):
+            self.m["state"] = "off"
+            self.tick(t); t += 16
+            self.m["state"] = "on"                            # the hall sensor fires (a draft, a pet...)
+            self.tick(t); t += 16
+        rel = self.out[-1]["reliability"]
+        self.assertLess(rel["binary_sensor.hall_motion"], 0.5)
+        self.assertEqual(self.out[-1]["state"], "Kitchen")
+
+    def test_a_person_saying_where_it_is_teaches_the_spot(self):
+        self.fusion_setup()
+        self.pos = (40000, 40000)                             # never learned
+        self.ha[self.R] = lambda: {"state": "unknown"}
+        self.tick(1000)
+        self.g["LOCATOR_TRUTH"] = [{"vacuum": self.V, "room": "Corridor", "at": 1001}]
+        self.tick(1002)
+        self.assertEqual(self.L.classify(self.V, 40000, 40000)[0], "Corridor")
+
     def test_a_blank_map_room_mid_clean_holds_the_last_room(self):
         # 11-18: the integration's room blanked to unknown for 30 s to 2.5 min at a time while the robot cleaned the
         # living room, and the floor plan jumped it back to its dock each time

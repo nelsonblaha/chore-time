@@ -2103,6 +2103,15 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})
+        if p == "/api/robot_seen":   # a grown-up says where a robot really is: the locator's best evidence (and a lesson)
+            robots_ = list(((HOUSE.get("robot_locator") or {}).get("robots") or {}))
+            vac_ = b.get("vacuum") or (robots_[0] if len(robots_) == 1 else None)
+            room_ = str(b.get("room") or "").strip()[:40]
+            if b.get("by") not in insp or vac_ not in robots_ or not room_:
+                return self.send(400, {"error": "need by (a grown-up), vacuum and room"})
+            globals().setdefault("LOCATOR_TRUTH", []).append({"vacuum": vac_, "room": room_, "at": time.time()})
+            ilog({"src": "locator", "action": "robot_seen", "vacuum": vac_, "room": room_, "by": b["by"]})
+            return self.send(200, {"ok": True})
         if p == "/api/room_eye/label":   # a grown-up names a spot the camera found, and says if it's a vacuum hazard
             import room_eye
             if b.get("by") not in insp or not room_eye.EYE:
