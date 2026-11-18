@@ -215,6 +215,15 @@ class Upstairs(unittest.TestCase):
         self.tick()
         self.assertTrue(self.posts[-1][2]["why"].startswith("waiting for upstairs to be empty"), self.posts[-1][2]["why"])
 
+    def test_pin_map_puts_a_docked_robot_back_on_its_map(self):
+        self.va.PIN_MAP = True
+        self.S("select.up_map", "Map 2")
+        calls = self.tick()
+        self.assertIn(("select.select_option", {"entity_id": "select.up_map", "option": "Upstairs"}), calls)
+        self.assertNotIn("select.select_option", [c[0] for c in self.tick()])   # not every tick
+        self.S("vacuum.up", "cleaning")
+        self.assertNotIn("select.select_option", [c[0] for c in self.tick(120)])   # never while it drives
+
     def test_two_robots_never_share_settings(self):
         down = load_copy()
         down.configure({"vacuum": "vacuum.down", "room_sensor": "sensor.down_room", "cleaning": "binary_sensor.down_cleaning",

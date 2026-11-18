@@ -31,6 +31,7 @@ MAP_FLAG = 0
 MAP_SELECT = MAP_NAME = None
 FLOOR = "downstairs"
 BACKOFF = True
+PIN_MAP = False
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
@@ -83,7 +84,8 @@ def configure(v):
     PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
     NAME = v.get("name", "Vacuum autopilot")
     OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
-    global FLOOR, BACKOFF
+    global FLOOR, BACKOFF, PIN_MAP
+    PIN_MAP = bool(v.get("pin_map"))   # put the robot back on map_name whenever it sits docked on another map
     BACKOFF = v.get("failed_start_backoff", True)   # false while someone is fixing the robot: retry every window
     FLOOR = v.get("floor") or OCC.get("floor") or "downstairs"   # for the status sentence
     UNTIDY_BLOCKS, SMART = bool(v.get("untidy_blocks")), v.get("smart_mode")
@@ -674,6 +676,7 @@ class Pilot:
         self.night_voice()
         v = self.get(VAC)
         vs = v.get("state")
+        self.pin_map(vs, now)
         room = self.get(ROOM_SENSOR).get("state")
         incl = self.get(IN_CLEAN).get("state")
         self.track(vs, room, now)
@@ -709,7 +712,7 @@ class Pilot:
                         hm(D["backoff_until"]), D.get("fail_streak", 0), last)
                 elif q is None or q < START_QUIET_S:
                     info["why"] = ("waiting for %s to be empty: quiet %d of %d minutes%s" % (
-                        FLOOR, (q or 0) // 60, START_QUIET_S // 60, " (%s)" % who if who else "")) if q is not None \
+                        FLOOR, (q or 0) // 60, START_QUIET_S // 60, " (%s)" % self.who_text(who) if who else "")) if q is not None \
                         else "waiting: can't tell whether %s is empty" % FLOOR
                 elif now - D.get("last_attempt", 0) <= RETRY_S:
                     info["why"] = "waiting to retry at %s" % hm(D["last_attempt"] + RETRY_S)
@@ -808,6 +811,14 @@ class Pilot:
         self.publish(info, vs, room)
         self.save()
 
+    def who_text(self, who):
+        """a sensor id as words: the room it watches ("someone in Family Room")"""
+        if isinstance(who, str) and who in SENSORS:
+            return "someone in %s" % SENSORS[who]
+        if isinstance(who, str) and "." in who:
+            return (self.get(who).get("attributes") or {}).get("friendly_name") or who
+        return who
+
     def doing(self, D, vs):
         """one sentence: what a run is doing now"""
         ph = D["phase"]
@@ -832,6 +843,15 @@ class Pilot:
         if ph == "docking":
             return "going home: people stayed, the run is over"
         return ph
+
+    def pin_map(self, vs, now):
+        """pin_map: docked on another map (the robot picks its newest map by itself), load ours back, once a minute at most"""
+        D = self.D
+        other = PIN_MAP and vs == "docked" and self.other_map()
+        if other and now - D.get("pinned_at", 0) > 60:
+            D["pinned_at"] = now
+            self.call("select.select_option", {"entity_id": MAP_SELECT, "option": MAP_NAME})
+            self.log("pin_map", was=other, to=MAP_NAME)
 
     def other_map(self):
         """the robot's selected map when it is a different one than our rooms belong to (None when it's ours or unknown);
