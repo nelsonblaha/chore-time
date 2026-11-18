@@ -30,6 +30,7 @@ REQUESTS = None
 MAP_FLAG = 0
 MAP_SELECT = MAP_NAME = None
 FLOOR = "downstairs"
+BACKOFF = True
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
@@ -82,7 +83,8 @@ def configure(v):
     PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
     NAME = v.get("name", "Vacuum autopilot")
     OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
-    global FLOOR
+    global FLOOR, BACKOFF
+    BACKOFF = v.get("failed_start_backoff", True)   # false while someone is fixing the robot: retry every window
     FLOOR = v.get("floor") or OCC.get("floor") or "downstairs"   # for the status sentence
     UNTIDY_BLOCKS, SMART = bool(v.get("untidy_blocks")), v.get("smart_mode")
 
@@ -546,7 +548,8 @@ class Pilot:
                     datetime.fromtimestamp(D.get("run_started") or now).strftime("%H:%M"), max(0, span),
                     "; the robot went back to its %r map" % other.strip() if other else "")
                 n = D.get("fail_streak", 0) + 1
-                D.update(fail_streak=n, backoff_until=now + BACKOFF_S[min(n, len(BACKOFF_S)) - 1], failed_at=now)
+                D.update(fail_streak=n, backoff_until=now + BACKOFF_S[min(n, len(BACKOFF_S)) - 1] if BACKOFF else 0,
+                         failed_at=now)
                 self.log("failed_start", span=span, streak=n, map_other=other)
             else:
                 D.update(fail_streak=0, backoff_until=0)
