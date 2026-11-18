@@ -323,7 +323,7 @@ class Pilot:
         gesture = str(body.get("gesture") or "")
         request_id = str(body.get("request_id") or "").strip()[:160]
         supplied = body.get("rooms")
-        if gesture not in ("single", "double", "long"):
+        if gesture not in ("single", "double", "long", "cancel"):
             return {"ok": False, "rooms": [], "why": "unknown gesture"}
         if not request_id:
             return {"ok": False, "rooms": [], "why": "request_id is required"}
@@ -337,7 +337,22 @@ class Pilot:
         D.setdefault("manual_queue", [])
         seen = D.setdefault("manual_seen", {})
         if request_id in seen:
+            if seen[request_id].get("cancel"):
+                return {"ok": True, "rooms": seen[request_id]["rooms"], "why": "already cancelled"}
             return {"ok": True, "rooms": seen[request_id]["rooms"], "why": "already queued"}
+        if gesture == "cancel":
+            if supplied:
+                return {"ok": False, "rooms": [], "why": "floor cancellation takes no room selection"}
+            rooms = list(dict.fromkeys(room for job in D["manual_queue"] for room in job["rooms"]))
+            D["manual_queue"] = []
+            if D.get("run_kind") == "manual" and D.get("phase") != "idle":
+                D["phase"] = "cancelled"
+            seen[request_id] = {"rooms": rooms, "ts": time.time(), "cancel": True}
+            for old in list(seen)[:-200]:
+                del seen[old]
+            self.log("manual_cancelled", request_id=request_id, rooms=rooms)
+            self.save()
+            return {"ok": True, "rooms": rooms, "why": "manual jobs cleared"}
         if gesture != "long" and not supplied:
             return {"ok": False, "rooms": [], "why": "this gesture selected no rooms"}
 
@@ -780,6 +795,10 @@ class Pilot:
                 return "charging to 50% before the next queued clean"
         except (TypeError, ValueError):
             return "waiting for a valid battery reading"
+        if item.get("attempts"):
+            quiet, _ = self.quiet_for()
+            if quiet is None or quiet < START_QUIET_S:
+                return "waiting for %s to be empty before retrying" % FLOOR
         return None
 
     def finish_manual(self, ok, why, now):
@@ -789,9 +808,10 @@ class Pilot:
         item = next((x for x in queue if x.get("id") == request_id), None)
         if not item:
             return
-        if ok:
+        if ok or D.get("saw_clean") or D.get("trouble"):
             D["manual_queue"] = [x for x in queue if x.get("id") != request_id]
-            self.log("manual_done", request_id=request_id, rooms=item.get("rooms"))
+            self.log("manual_done" if ok else "manual_interrupted", request_id=request_id,
+                     rooms=item.get("rooms"), why=why)
             return
         item["attempts"] = int(item.get("attempts") or 0) + 1
         waits = (5 * 60, 15 * 60, 30 * 60, 60 * 60)
@@ -1074,6 +1094,9 @@ class Pilot:
                 D["docked_since"] = 0
             if D["phase"] == "running" and not D.get("saw_clean") and now - D.get("group_started", now) > 300:
                 self.finish("never started cleaning (state %s)" % vs, now)
+        elif ph == "cancelled":
+            if vs in ("docked", "charging"):
+                self.finish("manual jobs cancelled", now)
         elif ph == "between":       # next group only if downstairs is still empty (a manual FIFO job needs no vacancy)
             q, who = self.quiet_for(held=False)
             if now - D.get("run_started", now) > MAX_RUN_S:
@@ -1166,6 +1189,8 @@ class Pilot:
         ph = D["phase"]
         if ph == "idle":
             return "idle"
+        if ph == "cancelled":
+            return "manual jobs cancelled; waiting for the robot to dock"
         gr = (D.get("groups") or [{}])[D.get("gi", 0)] if D.get("groups") else {}
         rooms = gr.get("rooms") or []
         done = [r for r in rooms if D["visits"].get(r, 0) >= D.get("run_started", 0)]

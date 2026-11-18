@@ -235,6 +235,7 @@ class Upstairs(unittest.TestCase):
         self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
 
     def test_failed_manual_launch_stays_at_fifo_head_and_retries(self):
+        self.H[OCC]["attributes"]["floors"]["upstairs"]["since"] = self.now[0] - self.va.START_QUIET_S
         self.button(rooms=["Bath"])
         self.tick()
         self.tick(301)                                               # never entered cleaning
@@ -244,6 +245,52 @@ class Upstairs(unittest.TestCase):
         self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(299)])
         calls = self.tick(2)
         self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
+
+    def test_automatic_retry_of_unstarted_button_job_waits_for_vacancy(self):
+        self.button(rooms=["Bath"])
+        self.tick()
+        self.tick(301)
+        self.occ({"bedroom": "occupied"})
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(301)])
+        self.assertIn("empty", self.p.manual_wait("docked", "off", self.now[0]))
+
+    def test_interrupted_manual_job_is_retired_after_return_to_dock(self):
+        self.button(rooms=["Bath"], request_id="original")
+        self.tick()
+        self.S("vacuum.up", "cleaning")
+        self.tick(10)
+        self.S("vacuum.up", "error")
+        self.tick(80)
+        self.button(rooms=["Bath"], request_id="second-press")
+        self.S("vacuum.up", "docked")
+        self.tick(10)
+        self.tick(61)
+        self.assertEqual(self.p.D["manual_queue"], [])
+        self.assertIn("error", self.p.D["runs"][-1]["why"])
+
+    def test_cancel_clears_active_and_pending_jobs_once_even_across_reload(self):
+        self.button(rooms=["Bath"])
+        self.tick()
+        self.button(rooms=["Hall"], request_id="later")
+        got = self.button("cancel", request_id="clear")
+        self.assertEqual(got["rooms"], ["Bath", "Hall"])
+        self.assertEqual(self.p.D["phase"], "cancelled")
+        self.p.D = __import__("json").loads(self.p.path.read_text())
+        self.button(rooms=["Study"], request_id="fresh")
+        self.assertEqual(self.button("cancel", request_id="clear")["why"], "already cancelled")
+        self.S("vacuum.up", "returning")
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(300)])
+        self.S("vacuum.up", "docked")
+        self.tick()
+        self.assertEqual([job["rooms"] for job in self.p.D["manual_queue"]], [["Study"]])
+        self.assertEqual(self.p.D["runs"][-1]["why"], "manual jobs cancelled")
+
+    def test_cancel_before_launch_does_not_start_or_dock_robot(self):
+        self.button(rooms=["Bath"])
+        self.assertTrue(self.button("cancel", request_id="clear")["ok"])
+        self.assertEqual(self.p.D["manual_queue"], [])
+        self.assertEqual(self.p.D["phase"], "idle")
+        self.assertEqual(self.calls, [])
 
     def test_long_press_skips_accessible_untidy_and_other_blocked_rooms(self):
         self.tidy["bath"] = {"state": "untidy"}
