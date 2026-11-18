@@ -98,6 +98,7 @@ PREV_GRACE_S = 90            # sensors of the room it just left still belong to 
 RETRY_S = 30 * 60
 BETWEEN_QUIET_S = 5 * 60     # the next group of rooms needs 5 quiet minutes, not the 20 s a paused room needs to resume
 MAX_RUN_S = 3 * 3600         # a run older than this never launches another group (a stuck robot freed hours later goes home)
+HANDS_OFF = ("mapping",)     # robot statuses during which the autopilot sends nothing at all
 LEFTOVER_S = 10 * 60         # docked this long, charged, yet still "cleaning": the robot left its task unfinished
 LEFTOVER_BATTERY = 90        # (it resumes a recharge stop well before this; a mop wash takes a few minutes)
 SEG_LIGHTS = {}   # segment -> room light-mode selects, lit white while the robot finds its way home
@@ -633,6 +634,18 @@ class Pilot:
     def tick(self):
         now = time.time()
         D = self.D
+        st_ = self.get(STATUS).get("state") if STATUS else None
+        if st_ in HANDS_OFF:   # e.g. mapping the floor: no command of any kind (no pause, dock, fan, voice, start)
+            if D.get("hands_off") != st_:
+                D["hands_off"] = st_
+                self.log("hands_off", status=st_, phase=D["phase"])
+            self.publish({"why": "robot is %s: hands off until it's done" % st_}, self.get(VAC).get("state"), None)
+            self.save()
+            return
+        if D.get("hands_off"):
+            self.log("hands_off_over", status=st_)
+            D["hands_off"] = None
+            D["docked_since"] = 0
         self.night_voice()
         v = self.get(VAC)
         vs = v.get("state")
