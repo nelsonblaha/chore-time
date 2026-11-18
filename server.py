@@ -8,6 +8,7 @@ Events (one JSON object per line):
   adjust   {kid, points(+/-), reason, by}
   undo     {ref, by}                                     -> voids a report/spend/adjust/inspect
 """
+import hmac
 import json
 from tidy_spaces import space_states
 import random, os, re, threading, time, uuid, urllib.request, urllib.parse
@@ -49,6 +50,7 @@ def ha_token():
         return ""
 LEDGER = DATA / "ledger.jsonl"
 ILOG = DATA / "interactions.jsonl"
+VACUUM_BUTTON_TOKEN_FILE = Path(os.environ.get("VACUUM_BUTTON_TOKEN_FILE", DATA / "vacuum-button.token")).expanduser()
 NEWS_SEEN = DATA / "news_seen.json"   # whats-new version acknowledged, per device IP   # every UI tap/screen + TV guard decision, for later study
 
 
@@ -2089,6 +2091,13 @@ class H(BaseHTTPRequestHandler):
         except ValueError:
             return self.send(400, {"error": "bad json"})
         if self.path == "/api/vacuum/button":
+            try:
+                expected = VACUUM_BUTTON_TOKEN_FILE.read_text().strip()
+            except OSError:
+                return self.send(503, {"ok": False, "rooms": [], "why": "vacuum button authentication is not configured"})
+            supplied_token = self.headers.get("X-Vacuum-Button") or ""
+            if not expected or not hmac.compare_digest(supplied_token, expected):
+                return self.send(403, {"ok": False, "rooms": [], "why": "forbidden"})
             floor = str(b.get("floor") or "")
             planner = globals().get("VACUUM_PLANNERS", {}).get(floor)
             if floor not in ("upstairs", "downstairs"):

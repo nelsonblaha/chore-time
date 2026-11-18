@@ -249,7 +249,7 @@ class Upstairs(unittest.TestCase):
         self.S("binary_sensor.study_bath_door", "off")
         result = self.button("long", [], "whole-2")
         self.assertTrue(result["ok"])
-        self.assertEqual(result["rooms"], [])
+        self.assertEqual(result["rooms"], ["Hall", "Bedroom", "Bath"])
         self.assertTrue(self.p.D["manual_queue"][0]["whole_floor"])
         calls = self.tick()
         self.assertIn(("vacuum.start", {"entity_id": "vacuum.up"}), calls)

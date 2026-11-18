@@ -318,6 +318,11 @@ class Pilot:
             accessible_untidy = untidy - closed
             if not accessible_untidy:
                 rooms, whole_floor = [], True
+                for seg in SEGMENTS:
+                    why = (status.get(seg) or {}).get("why", "")
+                    blocked_other = (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy")
+                    if seg not in closed and not blocked_other:
+                        rooms.append(seg)
             else:
                 candidates = supplied or list(SEGMENTS)
                 rooms = []
@@ -332,7 +337,7 @@ class Pilot:
                         skipped.append(seg + " (untidy)")
                     else:
                         rooms.append(seg)
-        if not rooms and not whole_floor:
+        if not rooms:
             why = "no accessible allowed rooms"
             if skipped:
                 why += ": " + "; ".join(skipped)
