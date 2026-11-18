@@ -97,6 +97,15 @@ class RobotHeroJobs(Case):
         self.assertIn("empty its dirty water tank and fill its clean water tank", b["note"])
         self.assertEqual(self.job("help_rescue_down").get("closed"), "on_demand")
 
+    def test_a_wedged_bumper_says_how_to_free_it(self):
+        # "jiggle the laser turret on top of the robot and press the center button to go again"
+        self.app.set(ERR, "vertical_bumper_pressed", ago=60)
+        self.tick()
+        note = self.app.state()["board"]["help_rescue_down"]["note"]
+        self.assertIn("jiggle the laser tower", note)
+        self.assertIn("center button", note)
+        self.assertNotIn("Home button", note)
+
     def test_maintenance_never_opens_a_job(self):
         # worn parts, filters, the dust bag and other dock upkeep are grown-up work
         for err, dock in (("filter_blocked", "ok"), ("no_dustbin", "ok"), ("side_brush_error", "ok"),

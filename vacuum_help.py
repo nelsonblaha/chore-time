@@ -51,6 +51,12 @@ STUCK = {
 # Stuck ON something in the room: the room is untidy.
 TIDY = {"main_brush_jammed", "side_brush_jammed", "wheels_jammed", "robot_trapped", "bumper_stuck",
         "vertical_bumper_pressed", "wheels_suspended", "robot_tilted", "vibrarise_jammed"}
+# How a kid gets it going again, when it's more than "pull it free, press Home".
+FIX = {
+    "vertical_bumper_pressed": ["Pull it out from under whatever it is wedged under.",
+                                "Gently jiggle the laser tower on top of the robot.",
+                                "Press the center button on top so it goes again."],
+}
 # It can't drive home by itself: carry it.
 CARRY = {"low_battery", "return_to_dock_fail"}
 WATER_ERRORS = {"clear_water_box_hoare": "clean", "clear_water_box_exception": "clean", "dirty_water_box_hoare": "dirty"}
@@ -135,7 +141,8 @@ def rescue_note(robot, n, spaces, room, base=3):
     where = words(spaces, room)
     step2 = "Carry it gently back onto its dock." if n["error"] in CARRY else \
         "Press the Home button on top so it can go home."
-    steps = ([] if n["error"] in CARRY else ["Free it: pull out whatever it is caught on."]) + [step2]
+    steps = list(FIX[n["error"]]) if n["error"] in FIX else \
+        ([] if n["error"] in CARRY else ["Free it: pull out whatever it is caught on."]) + [step2]
     tidy = bool(spaces) and n["error"] in TIDY
     if tidy:
         steps.append("Then tidy at least part of " + where + " so it never gets stuck there again!")
