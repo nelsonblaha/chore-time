@@ -8,6 +8,8 @@ and the TV unlocks when the stars are earned.
 
 <img src="docs/img/tour.gif" width="640" alt="Chore Time on a Nest Hub Max: pick who you are, pick a job, earn stars, spend them">
 
+**[▶ Try the live demo](https://blaha.io/chore-demo)**: a made-up family on the real screens. Tap anything; nothing you do is saved.
+
 [![tests](https://github.com/nelsonblaha/chore-time/actions/workflows/tests.yml/badge.svg)](https://github.com/nelsonblaha/chore-time/actions/workflows/tests.yml)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![deps](https://img.shields.io/badge/core%20dependencies-none-brightgreen)
@@ -70,6 +72,10 @@ Chore Time was built around Google **Nest Hub Max** displays. A Hub on the kitch
 | **Self-updating** | Every Hub and TV page reloads itself when you deploy a new version, but never while a dialog is open. |
 
 ## Try it in one minute
+
+**In your browser:** [blaha.io/chore-demo](https://blaha.io/chore-demo) is the kids' screen for a made-up family (Ava, Max and Zoe). Open a kid, start a job, pick a goal. Tap the grown-up card to see the watch login (it says yes by itself after 3 seconds) and the grown-ups' page. It's read-only: every tap stays in your browser.
+
+**On your machine:**
 
 ```bash
 git clone https://github.com/nelsonblaha/chore-time && cd chore-time
