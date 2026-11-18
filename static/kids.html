@@ -59,6 +59,8 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
 .callegend{display:flex;align-items:center;justify-content:center;gap:22px;margin:-3px 0 8px;font-size:18px;font-weight:900}.calkey{display:inline-flex;align-items:center;gap:7px}.caldot{width:18px;height:18px;border-radius:6px;background:#607d8b}.caldot.kids{background:#1565c0}.caldot.family{background:#ad1457}
 .calgrid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:7px}.calday{min-width:0;background:rgba(255,255,255,.85);border:3px solid #dce4ea;border-radius:20px;padding:7px;overflow-y:auto;overscroll-behavior:contain}.calday.today{border:6px solid #ffb300;background:#fff8d6;padding:4px;box-shadow:0 0 0 3px rgba(255,179,0,.2)}
 .caldow{text-align:center;text-transform:uppercase;font-size:17px;font-weight:900;letter-spacing:.5px;color:#52616b}.calnum{text-align:center;font-size:30px;font-weight:900;line-height:1.05;margin:2px 0 7px}.calday.today .calnum::after{content:" TODAY";display:block;font-size:12px;color:#9a5800;letter-spacing:.5px}.calevent{border-radius:12px;background:#607d8b;color:#fff;padding:5px 7px;margin:5px 0;font-size:15px;font-weight:900;line-height:1.15;overflow-wrap:anywhere;border-left:7px solid rgba(0,0,0,.2)}.calevent.kids{background:#1565c0}.calevent.family{background:#ad1457}.caltime{display:block;font-size:12px;font-weight:800;opacity:.9;margin-bottom:2px}.calempty{text-align:center;color:#90a4ae;font-size:13px;font-weight:800;margin-top:14px}
+/* ---------- full-screen menu details ---------- */
+#detail{padding:12px;background:linear-gradient(160deg,#f8fbff,#fff7ea);z-index:41}.dethead{display:flex;align-items:center;gap:14px}.detback{background:#fff;border-radius:22px;box-shadow:0 5px 0 rgba(0,0,0,.12);font-size:30px;font-weight:900;padding:7px 16px}.dettitle{font-size:42px;font-weight:900}.detbody{flex:1;overflow-y:auto;overscroll-behavior:contain;margin-top:12px;padding:2px 8px 18px}.detsum{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.detcard{background:#fff;border-radius:24px;padding:14px 18px;box-shadow:0 5px 0 rgba(0,0,0,.1);font-size:20px;font-weight:800}.detcard .dn{font-size:48px;font-weight:900;color:var(--kid)}.detlist{max-width:900px;margin:14px auto}.detrow{display:flex;align-items:center;gap:12px;background:#fff;border-radius:18px;padding:10px 14px;margin:8px 0;font-size:20px;font-weight:800;box-shadow:0 3px 0 rgba(0,0,0,.08)}.detrow .di{font-size:38px}.detrow .dr{margin-left:auto;font-weight:900;color:var(--kid);white-space:nowrap}.detrewards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;max-width:1000px;margin:16px auto}.detreward{background:#fff;border:4px solid transparent;border-radius:24px;padding:14px;text-align:center;font-size:20px;font-weight:900;box-shadow:0 4px 0 rgba(0,0,0,.1)}.detreward.on{border-color:var(--kid)}.detreward .ri{font-size:62px}.detreward:active{transform:scale(.96)}
 /* progress bar */
 .goalrow{display:flex;align-items:center;gap:12px;margin:14px 6px 4px 10px}
 .barwrap{position:relative;flex:1;height:46px}
@@ -283,6 +285,11 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
   <div class="calgrid" id="calgrid"></div>
 </section>
 
+<section id="detail" class="screen">
+  <div class="dethead"><div class="detback" id="detback">&#9664; Menu</div><div class="dettitle" id="dettitle"></div></div>
+  <div class="detbody" id="detbody"></div>
+</section>
+
 <section id="news" class="screen" style="align-items:center;justify-content:center;text-align:center;background:linear-gradient(160deg,#fff3c4,#ffd6f0,#d6ecff);z-index:40">
   <div style="font-size:80px;font-weight:900" id="newsh"></div>
   <div id="newsl" style="display:flex;flex-wrap:wrap;gap:20px;justify-content:center;margin-top:10px;max-width:1100px"></div>
@@ -499,12 +506,12 @@ function render(){
   $("kids").innerHTML=h;
   document.querySelectorAll(".kidcard[data-k]").forEach(function(n){n.onclick=function(){openKid(n.dataset.k)}});
   $("bencard").onclick=adultRequest;
-  if(kid)renderKid();
+  if(kid)renderKid();if($("detail").classList.contains("on"))renderDetail(DETAIL);
 }
 
-var MENU=false;
+var MENU=false,DETAIL=null;
 function safeText(x){return String(x==null?"":x).replace(/[&<>\"]/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]})}
-function streakInfo(SK){L("streak_tap");MENU=false;$("kmenu").classList.remove("on");modal('<div class="big">'+E("1f525")+'</div><div class="q">'+(SK.current||0)+' day'+(SK.current===1?"":"s")+' in a row!</div><div class="q" style="font-size:24px;opacity:.8">'+(SK.today?E("2705")+' You did a job today. Come back tomorrow!':'Do a job today to keep your '+E("1f525")+' going!')+'</div><div class="q" style="font-size:20px;opacity:.6">Best: '+(SK.best||0)+'</div>');addOk()}
+function streakInfo(){openDetail("streak")}
 var CALWEEK=null;
 function calKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
 function calWeek(d){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate()),n=(x.getDay()+6)%7;x.setDate(x.getDate()-n);return x}
@@ -529,19 +536,39 @@ function renderCalendar(){
 }
 function openCalendar(){L("calendar_open");MENU=false;$("kmenu").classList.remove("on");CALWEEK=calWeek(new Date());$("kid").classList.remove("on");$("calendar").classList.add("on");renderCalendar()}
 function closeCalendar(){L("calendar_close");$("calendar").classList.remove("on");$("kid").classList.add("on");renderKid()}
+function detailShare(r,k,total){var team=r.team||[r.kid],fixed=r.split||{},out={},left=Math.max(0,+total||0),rest=[];team.forEach(function(m){if(fixed[m]!=null){out[m]=Math.max(0,Math.min(+fixed[m]||0,left));left-=out[m]}else rest.push(m)});if(!rest.length&&left>0)rest=[team[0]];rest.forEach(function(m,i){out[m]=(out[m]||0)+Math.floor(left/rest.length)+(i<left%rest.length?1:0)});return out[k]||0}
+function detailDate(ts){return new Date(ts*1000).toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"})}
+function openDetail(kind){DETAIL=kind;MENU=false;$("kmenu").classList.remove("on");$("kid").classList.remove("on");$("detail").classList.add("on");L("menu_detail",{kind:kind});renderDetail(kind)}
+function closeDetail(){L("menu_detail_close",{kind:DETAIL});DETAIL=null;$("detail").classList.remove("on");$("kid").classList.add("on");renderKid()}
+function renderDetail(kind){if(!kid)return;var b=S.balance[kid]||0,p=(S.pending_points||{})[kid]||0,k=K(),html="",title="";
+  if(kind==="points"){
+    title=E("2b50")+" Points";var rows=(S.history||[]).filter(function(h){return (h.type==="adjust"&&h.kid===kid)||(h.type==="report"&&inTeam(h,kid)&&(h.status==="inspected"||h.status==="pending"))}).sort(function(a,z){return (z.inspected_ts||z.ts)-(a.inspected_ts||a.ts)}).slice(0,16);
+    html='<div class="detsum"><div class="detcard"><div class="dn">'+b+' '+E("2b50")+'</div>Ready to spend</div><div class="detcard"><div class="dn">'+p+' '+E("23f3")+'</div>Waiting for inspection</div><div class="detcard"><div class="dn">'+((S.earned||{})[kid]||0)+' '+E("2728")+'</div>Earned all time</div></div><div class="detlist"><h2>Recent point activity</h2>'+
+      (rows.length?rows.map(function(r){var pending=r.status==="pending",n=r.type==="adjust"?(+r.points||0):detailShare(r,kid,pending?r.points:r.awarded),name=r.type==="adjust"?(r.reason||"Point adjustment"):(r.chore_name||r.chore);return '<div class="detrow"><span class="di">'+(r.type==="adjust"?E(r.points<0?"1f6ab":"2b50"):E(r.chore_icon))+'</span><span>'+safeText(name)+'<span class="kms">'+detailDate(r.inspected_ts||r.ts)+(pending?' · waiting for inspection':'')+'</span></span><span class="dr">'+(pending?"+"+n+" waiting":(n>0?"+":"")+n+" ⭐")+'</span></div>'}).join(""):'<div class="detcard">Do a chore to start your point history.</div>')+'</div>'
+  }else if(kind==="streak"){
+    title=E("1f525")+" Streak";var SK=(S.streak||{})[kid]||{current:0,best:0},done=(S.history||[]).filter(function(r){return r.type==="report"&&r.status==="inspected"&&!r.partial&&inTeam(r,kid)}).sort(function(a,z){return z.ts-a.ts}).slice(0,10);
+    html='<div class="detsum"><div class="detcard"><div class="dn">'+(SK.current||0)+' days</div>Current streak</div><div class="detcard"><div class="dn">'+(SK.best||0)+' days</div>Best streak</div><div class="detcard"><div class="dn">'+(SK.today?E("2705"):E("23f3"))+'</div>'+(SK.today?'Job done today':'Do a job today to keep it going')+'</div></div><div class="detlist"><h2>Recent streak jobs</h2>'+(done.length?done.map(function(r){return '<div class="detrow"><span class="di">'+E(r.chore_icon)+'</span><span>'+safeText(r.chore_name)+'</span><span class="dr">'+detailDate(r.ts)+'</span></div>'}).join(""):'<div class="detcard">No inspected jobs yet.</div>')+'</div>'
+  }else if(kind==="news"){
+    title=E("1f4f0")+" News";var news=newsFeed(S);html='<div class="detlist">'+(news.length?news.map(function(n){return '<div class="detrow"><span class="di">'+E(n.icon)+'</span><span>'+n.text+'<span class="kms">'+detailDate(n.ts)+'</span></span></div>'}).join(""):'<div class="detcard">No news yet.</div>')+'</div>'
+  }else{
+    title=E("1f3af")+" My goal";var G=myGoal(),chosen=(S.goals||{})[kid],pct=Math.min(100,Math.round(b/Math.max(1,G.r.cost)*100));html='<div class="detcard" style="max-width:760px;margin:auto;text-align:center"><div style="font-size:86px">'+E(G.r.icon)+'</div><h2 style="margin:0">'+safeText(G.r.name)+'</h2><div class="dn">'+b+' / '+G.r.cost+' '+E("2b50")+'</div><div style="height:22px;background:#ddd;border-radius:12px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:var(--kid)"></div></div><div style="margin-top:6px">'+(b>=G.r.cost?'You have enough!':(G.r.cost-b)+' more points to go')+'</div></div><h2 style="text-align:center">Choose a goal</h2><div class="detrewards">'+S.config.rewards.slice().sort(function(a,z){return a.cost-z.cost}).map(function(r){return '<div class="detreward'+(chosen===r.id?' on':'')+'" data-dgoal="'+r.id+'"><div class="ri">'+E(r.icon)+'</div>'+safeText(r.name)+'<div>'+r.cost+' '+E("2b50")+'</div></div>'}).join("")+'<div class="detreward'+(!chosen?' on':'')+'" data-dgoal=""><div class="ri">'+E("1f3af")+'</div>Auto<div class="kms">Pick my next goal for me</div></div></div>'
+  }
+  $("dettitle").innerHTML=title;$("detbody").innerHTML=html;
+  document.querySelectorAll("[data-dgoal]").forEach(function(n){n.onclick=function(){var v=n.dataset.dgoal||null;L("goal_set",{reward:v});api("/api/goal",{kid:kid,reward:v}).then(function(res){if(res.ok){S=res.state;renderDetail("goal")}})}})
+}
 function renderKidMenu(){
   var b=S.balance[kid]||0,p=(S.pending_points||{})[kid]||0,SK=(S.streak||{})[kid]||{current:0},MY=((S.awards||{})[kid])||[],G=myGoal(),gc=G.r.cost;
   $("kbal").innerHTML=b+" "+E("2b50");
   $("kmenu").innerHTML='<div class="kmgrid">'+
-    '<div class="kmcard"><span class="kmi">'+E("2b50")+'</span> '+b+' points<span class="kms">'+(p?E("1f50d")+' +'+p+' waiting for inspection':'No points waiting')+'</span></div>'+
+    '<div class="kmcard" id="kmpoints"><span class="kmi">'+E("2b50")+'</span> '+b+' points<span class="kms">'+(p?E("1f50d")+' +'+p+' waiting for inspection':'No points waiting')+'</span></div>'+
     '<div class="kmcard" id="kmstreak"><span class="kmi">'+E("1f525")+'</span> '+(SK.current||0)+' day streak<span class="kms">Best: '+(SK.best||0)+(SK.today?' · done today':' · do a job today')+'</span></div>'+
     '<div class="kmcard" id="kmawards"><span class="kmi">'+E("1f3c5")+'</span> '+MY.length+' awards<span class="kms">Achievements and records</span></div>'+
     '<div class="kmcard" id="kmnews"><span class="kmi">'+E("1f4f0")+'</span> News<span class="kms">What is new for the kids</span></div>'+
     '<div class="kmcard" id="kmcalendar" style="grid-column:1/-1;background:#e3f2fd"><span class="kmi">'+E("1f4c5")+'</span> Calendar<span class="kms">Open the family week</span></div>'+
     '<div class="kmcard" id="kmgoal" style="grid-column:1/-1"><span class="kmi">'+E(G.r.icon)+'</span> Goal: '+safeText(G.r.name)+'<span class="kms">'+b+' of '+gc+' points'+(b>=gc?' · ready!':' · '+(gc-b)+' to go')+'</span></div></div>';
   $("kmenu").classList.toggle("on",MENU);
-  $("kmstreak").onclick=function(){streakInfo(SK)};$("kmawards").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openAwards()};
-  $("kmnews").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openNews(0)};$("kmcalendar").onclick=openCalendar;$("kmgoal").onclick=function(){MENU=false;$("kmenu").classList.remove("on");pickGoal()};
+  $("kmpoints").onclick=function(){openDetail("points")};$("kmstreak").onclick=function(){streakInfo(SK)};$("kmawards").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openAwards()};
+  $("kmnews").onclick=function(){openDetail("news")};$("kmcalendar").onclick=openCalendar;$("kmgoal").onclick=function(){openDetail("goal")};
 }
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
@@ -1051,12 +1078,7 @@ function myGoal(){var b=S.balance[kid],rs=S.config.rewards.slice().sort(function
   var r=ch&&rs.find(function(x){return x.id===ch});if(r)return{r:r,auto:false};
   var fav=(S.favorite||{})[kid];r=fav&&rs.find(function(x){return x.id===fav});if(r)return{r:r,auto:true,fav:true};
   r=rs.find(function(x){return x.cost>b})||rs[rs.length-1];return{r:r,auto:true}}
-function pickGoal(){L("goal_open");var ch=(S.goals||{})[kid],b=S.balance[kid];
-  var g=S.config.rewards.slice().sort(function(x,y){return x.cost-y.cost}).map(function(r){return '<div class="toyb" data-g="'+r.id+'" style="'+(ch===r.id?"border:5px solid var(--kid)":"")+'">'+E(r.icon)+'<span class="lbl">'+r.name+' &middot; '+r.cost+'</span></div>'}).join("");
-  g+='<div class="toyb" data-g="" style="'+(!ch?"border:5px solid var(--kid)":"")+'">'+E("1f3af")+'<span class="lbl">Auto</span></div>';
-  modal('<div class="q">'+E("1f3af")+' Pick your goal</div><div class="toygrid">'+g+'</div>');
-  document.querySelectorAll("#mbox [data-g]").forEach(function(n){n.onclick=function(){var v=n.dataset.g||null;L("goal_set",{reward:v});
-    api("/api/goal",{kid:kid,reward:v}).then(function(res){if(res.ok){S=res.state;renderKid()}closeModal()})}})}
+function pickGoal(){L("goal_open");openDetail("goal")}
 /* --- grown-up mode: confirm on the lead grown-up's watch --- */
 function TVL(){var T=(S&&S.tv&&S.tv.tvs)||{};return Object.keys(T).map(function(id){return {id:id,name:T[id].short||T[id].name,icon:T[id].icon||"1f4fa"}})}
 function tvShort(id){var t=((S&&S.tv&&S.tv.tvs)||{})[id];return t?(t.short||t.name):id}
@@ -1118,10 +1140,7 @@ function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(functi
     out.push({ts:R.ts,icon:"1f947",text:who+" set the "+c.name+(R.size?" ("+R.size+"-person)":"")+" record: "+Math.floor(R.sec/60)+":"+("0"+R.sec%60).slice(-2)+"!",kind:"record"})});
   Object.keys(S.awards||{}).forEach(function(k){(S.awards[k]||[]).forEach(function(a){if(/^(lvl|jobs|earned|days):/.test(a.id||"")&&!/^jobs:1$/.test(a.id))out.push({ts:a.ts,icon:"2b06",text:KN(k).name+": "+a.title.replace("!","")+"!",kind:"level"})})});
   return out.sort(function(a,b){return b.ts-a.ts}).slice(0,12)}
-function openNews(pg){pg=pg||0;if(!pg)L("news_open");var f=newsFeed(S),PER=4,pages=Math.max(1,Math.ceil(f.length/PER));if(pg>=pages)pg=pages-1;
-  modal('<div class="q">'+E("1f4f0")+' News</div><div style="text-align:left;max-height:520px;overflow:hidden">'+(f.length?f.slice(pg*PER,pg*PER+PER).map(function(n){return '<div style="display:flex;gap:12px;align-items:center;font-size:24px;font-weight:800;padding:6px 0;border-bottom:1px solid #eee"><span style="font-size:44px">'+E(n.icon)+'</span><span>'+n.text+'</span></div>'}).join(""):'<div class="q">No news yet</div>')+'</div>'+pagerSm("news",pg,pages));
-  document.querySelectorAll("#mbox [data-pgm]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var d=+n.dataset.pgm.split(":")[1];if(pg+d<0||pg+d>=pages)return;L("page_news",{to:pg+d});openNews(pg+d)}});
-  addOk()}
+function openNews(){L("news_open");openDetail("news")}
 /* --- back after a while (15 min+) with a job left over -> remind first --- */
 function remindJob(k,lastUse){var PZ=(S.paused||{})[k],A=(S.active||{})[k],it=PZ||A;
   if(!it)Object.keys(S.active||{}).forEach(function(x){var a=S.active[x];if(!it&&(a.team||[]).indexOf(k)>=0&&(S.config.chores.find(function(c){return c.id===a.chore})||{}).remind)it=A=a});   // still on a team letter
@@ -1405,9 +1424,10 @@ function addOk(after){ // every message waits for a tap: kids read slowly
 function modal(h){$("mbox").innerHTML='<div class="mx" id="mx" aria-label="Close">&times;</div>'+h;$("mx").onclick=function(e){e.stopPropagation();closeModal()};$("m").classList.add("on");poke()}
 function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.chores:[]).forEach(function(c){delete c._note});$("m").classList.remove("on")}
 function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
-  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
+  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;DETAIL=null;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");$("detail").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
 $("menubtn").onclick=function(e){e.stopPropagation();MENU=!MENU;L("menu",{open:MENU});renderKidMenu()};
+$("detback").onclick=closeDetail;
 $("calback").onclick=closeCalendar;
 $("calprev").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()-7);L("calendar_week",{move:-1,week:calKey(CALWEEK)});renderCalendar()};
 $("calnext").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()+7);L("calendar_week",{move:1,week:calKey(CALWEEK)});renderCalendar()};
