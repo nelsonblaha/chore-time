@@ -20,7 +20,7 @@ UP = {
     "name": "Upstairs autopilot", "vacuum": "vacuum.up", "room_sensor": "sensor.up_room", "battery": "sensor.up_battery",
     "error": "sensor.up_error", "cleaning": "binary_sensor.up_cleaning", "mode_select": "select.up_mode",
     "enable": "input_boolean.up_autopilot", "active": "input_boolean.up_autopilot_active", "map_flag": 1,
-    "map_select": "select.up_map", "map_name": "Upstairs", "publish": "sensor.up_autopilot", "log_src": "vac_up", "tvs": [], "smart_mode": "always", "untidy_blocks": True,
+    "room_requests": "input_text.up_requests", "map_select": "select.up_map", "map_name": "Upstairs", "publish": "sensor.up_autopilot", "log_src": "vac_up", "tvs": [], "smart_mode": "always", "untidy_blocks": True,
     "segments": {"Hall": {"rooms": ["hall"], "mop": True}, "Bedroom": {"rooms": ["bedroom"], "chore": "bedroom"},
                  "Bath": {"rooms": ["bath"], "mop": True}, "Study": {"rooms": ["study"]}, "Study Closet": {"rooms": ["study_closet"]}},
     "guest_switches": {"Bedroom": "input_boolean.bedroom_guest"},
@@ -172,6 +172,14 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(len(self.posts), 2)
         self.assertNotEqual(self.posts[0][2]["heartbeat"], self.posts[1][2]["heartbeat"])
         self.assertEqual(self.posts[1][2]["why"], "switched off")
+
+    def test_a_pressed_clean_when_vacant_runs_with_the_switch_off(self):
+        # "clean when vacant runs at next vacancy regardless of switch"; the switch only governs the autopilot's own runs
+        self.S("input_boolean.up_autopilot", "off")
+        self.assertIsNone(self.run_until_start()[0])
+        self.S("input_text.up_requests", '{"Bath": %d}' % (self.now[0] - 5))
+        launch, _ = self.run_until_start()
+        self.assertEqual(launch["rooms"], ["Bath"])                  # only the pressed room
 
     def test_two_robots_never_share_settings(self):
         down = load_copy()

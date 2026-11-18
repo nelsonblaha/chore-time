@@ -660,10 +660,13 @@ class Pilot:
         ph = D["phase"]
         info = {}
         if ph == "idle":
-            if self.get(ENABLE).get("state") != "on":
-                info["why"] = "switched off"
-            else:
-                rooms = self.eligible()
+            on = self.get(ENABLE).get("state") == "on"
+            # the switch governs only the runs the autopilot starts by itself; a room a grown-up pressed
+            # "clean when vacant" on still goes at the next vacancy with it off
+            rooms = self.eligible() if on else [r for r in self.eligible() if r in self.room_requests()]
+            if not on:
+                info["why"] = "switched off" + ("; cleaning the requested rooms when vacant" if rooms else "")
+            if rooms or on:
                 info["eligible"] = rooms
                 q, who = self.quiet_for() if rooms else (None, None)
                 info["quiet_min"] = None if q is None else round(min(q, 99 * 3600) / 60)
