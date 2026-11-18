@@ -7,6 +7,16 @@ A person downstairs mid-run => pause in place; 3 min quiet => resume; still ther
 The next group of rooms needs 5 quiet minutes. A robot that got stuck, or that a grown-up stopped or sent home,
 ends the run once it's docked; so does a run more than 3 hours old.
 No phone notices. Everything is logged (src "vac") and published as sensor.vacuum_autopilot.
+
+More robots: each gets its own copy (server loads this module once per house.json section listed in
+"vacuum_more"), with its own state file, sensor ("publish") and log source ("log_src"). Optional per robot:
+  occupancy       {"sensor", "floor", "seal": {room: {"doors": [...], "segments": [...]}}}: floor vacancy from the house's
+                  people tracker instead of motion sensors; an occupied room shut off by closed doors doesn't count, its
+                  robot rooms are skipped
+  guest_switches  {segment: switch}: skip a room while a guest stays there
+  untidy_blocks   true: a room marked untidy waits until it's tidy
+  smart_mode      "always" | "day": the robot's own automatic mode (it picks vacuum or mop per room)
+  tvs             which TVs count as someone here ([] = none on this floor)
 """
 import json
 import time
@@ -24,6 +34,12 @@ SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligib
 MOP = set()      # segments that get vacuum + mop; the rest vacuum only
 SENSORS = {}     # person-evidence sensor -> the segment it sits in (the robot trips its own room's sensors)
 HELD = set()     # of those, sensors whose On holds for many minutes (a thermostat's motion): only the turn-on counts
+PUBLISH, LOG_SRC, NAME = "sensor.vacuum_autopilot", "vac", "Vacuum autopilot"   # one per robot: own sensor, log, name
+OCC = {}         # presence-tracker floor vacancy instead of motion sensors (vacuum.occupancy), see occ_presence()
+TV_IDS = None    # TVs that count as "someone here" (None = every TV; [] = none, e.g. a floor without TVs)
+GUESTS = {}      # segment -> a "guest staying here" switch: skip that room while it's on
+UNTIDY_BLOCKS = False   # a room marked untidy (tidy_spaces) is never vacuumed until it's tidy again
+SMART = None     # "always" | "day": the robot's own automatic mode (it picks vacuum/mop per room); night keeps quiet tiers
 
 
 def configure(v):
@@ -58,6 +74,11 @@ def configure(v):
     global RESUME_QUIET_S, SCHEDULE, EVERY_H, DINNER
     RESUME_QUIET_S = int(v.get("resume_quiet_s", 20))
     SCHEDULE, EVERY_H, DINNER = dict(v.get("schedule") or {}), float(v.get("every_h", 72)), dict(v.get("dinner") or {})
+    global PUBLISH, LOG_SRC, OCC, TV_IDS, GUESTS, UNTIDY_BLOCKS, SMART, NAME
+    PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
+    NAME = v.get("name", "Vacuum autopilot")
+    OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
+    UNTIDY_BLOCKS, SMART = bool(v.get("untidy_blocks")), v.get("smart_mode")
 
 
 # A PERSON coming onto this floor vs the robot tripping sensors: the robot sets off random sensors one at a time;
@@ -112,10 +133,10 @@ def dinner_from_rows(rows, q0, q1, w0, w1, gap, need):
 
 
 class Pilot:
-    def __init__(self, g):
+    def __init__(self, g, key="vacuum"):
         self.g = g
-        configure(g["HOUSE"]["vacuum"])
-        self.path = g["DATA"] / "vacuum_auto.json"
+        configure(g["HOUSE"][key])
+        self.path = g["DATA"] / ("vacuum_auto.json" if key == "vacuum" else "vacuum_auto_%s.json" % key)
         try:
             self.D = json.loads(self.path.read_text())
         except Exception:  # noqa: BLE001
@@ -154,7 +175,7 @@ class Pilot:
             else:
                 room = st
             self.track(vs, room, ts)
-        self.g["ilog"]({"src": "vac", "action": "backfill", "visits": self.D["visits"]})
+        self.g["ilog"]({"src": LOG_SRC, "action": "backfill", "visits": self.D["visits"]})
 
     # --- helpers -------------------------------------------------------------------------------
     def get(self, e):
@@ -165,7 +186,7 @@ class Pilot:
 
     def log(self, action, **kw):
         self.D["last_event"] = {"ts": time.time(), "action": action, **kw}
-        self.g["ilog"]({"src": "vac", "action": action, **kw})
+        self.g["ilog"]({"src": LOG_SRC, "action": action, **kw})
 
     def save(self):
         tmp = self.path.with_suffix(".tmp")
@@ -181,10 +202,54 @@ class Pilot:
             return "max_plus"
         return "turbo"
 
+    # --- presence from the house's people tracker (vacuum.occupancy) -----------------------------
+    def occ_presence(self, starting=True):
+        """(who, sealed rooms): who = why someone counts as on this floor now, or None.
+        Fails closed: a stale tracker or an incomplete roster counts as someone there. An occupied room whose doors
+        (contacts, on = open) all read closed is sealed off: it doesn't count, but its robot rooms are skipped.
+        "uncertain" holds back a START; during a run only real people pause it."""
+        s = self.get(OCC["sensor"])
+        a = s.get("attributes") or {}
+        try:
+            fresh = s.get("state") == "ok" and float(a.get("valid_until") or 0) > time.time() and a.get("roster_complete") is True
+        except (TypeError, ValueError):
+            fresh = False
+        if not fresh:
+            return "presence tracker unavailable", set()
+        rooms = ((a.get("floors") or {}).get(OCC["floor"]) or {}).get("rooms") or []
+        sealed = set()
+        for r in rooms:
+            info = (a.get("rooms") or {}).get(r) or {}
+            st = info.get("state")
+            if st == "clear" or (st == "uncertain" and not starting):
+                continue
+            seal = (OCC.get("seal") or {}).get(r) or {}
+            if seal.get("doors") and all(self.get(d).get("state") == "off" for d in seal["doors"]):
+                sealed.add(r)
+                continue
+            return "%s %s" % (r, st or "unknown"), sealed
+        return None, sealed
+
+    def sealed_segments(self):
+        _, sealed = self.occ_presence() if OCC else (None, set())
+        return {seg for r in sealed for seg in ((OCC.get("seal") or {}).get(r) or {}).get("segments") or []}
+
+    def occ_quiet(self):
+        now = time.time()
+        who, _ = self.occ_presence()
+        if who:
+            self.D["occ_quiet_since"] = None
+            return 0, who
+        if not self.D.get("occ_quiet_since"):
+            self.D["occ_quiet_since"] = now
+        return now - self.D["occ_quiet_since"], "presence tracker"
+
     def quiet_for(self, exclude=(), held=True):
         """seconds since the last person evidence downstairs (0 = someone there now), and its source.
         A held sensor's On is the moment it turned on, not someone there now; with held=False (a run under way, when
         the robot itself trips them and they stay On for half an hour) held sensors are left out."""
+        if OCC:
+            return self.occ_quiet()
         now, q, who, seen = time.time(), 10 ** 9, None, 0
         for e, seg in SENSORS.items():
             if seg in exclude or (e in HELD and not held):
@@ -208,6 +273,8 @@ class Pilot:
             if e in ENTRY_DOORS and max(0, now - stamp) < q:
                 q, who = max(0, now - stamp), e
         for name, t in self.g["TVS"].items():
+            if TV_IDS is not None and name not in TV_IDS:
+                continue
             try:
                 what, _ = self.g["tv_status"](t, self.tok)
             except Exception:  # noqa: BLE001
@@ -220,6 +287,8 @@ class Pilot:
         """Who/what shows a PERSON came onto this floor since the last check, or None. Robot-tripped sensors don't count:
         a door opening, an entry point (stairs, entry hall) outside the robot's rooms, or 2+ rooms in a row."""
         D = self.D
+        if OCC:
+            return self.occ_presence(starting=False)[0]
         seen = D.setdefault("seen_on", {})
         trig = [t for t in D.setdefault("trig", []) if now - t[0] < 300]
         robot = self.robot_rooms(now)
@@ -255,7 +324,8 @@ class Pilot:
         return None
 
     def eligible(self):
-        return [seg for seg, d in self.segment_status().items() if d["eligible"]]
+        sealed = self.sealed_segments()
+        return [seg for seg, d in self.segment_status().items() if d["eligible"] and seg not in sealed]
 
     def room_requests(self):
         """A persisted, explicit request is satisfied only by a later real visit.
@@ -287,6 +357,8 @@ class Pilot:
         busy = {a.get("chore") for a in st["active"].values()} | {z.get("chore") for z in st["paused"].values()}
         now = time.time()
         requests = self.room_requests()
+        spaces = (self.g["HOUSE"].get("tidy_spaces") or []) if UNTIDY_BLOCKS else []
+        tidy = st.get("tidy_spaces") or {}
         out = {}
         for seg in list(dict.fromkeys(SEGMENTS + list(SEG_CHORE) + list(SCHEDULE))):
             cids = list(SEG_CHORE.get(seg) or [])
@@ -303,8 +375,16 @@ class Pilot:
             d["tidied"] = tidied
             every = float(sch.get("every_h", EVERY_H)) * 3600
             d["next_due"] = last + every if last else now
+            messy = [sp["name"] for sp in spaces if set(sp.get("map_rooms") or [sp["id"]]) & set(rooms)
+                     and (tidy.get(sp["id"]) or {}).get("state") == "untidy"] if UNTIDY_BLOCKS else []
             if any(c in busy for c in cids) or any(x.get("pending_by") for x in xs):
                 d["why"] = "a kid's job here is in progress or waiting for a check"
+                d["blocked"] = True
+            elif GUESTS.get(seg) and self.get(GUESTS[seg]).get("state") == "on":
+                d["why"] = "a guest is staying here"
+                d["blocked"] = True
+            elif messy:
+                d["why"] = "marked untidy (%s): tidy it first" % ", ".join(messy)
                 d["blocked"] = True
             elif seg in requests:
                 d["eligible"], d["why"] = True, "requested: clean when vacant"
@@ -363,7 +443,7 @@ class Pilot:
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.tok}"})
             rows = (json.loads(urllib.request.urlopen(req, timeout=20).read()) or [[]])[0]
         except Exception as ex:  # noqa: BLE001
-            self.g["ilog"]({"src": "vac", "action": "dinner_check_failed", "error": repr(ex)})
+            self.g["ilog"]({"src": LOG_SRC, "action": "dinner_check_failed", "error": repr(ex)})
             return False
         ate = dinner_from_rows(rows, q0.timestamp(), min(time.time(), q1.timestamp()), w0.timestamp(), w1.timestamp(), gap, need)
         cache[key] = ate
@@ -397,9 +477,15 @@ class Pilot:
         return ex - {None}
 
     # --- runs ------------------------------------------------------------------------------------
+    def smart_now(self):
+        if SMART == "always":
+            return True
+        h = datetime.fromtimestamp(time.time()).hour
+        return SMART == "day" and not (h >= NIGHT[0] or h < NIGHT[1])
+
     def launch(self, now):
         gr = self.D["groups"][self.D["gi"]]
-        fan = self.tier()
+        fan = "smart_mode" if gr["mode"] == "smart_mode" else self.tier()
         self.call("select.select_option", {"entity_id": MODE_SEL, "option": gr["mode"]})
         self.call("vacuum.set_fan_speed", {"entity_id": VAC, "fan_speed": fan})
         self.call(CLEAN_SCRIPT, {"vacuum": VAC, "map_flag": MAP_FLAG, "rooms": gr["rooms"]})
@@ -412,6 +498,8 @@ class Pilot:
         vac = [r for r in rooms if r not in MOP]
         mop = [r for r in rooms if r in MOP]
         groups = ([{"mode": "vacuum", "rooms": vac}] if vac else []) + ([{"mode": "vac_and_mop", "rooms": mop}] if mop else [])
+        if self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
+            groups = [{"mode": "smart_mode", "rooms": list(rooms)}]
         self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
         self.log("start", rooms=rooms, saved=self.D["saved"])
@@ -562,7 +650,7 @@ class Pilot:
                     D.update(phase="paused", paused_at=now)
                     D["pauses"].append({"ts": now, "who": who, "robot_in": D.get("cur")})
                     self.log("pause", who=who, robot_in=D.get("cur"))
-                else:
+                elif (D.get("groups") or [{}])[D.get("gi", 0)].get("mode") != "smart_mode":
                     t = self.tier()
                     if t != D.get("fan") and (v.get("attributes") or {}).get("fan_speed") != t:
                         self.call("vacuum.set_fan_speed", {"entity_id": VAC, "fan_speed": t})
@@ -636,7 +724,8 @@ class Pilot:
 
     def publish(self, info, vs, room):
         D = self.D
-        attrs = {"friendly_name": "Vacuum autopilot", "icon": "mdi:robot-vacuum",
+        attrs = {"friendly_name": NAME, "icon": "mdi:robot-vacuum",
+                 **({"sealed_off": sorted(self.sealed_segments())} if OCC else {}),
                  "entry_events_connected": entry_edges.online,
                  "vacuum_entity": VAC, "map_flag": MAP_FLAG, "room_request_entity": REQUESTS,
                  "robot": vs, "robot_room": room, **info,
@@ -647,18 +736,18 @@ class Pilot:
         key = json.dumps([D["phase"], attrs], sort_keys=True, default=str)
         if key != self.last_pub or time.time() - D.get("pub_ts", 0) > 300:
             try:
-                self.g["ha_post_state"]("sensor.vacuum_autopilot", D["phase"], attrs, self.tok)
+                self.g["ha_post_state"](PUBLISH, D["phase"], attrs, self.tok)
                 self.last_pub, D["pub_ts"] = key, time.time()
             except Exception as ex:  # noqa: BLE001
                 print("vacuum_autopilot publish failed", ex, flush=True)
 
 
-def run(g):
-    p = Pilot(g)
+def run(g, key="vacuum"):
+    p = Pilot(g, key)
     while True:
         try:
             p.tick()
         except Exception as ex:  # noqa: BLE001
             print("vacuum autopilot error", repr(ex), flush=True)
-            g["ilog"]({"src": "vac", "action": "error", "error": repr(ex)})
+            g["ilog"]({"src": LOG_SRC, "action": "error", "error": repr(ex)})
         time.sleep(10 if p.D["phase"] != "idle" else 30)

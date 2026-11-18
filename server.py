@@ -4439,6 +4439,12 @@ def start_modules():
         if HOUSE.get("vacuum"):
             import vacuum_auto
             go("vacuum", vacuum_auto.run, globals())
+        for key in HOUSE.get("vacuum_more") or []:   # more robots (e.g. upstairs): one independent autopilot copy each
+            import importlib.util
+            spec_ = importlib.util.spec_from_file_location("vacuum_auto_" + key, Path(__file__).with_name("vacuum_auto.py"))
+            mod_ = importlib.util.module_from_spec(spec_)
+            spec_.loader.exec_module(mod_)
+            go("vacuum-" + key, mod_.run, globals(), key)
         if GROCY.get("url"):
             go("grocy-summary", watch_grocy)
         if (HOUSE.get("robot_locator") or {}).get("robots"):
