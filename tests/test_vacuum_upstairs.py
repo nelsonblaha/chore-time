@@ -154,15 +154,12 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(st["Bedroom"]["why"], "a guest is staying here")
         self.assertIn("marked untidy", st["Bath"]["why"])
 
-    def test_never_starts_while_the_robot_is_on_another_map(self):
-        # a robot left on a freshly made map: our room names mean nothing there, so a run would be a no-op
+    def test_on_another_map_it_still_starts_and_the_clean_script_switches_maps(self):
+        # the robot is switched to the right map automatically: the clean script loads map_flag's map first
         self.S("select.up_map", "Map 2")
-        self.assertIsNone(self.run_until_start()[0])
-        a = self.posts[-1][2]
-        self.assertIn("'Map 2'", a["why"])
-        self.assertEqual(a["map_selected"], "Map 2")
-        self.S("select.up_map", "Upstairs")
-        self.assertIsNotNone(self.run_until_start()[0])
+        launch, _ = self.run_until_start()
+        self.assertEqual(launch["map_flag"], 1)
+        self.assertEqual(self.posts[-1][2]["map_other"], "Map 2")
 
     def test_status_stays_fresh_while_switched_off(self):
         # the floor plan only trusts a status updated in the last 10 minutes; switched off, nothing else changes

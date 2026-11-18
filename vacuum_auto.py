@@ -670,14 +670,10 @@ class Pilot:
                 info["eligible"] = rooms
                 q, who = self.quiet_for() if rooms else (None, None)
                 info["quiet_min"] = None if q is None else round(min(q, 99 * 3600) / 60)
-                other = self.other_map()
-                if other:
-                    info["why"] = "the robot is on its map %r, not %r: its rooms don't match ours" % (other, MAP_NAME)
-                ok_robot = not other and vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
+                # on another map: the clean script loads ours first (the robot is switched to the right map automatically)
+                ok_robot = vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
                     (not BATTERY or float(self.get(BATTERY).get("state") or 0) >= 50) and (not ERROR or self.get(ERROR).get("state") in ("none", None))
-                if other:
-                    pass
-                elif rooms and not ok_robot:
+                if rooms and not ok_robot:
                     info["why"] = "robot busy/not ready"
                 elif rooms and q is not None and q >= START_QUIET_S and now - D.get("last_attempt", 0) > RETRY_S:
                     D["last_attempt"] = now
@@ -771,7 +767,8 @@ class Pilot:
         self.save()
 
     def other_map(self):
-        """the robot's selected map when it is a different one than our rooms belong to (None when it's ours or unknown)"""
+        """the robot's selected map when it is a different one than our rooms belong to (None when it's ours or unknown);
+        shown on the status only: the clean script switches the robot to our map before it sends the rooms"""
         if not (MAP_SELECT and MAP_NAME):
             return None
         m = self.get(MAP_SELECT).get("state")
@@ -785,7 +782,8 @@ class Pilot:
                  **({"sealed_off": sorted(self.sealed_segments())} if OCC else {}),
                  "entry_events_connected": entry_edges.online,
                  "vacuum_entity": VAC, "map_flag": MAP_FLAG, "room_request_entity": REQUESTS,
-                 **({"map_name": MAP_NAME, "map_selected": self.get(MAP_SELECT).get("state")} if MAP_SELECT else {}),
+                 **({"map_name": MAP_NAME, "map_selected": self.get(MAP_SELECT).get("state"),
+                     "map_other": self.other_map()} if MAP_SELECT else {}),
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
                  "visits": {k: datetime.fromtimestamp(t).strftime("%a %H:%M") for k, t in D["visits"].items()},
