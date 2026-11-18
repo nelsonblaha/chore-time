@@ -23,6 +23,7 @@ import time
 import urllib.parse
 from datetime import datetime, timedelta
 from entry_edges import entry_edges
+import schedule
 
 # Filled from house.json "vacuum" by configure(); see example-config/house.json.
 VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = ACTIVE = UPSTAIRS = CLEAN_SCRIPT = None
@@ -32,6 +33,7 @@ MAP_SELECT = MAP_NAME = None
 FLOOR = "downstairs"
 BACKOFF = True
 PIN_MAP = False
+EXPLORE = {}
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
@@ -84,7 +86,10 @@ def configure(v):
     PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
     NAME = v.get("name", "Vacuum autopilot")
     OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
-    global FLOOR, BACKOFF, PIN_MAP
+    global FLOOR, BACKOFF, PIN_MAP, EXPLORE
+    # tidiness check: while the kids are here (and tomorrow too), now and then the robot explores a room marked untidy
+    # to find out how untidy it really is; if it gets stuck, that's the proof, and the kids rescue it (a rescue job)
+    EXPLORE = v.get("explore") or {}
     PIN_MAP = bool(v.get("pin_map"))   # put the robot back on map_name whenever it sits docked on another map
     BACKOFF = v.get("failed_start_backoff", True)   # false while someone is fixing the robot: retry every window
     FLOOR = v.get("floor") or OCC.get("floor") or "downstairs"   # for the status sentence
@@ -391,7 +396,7 @@ class Pilot:
         busy = {a.get("chore") for a in st["active"].values()} | {z.get("chore") for z in st["paused"].values()}
         now = time.time()
         requests = self.room_requests()
-        spaces = (self.g["HOUSE"].get("tidy_spaces") or []) if UNTIDY_BLOCKS else []
+        all_spaces = self.g["HOUSE"].get("tidy_spaces") or []
         tidy = st.get("tidy_spaces") or {}
         out = {}
         for seg in list(dict.fromkeys(SEGMENTS + list(SEG_CHORE) + list(SCHEDULE))):
@@ -409,8 +414,9 @@ class Pilot:
             d["tidied"] = tidied
             every = float(sch.get("every_h", EVERY_H)) * 3600
             d["next_due"] = last + every if last else now
-            messy = [sp["name"] for sp in spaces if set(sp.get("map_rooms") or [sp["id"]]) & set(rooms)
-                     and (tidy.get(sp["id"]) or {}).get("state") == "untidy"] if UNTIDY_BLOCKS else []
+            untidy = [sp["name"] for sp in all_spaces if set(sp.get("map_rooms") or [sp["id"]]) & set(rooms)
+                      and (tidy.get(sp["id"]) or {}).get("state") == "untidy"]
+            messy = untidy if UNTIDY_BLOCKS else []
             if any(c in busy for c in cids) or any(x.get("pending_by") for x in xs):
                 d["why"] = "a kid's job here is in progress or waiting for a check"
                 d["blocked"] = True
@@ -435,6 +441,9 @@ class Pilot:
                     d["why"] += "; nightly after " + sch["nightly_after"] + (" if dinner was eaten here" if sch.get("needs_dinner") else "")
             if d["eligible"]:
                 d["why"] += " · goes next time the floor is empty 20 min"
+            elif EXPLORE and untidy and (not d["blocked"] or messy and d["why"].startswith("marked untidy")):
+                d["explore"] = True   # untidy, and not held back for any other reason
+                d["why"] += " · the robot may explore it to check tidiness while the kids are home"
             out[seg] = d
         return out
 
@@ -526,7 +535,31 @@ class Pilot:
         self.D.update(group_started=now, saw_clean=False, fan=fan, docked_since=0)
         self.log("launch", rooms=gr["rooms"], mode=gr["mode"], fan=fan)
 
-    def start(self, rooms, now):
+    def explore_rooms(self, on, now):
+        """rooms for a tidiness check now, or []: the autopilot is on, the kids are here today and tomorrow,
+        it's the afternoon on a school day (or from the morning on a day off), not past the evening cut-off or
+        bedtime, and no tidiness check yet today"""
+        if not (EXPLORE and on):
+            return []
+        t = datetime.fromtimestamp(now)
+        if self.D.get("explore_day") == t.date().isoformat():
+            return []
+        if not (schedule.here_on(t.date()) and schedule.here_on(t.date() + timedelta(days=1))):
+            return []
+        off = schedule.off_on(t.date())
+        free = t.weekday() >= 5 or bool(off)
+        start_h = EXPLORE.get("free_from_h", 9) if free else EXPLORE.get("school_from_h", 15)
+        if not (start_h <= t.hour < EXPLORE.get("until_h", 19)):
+            return []
+        if (self.g["derive"]().get("bedtime") or {}).get("on"):
+            return []
+        homes = [k["home_entity"] for k in (self.g["cfg"]()["kids"] if self.g.get("cfg") else []) if k.get("home_entity")]
+        if homes and not any(self.get(e).get("state") == "on" for e in homes):
+            return []   # the calendar says they're here, but nobody is actually home to rescue it
+        sealed = self.sealed_segments()
+        return [seg for seg, d in self.segment_status().items() if d.get("explore") and seg not in sealed]
+
+    def start(self, rooms, now, explore=False):
         a = self.get(VAC).get("attributes") or {}
         self.D["saved"] = {"fan": a.get("fan_speed"), "mode": self.get(MODE_SEL).get("state")}
         vac = [r for r in rooms if r not in MOP]
@@ -535,9 +568,9 @@ class Pilot:
         if self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
             groups = [{"mode": "smart_mode", "rooms": list(rooms)}]
         self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None,
-                      clean_first=0, clean_last=0)
+                      clean_first=0, clean_last=0, explore=explore)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
-        self.log("start", rooms=rooms, saved=self.D["saved"])
+        self.log("start", rooms=rooms, saved=self.D["saved"], explore=explore)
         self.launch(now)
 
     def finish(self, why, now):
@@ -555,6 +588,12 @@ class Pilot:
                 self.log("failed_start", span=span, streak=n, map_other=other)
             else:
                 D.update(fail_streak=0, backoff_until=0)
+        if D.get("explore"):
+            rooms = ", ".join(r for g in (D.get("groups") or []) for r in g.get("rooms", []))
+            why = "🔍 tidiness check of %s: %s" % (rooms, "the robot made it through (floor passable)" if why == "done" else
+                                                  "the robot got stuck: untidy confirmed, the kids rescue it"
+                                                  if D.get("trouble") == "error" else why)
+            D["explore"] = False
         sv = self.D.get("saved") or {}
         if sv.get("mode") in ("vacuum", "vac_and_mop", "mop", "custom", "smart_mode"):
             self.call("select.select_option", {"entity_id": MODE_SEL, "option": sv["mode"]})
@@ -702,6 +741,14 @@ class Pilot:
                 # after failed starts, wait (2 h, 4 h, 8 h, then daily); a room pressed since the failure still goes
                 held = now < D.get("backoff_until", 0) and not any(t > D.get("failed_at", 0) for t in reqs.values())
                 hm = lambda t: datetime.fromtimestamp(t).strftime("%H:%M")
+                pr = [] if rooms else self.explore_rooms(on, now)
+                D["explore_next"] = bool(pr)
+                if pr:
+                    rooms = pr
+                    info["eligible"], info["explore"] = rooms, True
+                    q, who = self.quiet_for()
+                    info["quiet_min"] = None if q is None else round(min(q, 99 * 3600) / 60)
+                tag = "🔍 tidiness check of %s (the robot explores it; if it gets stuck the kids rescue it): " % ", ".join(pr) if pr else ""
                 if not rooms:
                     info.setdefault("why", "nothing due: every room is cleaned, blocked or not asked for")
                 elif not ok_robot:
@@ -711,14 +758,16 @@ class Pilot:
                     info["why"] = "not starting before %s: the last %d start(s) failed (%s)" % (
                         hm(D["backoff_until"]), D.get("fail_streak", 0), last)
                 elif q is None or q < START_QUIET_S:
-                    info["why"] = ("waiting for %s to be empty: quiet %d of %d minutes%s" % (
+                    info["why"] = tag + ("waiting for %s to be empty: quiet %d of %d minutes%s" % (
                         FLOOR, (q or 0) // 60, START_QUIET_S // 60, " (%s)" % self.who_text(who) if who else "")) if q is not None \
                         else "waiting: can't tell whether %s is empty" % FLOOR
                 elif now - D.get("last_attempt", 0) <= RETRY_S:
                     info["why"] = "waiting to retry at %s" % hm(D["last_attempt"] + RETRY_S)
                 else:
                     D["last_attempt"] = now
-                    self.start(rooms, now)
+                    if pr:
+                        D["explore_day"] = datetime.fromtimestamp(now).date().isoformat()
+                    self.start(rooms, now, explore=bool(pr))
         elif ph == "running":
             if vs in ("error", "idle", "paused"):   # stuck, or a grown-up stopped it: once it's home, the run is over
                 if not D.get("trouble"):
@@ -829,9 +878,12 @@ class Pilot:
         done = [r for r in rooms if D["visits"].get(r, 0) >= D.get("run_started", 0)]
         left = [r for r in rooms if r not in done and r != D.get("cur")]
         togo = ", %d room%s to go" % (len(left), "" if len(left) == 1 else "s") if left else ""
+        tag = "🔍 tidiness check: " if D.get("explore") else ""
         if ph == "running":
             if vs == "cleaning":
-                return "cleaning %s%s" % (D.get("cur") or "(room unknown)", togo)
+                return tag + "cleaning %s%s" % (D.get("cur") or "(room unknown)", togo)
+            if vs == "error" and D.get("explore"):
+                return tag + "the robot is stuck in %s (untidy confirmed): waiting for the kids to rescue it" % (D.get("cur") or "a room")
             return "run under way: the robot is %s%s" % (vs, togo)
         if ph == "paused":
             p = (D.get("pauses") or [{}])[-1]

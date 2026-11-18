@@ -224,6 +224,43 @@ class Upstairs(unittest.TestCase):
         self.S("vacuum.up", "cleaning")
         self.assertNotIn("select.select_option", [c[0] for c in self.tick(120)])   # never while it drives
 
+    def explore_setup(self, here=(True, True)):
+        import schedule
+        from datetime import date, timedelta
+        d0 = datetime.fromtimestamp(self.now[0]).date()
+        schedule.CACHE["days"] = {d0.isoformat(): here[0], (d0 + timedelta(days=1)).isoformat(): here[1]}
+        schedule.CACHE["off"] = {}
+        self.va.EXPLORE = {"school_from_h": 15, "free_from_h": 9, "until_h": 19}
+        for seg in UP["segments"]:
+            self.p.D["visits"][seg] = self.now[0]                 # everything freshly cleaned
+        self.tidy["bath"] = {"state": "untidy"}
+
+    def test_tidiness_check_explores_an_untidy_room_while_the_kids_are_here(self):
+        # "robot exploring area to determine tidiness, with a robot rescue as the fallback robot retrieval mechanism"
+        self.explore_setup()
+        self.assertIsNone(self.run_until_start()[0])             # a school day: not before 3 pm
+        self.now[0] = datetime(2026, 11, 18, 15, 0).timestamp()
+        self.occ({})                                              # (the tracker's lease, after the jump in time)
+        launch, _ = self.run_until_start()
+        self.assertEqual(launch["rooms"], ["Bath"])
+        self.S("vacuum.up", "cleaning")
+        self.tick()
+        self.assertTrue(self.posts[-1][2]["why"].startswith("🔍 tidiness check"))
+        self.S("vacuum.up", "error")                              # stuck
+        self.tick()
+        self.assertIn("untidy confirmed", self.posts[-1][2]["why"])
+        self.S("vacuum.up", "docked")                             # rescued and home
+        for _ in range(4):
+            self.tick()
+        self.assertIn("untidy confirmed", self.p.D["runs"][-1]["why"])
+        self.assertIsNone(self.run_until_start()[0])             # once a day
+
+    def test_no_tidiness_check_on_their_last_day_here(self):
+        self.explore_setup(here=(True, False))
+        self.now[0] = datetime(2026, 11, 18, 15, 0).timestamp()
+        self.occ({})                                              # (the tracker's lease, after the jump in time)
+        self.assertIsNone(self.run_until_start()[0])
+
     def test_two_robots_never_share_settings(self):
         down = load_copy()
         down.configure({"vacuum": "vacuum.down", "room_sensor": "sensor.down_room", "cleaning": "binary_sensor.down_cleaning",
