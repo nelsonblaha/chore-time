@@ -20,7 +20,7 @@ UP = {
     "name": "Upstairs autopilot", "vacuum": "vacuum.up", "room_sensor": "sensor.up_room", "battery": "sensor.up_battery",
     "error": "sensor.up_error", "cleaning": "binary_sensor.up_cleaning", "mode_select": "select.up_mode",
     "enable": "input_boolean.up_autopilot", "active": "input_boolean.up_autopilot_active", "map_flag": 1,
-    "publish": "sensor.up_autopilot", "log_src": "vac_up", "tvs": [], "smart_mode": "always", "untidy_blocks": True,
+    "map_select": "select.up_map", "map_name": "Upstairs", "publish": "sensor.up_autopilot", "log_src": "vac_up", "tvs": [], "smart_mode": "always", "untidy_blocks": True,
     "segments": {"Hall": {"rooms": ["hall"], "mop": True}, "Bedroom": {"rooms": ["bedroom"], "chore": "bedroom"},
                  "Bath": {"rooms": ["bath"], "mop": True}, "Study": {"rooms": ["study"]}, "Study Closet": {"rooms": ["study_closet"]}},
     "guest_switches": {"Bedroom": "input_boolean.bedroom_guest"},
@@ -44,17 +44,18 @@ class Upstairs(unittest.TestCase):
         self.va.configure(UP)
         self.now = [datetime(2026, 11, 18, 10, 0).timestamp()]
         self.va.time = type("T", (), {"time": staticmethod(lambda: self.now[0]), "sleep": staticmethod(lambda s: None)})
-        self.H, self.calls, self.tidy = {}, [], {}
+        self.H, self.calls, self.tidy, self.posts = {}, [], {}, []
         for e, v in (("vacuum.up", "docked"), ("sensor.up_room", "Hall"), ("binary_sensor.up_cleaning", "off"),
                      ("sensor.up_battery", "100"), ("sensor.up_error", "none"), ("select.up_mode", "vacuum"),
                      ("input_boolean.up_autopilot", "on"), ("input_boolean.bedroom_guest", "off"),
-                     ("binary_sensor.study_hall_door", "on"), ("binary_sensor.study_bath_door", "on")):
+                     ("binary_sensor.study_hall_door", "on"), ("binary_sensor.study_bath_door", "on"),
+                     ("select.up_map", "Upstairs ")):
             self.S(e, v)
         self.occ({})
         self.tmp = Path(tempfile.mkdtemp())
         house = {"tidy_spaces": SPACES, "up": UP}
         g = {"DATA": self.tmp, "ilog": lambda r: None, "ha_get": lambda e, t: self.H.get(e, {"state": "unavailable", "attributes": {}}),
-             "ha_call": lambda svc, d, t: self.calls.append((svc, d)), "ha_post_state": lambda *a: None,
+             "ha_call": lambda svc, d, t: self.calls.append((svc, d)), "ha_post_state": lambda *a: self.posts.append(a),
              "derive": lambda: {"board": {"bedroom": {"clean_until": 0, "last_clean": 0}}, "active": {}, "paused": {},
                                 "tidy_spaces": self.tidy},
              "TVS": {"living": {}}, "tv_status": lambda t, k: ("stream", 0), "ADULTS": {}, "HOUSE": house, "ha_token": lambda: "x",
@@ -152,6 +153,25 @@ class Upstairs(unittest.TestCase):
         st = self.p.segment_status()
         self.assertEqual(st["Bedroom"]["why"], "a guest is staying here")
         self.assertIn("marked untidy", st["Bath"]["why"])
+
+    def test_never_starts_while_the_robot_is_on_another_map(self):
+        # a robot left on a freshly made map: our room names mean nothing there, so a run would be a no-op
+        self.S("select.up_map", "Map 2")
+        self.assertIsNone(self.run_until_start()[0])
+        a = self.posts[-1][2]
+        self.assertIn("'Map 2'", a["why"])
+        self.assertEqual(a["map_selected"], "Map 2")
+        self.S("select.up_map", "Upstairs")
+        self.assertIsNotNone(self.run_until_start()[0])
+
+    def test_status_stays_fresh_while_switched_off(self):
+        # the floor plan only trusts a status updated in the last 10 minutes; switched off, nothing else changes
+        self.S("input_boolean.up_autopilot", "off")
+        self.tick()
+        self.tick(301)
+        self.assertEqual(len(self.posts), 2)
+        self.assertNotEqual(self.posts[0][2]["heartbeat"], self.posts[1][2]["heartbeat"])
+        self.assertEqual(self.posts[1][2]["why"], "switched off")
 
     def test_two_robots_never_share_settings(self):
         down = load_copy()

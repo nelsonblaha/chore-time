@@ -28,6 +28,7 @@ from entry_edges import entry_edges
 VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = ACTIVE = UPSTAIRS = CLEAN_SCRIPT = None
 REQUESTS = None
 MAP_FLAG = 0
+MAP_SELECT = MAP_NAME = None
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
@@ -51,6 +52,8 @@ def configure(v):
     ENABLE, ACTIVE = v["enable"], v["active"]
     UPSTAIRS = v.get("nobody_upstairs")      # "people on the other floor" sensor (off = nobody there 30 min)
     CLEAN_SCRIPT, MAP_FLAG = v.get("clean_script", "script.vacuum_clean_rooms"), v.get("map_flag", 0)
+    global MAP_SELECT, MAP_NAME
+    MAP_SELECT, MAP_NAME = v.get("map_select"), v.get("map_name")   # the robot's map picker, and the map our rooms are on
     global REQUESTS
     REQUESTS = v.get("room_requests")
     # a segment may span several jobs ("chores": [...]): it goes only when ALL are presumed clean
@@ -664,9 +667,14 @@ class Pilot:
                 info["eligible"] = rooms
                 q, who = self.quiet_for() if rooms else (None, None)
                 info["quiet_min"] = None if q is None else round(min(q, 99 * 3600) / 60)
-                ok_robot = vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
+                other = self.other_map()
+                if other:
+                    info["why"] = "the robot is on its map %r, not %r: its rooms don't match ours" % (other, MAP_NAME)
+                ok_robot = not other and vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
                     (not BATTERY or float(self.get(BATTERY).get("state") or 0) >= 50) and (not ERROR or self.get(ERROR).get("state") in ("none", None))
-                if rooms and not ok_robot:
+                if other:
+                    pass
+                elif rooms and not ok_robot:
                     info["why"] = "robot busy/not ready"
                 elif rooms and q is not None and q >= START_QUIET_S and now - D.get("last_attempt", 0) > RETRY_S:
                     D["last_attempt"] = now
@@ -759,12 +767,22 @@ class Pilot:
         self.publish(info, vs, room)
         self.save()
 
+    def other_map(self):
+        """the robot's selected map when it is a different one than our rooms belong to (None when it's ours or unknown)"""
+        if not (MAP_SELECT and MAP_NAME):
+            return None
+        m = self.get(MAP_SELECT).get("state")
+        if m in (None, "unknown", "unavailable") or m.strip() == MAP_NAME.strip():
+            return None
+        return m
+
     def publish(self, info, vs, room):
         D = self.D
         attrs = {"friendly_name": NAME, "icon": "mdi:robot-vacuum",
                  **({"sealed_off": sorted(self.sealed_segments())} if OCC else {}),
                  "entry_events_connected": entry_edges.online,
                  "vacuum_entity": VAC, "map_flag": MAP_FLAG, "room_request_entity": REQUESTS,
+                 **({"map_name": MAP_NAME, "map_selected": self.get(MAP_SELECT).get("state")} if MAP_SELECT else {}),
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
                  "visits": {k: datetime.fromtimestamp(t).strftime("%a %H:%M") for k, t in D["visits"].items()},
@@ -772,6 +790,7 @@ class Pilot:
                  "last_event": D.get("last_event"), "runs": D["runs"][-5:]}
         key = json.dumps([D["phase"], attrs], sort_keys=True, default=str)
         if key != self.last_pub or time.time() - D.get("pub_ts", 0) > 300:
+            attrs["heartbeat"] = datetime.fromtimestamp(time.time()).astimezone().isoformat(timespec="seconds")   # so HA's last_updated moves
             try:
                 self.g["ha_post_state"](PUBLISH, D["phase"], attrs, self.tok)
                 self.last_pub, D["pub_ts"] = key, time.time()
