@@ -989,6 +989,44 @@ def wind_down_state(c):
     return {"on": now.hour < BED_END_H or (now.hour, now.minute) >= (hh, mm), "at": at}
 
 
+def must_do_first_state(c, board, now=None, arrivals=None):
+    """Configured after-arrival jobs that temporarily replace a kid's other chores.
+
+    A report waiting for inspection counts as done for this gate. If it is returned,
+    the gate comes back; the configured end time always releases it for the evening.
+    """
+    from datetime import datetime
+    now = now or datetime.now()
+    arrivals = arrivals if arrivals is not None else (GUARD.get("home_arrivals") or load_home_arrivals())
+    out = {k["id"]: {"on": False} for k in c["kids"]}
+    clock = now.strftime("%H:%M")
+    for ch in c["chores"]:
+        rule = ch.get("must_do_first") or {}
+        if not rule or len(ch.get("only") or []) != 1:
+            continue
+        kid = ch["only"][0]
+        if kid not in out:
+            continue
+        weekday = int(rule.get("weekday", now.weekday()))
+        until = str(rule.get("until") or c.get("rewards_until") or "23:59")
+        eligible = []
+        for day, at in (arrivals.get(kid) or {}).items():
+            try:
+                began = datetime.strptime(day + " " + at, "%Y-%m-%d %H:%M")
+            except (TypeError, ValueError):
+                continue
+            if began.weekday() == weekday and began <= now:
+                eligible.append(began)
+        began = max(eligible) if eligible else None
+        bd = board.get(ch["id"]) or {}
+        done = bool(began and (float(bd.get("last_clean") or 0) >= began.timestamp() or kid in (bd.get("pending_by") or [])))
+        rewards = bool(began and not done)
+        on = bool(rewards and began.date() == now.date() and clock < until)
+        out[kid] = {"on": on, "rewards": rewards, "chore": ch["id"], "name": ch["name"],
+                    "since": began.timestamp() if began else None, "until": until}
+    return out
+
+
 def bedtime_state(c, evs):
     """Bedtime: from c["bedtime"] (default 20:30) until 6 AM, or when a parent presses
     Bedtime; a parent's latest press since 5 AM wins over the clock."""
@@ -1007,9 +1045,13 @@ def bedtime_state(c, evs):
 
 def derive():
     c = cfg()
-    evs = read_events()
-    undone = {e["ref"] for e in evs if e["type"] == "undo"}
-    evs = [e for e in evs if e["id"] not in undone]
+    raw_evs = read_events()
+    undone = {e["ref"] for e in raw_evs if e["type"] == "undo"}
+    refundable = {k["id"]: [] for k in c["kids"]}
+    for e in raw_evs:
+        if e["type"] == "spend" and e["id"] not in undone and not e.get("with_buyer") and time.time() - e["ts"] <= 120:
+            refundable.setdefault(e["kid"], []).append({k: e.get(k) for k in ("id", "ts", "reward", "reward_name", "reward_icon", "cost", "tv", "group")})
+    evs = [e for e in raw_evs if e["id"] not in undone]
     chores = {x["id"]: x for x in c["chores"]}
     reports = {e["id"]: dict(e, status="pending") for e in evs if e["type"] == "report"}
     for e in evs:
@@ -1430,9 +1472,13 @@ def derive():
         kid_open = json.loads(KID_OPEN.read_text())
     except (OSError, ValueError):
         kid_open = {}
+    must_first = must_do_first_state(c, board)
+    for gate_ in must_first.values():
+        if gate_.get("rewards") and gate_.get("chore") in board:
+            board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
     return {"version": ver, "ver_tv": ver_tv, "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
-            "timers": timed_rewards(read_events()), "screen_break": screen_break, "bedtime": bedtime_state(c, evs),
+            "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
             "wind_down": wind_down_state(c),
             "config": live_cfg(c, cf_board(c, evs, reports, board)), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
@@ -1443,6 +1489,7 @@ def derive():
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
                           started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
+            "must_do_first": must_first, "calendar": schedule.agenda(),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -1507,7 +1554,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "last_result", "inspect_photos", "inspect_media")
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
 
@@ -1561,12 +1608,13 @@ def push_state_sensor(state=None, last_result=None):
              "achievements": state.get("achievements"), "streak": state.get("streak"), "chore_mode": state.get("chore_mode"),
              "pending_points": state["pending_points"], "board": state["board"], "history": hist,
              "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"), "tidy_spaces": state.get("tidy_spaces", {}),
-             "reward_ready": state.get("reward_ready"), "timers": state.get("timers"),
+             "reward_ready": state.get("reward_ready"), "timers": state.get("timers"), "refundable": state.get("refundable"),
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
              "awards": state.get("awards"), "awards_seen": state.get("awards_seen"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "wind_down": state.get("wind_down"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
-             "dress": state.get("dress"), "chores_first": state.get("chores_first"),
+             "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
+             "calendar": state.get("calendar"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
     try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
         import room_eye
@@ -2153,6 +2201,12 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/spend" and b.get("kid") and b.get("reward") in rewards and not is_here(rewards[b["reward"]], c, b["kid"]):
             return self.send(409, {"error": "that reward is at the other house"})
+        if p in ("/api/start", "/api/report", "/api/claim", "/api/team", "/api/resume"):
+            kid_ = b.get("kid")
+            gate_ = (st.get("must_do_first") or {}).get(kid_) or {}
+            chore_ = b.get("chore") or (st.get("paused", {}).get(kid_) or {}).get("chore")
+            if gate_.get("on") and chore_ != gate_.get("chore") and not (chores.get(chore_) or {}).get("bedtime_ok"):
+                return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \
                 and not (chores.get(b.get("chore") or (st["paused"].get(b.get("kid")) or {}).get("chore")) or {}).get("bedtime_ok"):
             # after bedtime only tooth-brushing; jobs and rewards wait for the morning (6 AM)
@@ -2162,6 +2216,11 @@ class H(BaseHTTPRequestHandler):
             return self.send(409, {"error": "Put on your clothes first!"})
         if p == "/api/spend" and (st.get("wind_down") or {}).get("on"):
             return self.send(409, {"error": "It's almost bedtime: no more rewards after %s. Brush your teeth!" % st["wind_down"]["at"]})
+        if p == "/api/spend" and any(((st.get("must_do_first") or {}).get(k_) or {}).get("rewards") for k_ in [b.get("kid")] + list(b.get("with") or [])):
+            k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("must_do_first") or {}).get(k_) or {}).get("rewards"))
+            gate_ = st["must_do_first"][k_]
+            nm_ = next((x["name"] for x in c["kids"] if x["id"] == k_), str(k_))
+            return self.send(409, {"error": ("" if k_ == b.get("kid") else nm_ + ": ") + (gate_.get("name") or "Priority chore") + " first! Rewards come back when it's done."})
         if p == "/api/spend" and any(((st.get("chores_first") or {}).get(k_) or {}).get("on") for k_ in [b.get("kid")] + list(b.get("with") or [])):
             k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("chores_first") or {}).get(k_) or {}).get("on"))
             nm_ = next((x["name"] for x in c["kids"] if x["id"] == k_), str(k_))
@@ -2240,6 +2299,22 @@ class H(BaseHTTPRequestHandler):
                 threading.Thread(target=lambda: subprocess.run([CATT, "-d", ip, "stop"], timeout=30,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), daemon=True).start()
             return self.send(200, {"ok": True})
+        if p == "/api/refund":
+            evs_ = read_events()
+            undone_ = {e["ref"] for e in evs_ if e["type"] == "undo"}
+            q_ = next((e for e in evs_ if e["type"] == "spend" and e["id"] == b.get("ref") and e["id"] not in undone_), None)
+            if not q_ or q_.get("kid") != b.get("kid") or q_.get("with_buyer"):
+                return self.send(400, {"error": "nothing of yours to refund"})
+            if time.time() - q_["ts"] > 120:
+                return self.send(409, {"error": "the 2-minute refund time has ended"})
+            group_ = q_.get("group")
+            purchases_ = [e for e in evs_ if e["type"] == "spend" and e["id"] not in undone_ and
+                          (e["id"] == q_["id"] or (group_ and e.get("group") == group_))]
+            for purchase_ in purchases_:
+                ev = append({"type": "undo", "ref": purchase_["id"], "by": "kid:" + b["kid"]})
+            after_change()
+            ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev, "refund_count": len(purchases_)})
+            return self.send(200, {"ok": True, "event": ev, "state": derive()})
         if p == "/api/report":
             if b.get("kid") not in kids or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown kid/chore"})

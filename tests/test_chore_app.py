@@ -1798,6 +1798,39 @@ class ServiceSchedule(unittest.TestCase):
         self.assertFalse(d["2026-12-03"])   # EXDATE drops that midweek block
         self.assertTrue(d["2026-12-13"])    # the regular rhythm again (Wed 9th - Mon 14th)
 
+    def test_agenda_keeps_only_safe_display_fields_and_filters_routine_events(self):
+        self.sc.CFG.clear(); self.sc.CFG.update({"timezone": "America/Denver"})
+        text = "\r\n".join([
+            "BEGIN:VCALENDAR",
+            "BEGIN:VEVENT", "UID:1", "DTSTART;TZID=America/Denver:20261119T153000", "DTEND;TZID=America/Denver:20261119T163000",
+            "SUMMARY:Science fair", "DESCRIPTION:private notes", "LOCATION:private place", "END:VEVENT",
+            "BEGIN:VEVENT", "UID:2", "DTSTART;VALUE=DATE:20261120", "DTEND;VALUE=DATE:20261121", "SUMMARY:School - Lunch", "END:VEVENT",
+            "END:VCALENDAR", ""])
+        rows = self.sc.agenda_events(text, source="Family", start=datetime(2026, 11, 18, 12, tzinfo=timezone(timedelta(hours=-7))),
+                                     exclude=r"^School - (Lunch|Dismissal)$")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["title"], rows[0]["source"], rows[0]["all_day"]), ("Science fair", "Family", False))
+        self.assertEqual(set(rows[0]), {"title", "source", "start", "end", "all_day"})
+
+
+class MustDoFirst(Case):
+    def test_thursday_homework_blocks_chores_then_only_rewards_until_reported(self):
+        c = self.s.cfg()
+        c["chores"].append({"id": "homework", "name": "Homework", "icon": "1f4da", "points": 5, "only": ["zoe"],
+                            "weekly": {"open_dow": 3, "due_dow": 6},
+                            "must_do_first": {"weekday": 3, "after_arrival": True, "until": "19:30"}})
+        self.s.save_cfg(c)
+        before = datetime(2026, 11, 19, 16, 0)
+        gate = self.s.must_do_first_state(c, {"homework": {"last_clean": 0, "pending_by": []}}, before,
+                                          {"zoe": {"2026-11-19": "15:30"}})["zoe"]
+        self.assertTrue(gate["on"]); self.assertTrue(gate["rewards"])
+        after = self.s.must_do_first_state(c, {"homework": {"last_clean": 0, "pending_by": []}},
+                                           datetime(2026, 11, 19, 19, 30), {"zoe": {"2026-11-19": "15:30"}})["zoe"]
+        self.assertFalse(after["on"]); self.assertTrue(after["rewards"])
+        done = self.s.must_do_first_state(c, {"homework": {"last_clean": 0, "pending_by": ["zoe"]}}, before,
+                                          {"zoe": {"2026-11-19": "15:30"}})["zoe"]
+        self.assertFalse(done["on"]); self.assertFalse(done["rewards"])
+
 
 class ChoresFirst(Case):
     def test_rewards_blocked_until_the_clean_up_passes_inspection(self):
@@ -1865,6 +1898,19 @@ class GrownUpStartsVR(Case):
         self.assertIn("Not right now", note["text"])
         self.assertEqual(a.post("/api/kid_note_seen", {"kid": "max", "ref": note["id"]})[0], 200)
         self.assertEqual(a.state()["kid_notes"].get("max"), None)
+
+    def test_kid_can_refund_own_reward_for_exactly_two_minutes(self):
+        a = App(base_config())
+        a.event(type="adjust", kid="ava", points=20, reason="test")
+        bought = a.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "living"})[1]["event"]
+        self.assertEqual(a.state()["balance"]["ava"], 15)
+        self.assertEqual(a.state()["refundable"]["ava"][0]["id"], bought["id"])
+        self.assertEqual(a.post("/api/refund", {"kid": "max", "ref": bought["id"]})[0], 400)
+        code, r = a.post("/api/refund", {"kid": "ava", "ref": bought["id"]})
+        self.assertEqual(code, 200, r)
+        self.assertEqual((r["state"]["balance"]["ava"], r["state"]["refundable"]["ava"]), (20, []))
+        old = a.event(type="spend", kid="ava", reward="show", cost=5, tv="living", ts=time.time() - 121)
+        self.assertEqual(a.post("/api/refund", {"kid": "ava", "ref": old["id"]})[0], 409)
 
     def test_announcements_say_it_twice(self):
         s = self.app.s

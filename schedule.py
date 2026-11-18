@@ -7,6 +7,9 @@ house.json "kid_calendar" (all optional):
   no_school    regex: an all-day event whose title matches means no school that day (default: holiday, break,
                intersession, "no school", "off school", vacation); naming a kid makes it that kid's day off only
   school_anyway  regex that wins over no_school (default: "last day", "resumes", "first day")
+  agenda      optional kids-screen agenda: days, max_events, base {name/include/exclude}, and extra_sources
+              [{name, ics_url, include, exclude}]. Only titles and times are retained; descriptions, locations,
+              links and guest lists are discarded. Keep every private iCal address in the private house.json.
 Days the calendar covers are cached in the data folder (kid_calendar.json: {"days": {"YYYY-MM-DD": true|false}}),
 so a slot chore can follow the real schedule (holidays, swaps) and fall back to its every-N-weeks rule elsewhere.
 Only all-day events are read; recurring ones (RRULE with FREQ=DAILY/WEEKLY, INTERVAL, BYDAY, UNTIL, COUNT),
@@ -16,10 +19,11 @@ import json
 import re
 import time
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as day_time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 CFG = {}
-CACHE = {"file": None, "days": {}, "off": {}, "fetched": 0}
+CACHE = {"file": None, "days": {}, "off": {}, "agenda_sources": {}, "fetched": 0}
 NO_SCHOOL = r"holiday|break|intersession|no (regular )?school|off school|vacation"
 SCHOOL_ANYWAY = r"last (school )?day|resumes|first day"
 DOW = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
@@ -35,6 +39,7 @@ def configure(cfg, cache_file):
         saved = {}
     CACHE["days"] = dict(saved.get("days") or {})
     CACHE["off"] = dict(saved.get("off") or {})
+    CACHE["agenda_sources"] = dict(saved.get("agenda_sources") or {})
     CACHE["fetched"] = saved.get("fetched") or 0
 
 
@@ -46,6 +51,20 @@ def _d(v):
     """an iCal DATE or DATE-TIME value -> date"""
     v = v.strip()[:8]
     return date(int(v[:4]), int(v[4:6]), int(v[6:8]))
+
+
+def _dt(v, params=""):
+    """An iCal DATE-TIME, normalized to the configured display timezone."""
+    v = v.strip()
+    zone = ZoneInfo(CFG.get("timezone") or "America/Denver")
+    if v.endswith("Z"):
+        return datetime.strptime(v, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).astimezone(zone)
+    out = datetime.strptime(v[:15], "%Y%m%dT%H%M%S")
+    hit = re.search(r"(?:^|;)TZID=([^;:]+)", params)
+    try:
+        return out.replace(tzinfo=ZoneInfo(hit.group(1)) if hit else zone).astimezone(zone)
+    except (KeyError, ValueError):
+        return out.replace(tzinfo=zone)
 
 
 def parse(text):
@@ -65,10 +84,14 @@ def parse(text):
             if name == "DTSTART":
                 ev["start"] = _d(v)
                 ev["allday"] = "VALUE=DATE" in params or len(v.strip()) == 8
+                if not ev["allday"]:
+                    ev["start_dt"] = _dt(v, k)
             elif name == "DTEND":
                 ev["end"] = _d(v)
+                if not ev.get("allday") and "T" in v:
+                    ev["end_dt"] = _dt(v, k)
             elif name == "SUMMARY":
-                ev["summary"] = v.replace("\\,", ",").replace("\\;", ";").strip()
+                ev["summary"] = v.replace("\\,", ",").replace("\\;", ";").replace("\\n", " ").strip()
             elif name == "UID":
                 ev["uid"] = v.strip()
             elif name == "RRULE":
@@ -155,6 +178,73 @@ def days_off(text, start=None, horizon_days=120, no_school=None, school_anyway=N
     return out
 
 
+def agenda_events(text, source="Calendar", start=None, horizon_days=45, include=None, exclude=None):
+    """Small, display-safe agenda records. Descriptions, locations, guests and links never leave the feed parser."""
+    zone = ZoneInfo(CFG.get("timezone") or "America/Denver")
+    start = start or datetime.now(zone)
+    if isinstance(start, date) and not isinstance(start, datetime):
+        start = datetime.combine(start, day_time.min, zone)
+    until = start + timedelta(days=horizon_days)
+    yes = re.compile(include, re.I) if include else None
+    no = re.compile(exclude, re.I) if exclude else None
+    events = parse(text)
+    moved = {(e["uid"], e["rid"]) for e in events if e.get("rid")}
+    out = []
+    for ev in events:
+        title = re.sub(r"\s+", " ", ev.get("summary") or "").strip()
+        if not title or (yes and not yes.search(title)) or (no and no.search(title)):
+            continue
+        starts = [ev["start"]] if ev.get("rid") else occurrences(ev, until.date())
+        for d in starts:
+            if not ev.get("rid") and (ev.get("uid"), d) in moved:
+                continue
+            if ev.get("allday"):
+                days = max(1, (ev.get("end", ev["start"] + timedelta(days=1)) - ev["start"]).days)
+                end_d = d + timedelta(days=days)
+                if end_d <= start.date() or d > until.date():
+                    continue
+                rec = {"title": title, "start": d.isoformat(), "end": end_d.isoformat(), "all_day": True, "source": source}
+            else:
+                base = ev.get("start_dt") or datetime.combine(ev["start"], day_time.min, zone)
+                end_base = ev.get("end_dt") or (base + timedelta(hours=1))
+                begins = base.replace(year=d.year, month=d.month, day=d.day)
+                ends = begins + max(timedelta(minutes=1), end_base - base)
+                if ends <= start or begins > until:
+                    continue
+                rec = {"title": title, "start": begins.timestamp(), "end": ends.timestamp(), "all_day": False, "source": source}
+            out.append(rec)
+    return out
+
+
+def _agenda_cfg(source, default_name):
+    return {"source": source.get("name") or default_name, "include": source.get("include"), "exclude": source.get("exclude")}
+
+
+def agenda(now=None):
+    """Merged, de-duplicated upcoming agenda for the kids' menu."""
+    ac = CFG.get("agenda") or {}
+    if not ac:
+        return []
+    zone = ZoneInfo(CFG.get("timezone") or "America/Denver")
+    now = now or datetime.now(zone)
+    if not isinstance(now, datetime):
+        now = datetime.fromtimestamp(float(now), zone)
+    until = now + timedelta(days=float(ac.get("days") or 14))
+    rows, seen = [], set()
+    for items in CACHE.get("agenda_sources", {}).values():
+        for e in items:
+            if e.get("all_day"):
+                visible = e.get("end", "") > now.date().isoformat() and e.get("start", "") <= until.date().isoformat()
+            else:
+                visible = float(e.get("end") or 0) > now.timestamp() and float(e.get("start") or 0) <= until.timestamp()
+            key = (re.sub(r"\W+", "", str(e.get("title") or "").lower()), e.get("start"), e.get("end"))
+            if visible and key not in seen:
+                seen.add(key)
+                rows.append(e)
+    rows.sort(key=lambda e: (e["start"] if not e.get("all_day") else datetime.fromisoformat(e["start"]).replace(tzinfo=zone).timestamp(), e["title"]))
+    return rows[:int(ac.get("max_events") or 24)]
+
+
 def refresh(fetch=None):
     """re-read the calendar (if configured); keeps the old cache when the read fails"""
     url = CFG.get("ics_url")
@@ -170,11 +260,28 @@ def refresh(fetch=None):
     for d in days:            # the days just read are replaced (a holiday taken off the calendar is gone)
         CACHE["off"].pop(d, None)
     CACHE["off"].update(off)
+    ac = CFG.get("agenda") or {}
+    if ac:
+        base = _agenda_cfg(ac.get("base") or {}, "Kids")
+        CACHE["agenda_sources"]["base"] = agenda_events(text, **base)
+        wanted = {"base"} | {"extra:%d" % i for i, source in enumerate(ac.get("extra_sources") or []) if source.get("ics_url")}
+        for key in list(CACHE["agenda_sources"]):
+            if key not in wanted:
+                CACHE["agenda_sources"].pop(key, None)
+        for i, source in enumerate(ac.get("extra_sources") or []):
+            if not source.get("ics_url"):
+                continue
+            try:
+                extra = fetch(source["ics_url"]) if fetch else urllib.request.urlopen(source["ics_url"], timeout=30).read().decode("utf-8", "replace")
+                CACHE["agenda_sources"]["extra:%d" % i] = agenda_events(extra, **_agenda_cfg(source, "Family"))
+            except Exception:  # noqa: BLE001
+                pass   # keep that source's last good agenda
     CACHE["fetched"] = time.time()
     if CACHE["file"]:
         try:
             with open(CACHE["file"], "w") as f:
-                json.dump({"days": CACHE["days"], "off": CACHE["off"], "fetched": CACHE["fetched"]}, f)
+                json.dump({"days": CACHE["days"], "off": CACHE["off"], "agenda_sources": CACHE["agenda_sources"],
+                           "fetched": CACHE["fetched"]}, f)
         except OSError:
             pass
     return True
@@ -198,4 +305,4 @@ def off_on(d):
 def watch():
     while True:
         refresh()
-        time.sleep(float(CFG.get("every_hours") or 6) * 3600)
+        time.sleep(float(CFG.get("every_minutes") or float(CFG.get("every_hours") or 6) * 60) * 60)

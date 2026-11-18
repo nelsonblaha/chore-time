@@ -47,6 +47,11 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
   box-shadow:0 5px 0 rgba(0,0,0,.15);transition:transform .3s}
 .bal.pop{animation:balpop .6s}
 @keyframes balpop{40%{transform:scale(1.35) rotate(-4deg)}}
+.menubtn{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:34px;font-weight:900;background:var(--kid);color:#fff;border-radius:24px;padding:5px 16px;box-shadow:0 5px 0 rgba(0,0,0,.15)}
+.menubtn:active{transform:scale(.94)}.menubtn .mi{font-size:38px}.menubtn .bal{margin:0;padding:0;background:none;box-shadow:none;font-size:34px}
+.kmenu{display:none;position:absolute;z-index:48;top:82px;right:14px;width:min(540px,calc(100vw - 28px));max-height:calc(100vh - 96px);overflow-y:auto;background:#fff;border:5px solid var(--kid);border-radius:28px;padding:12px;box-shadow:0 16px 45px rgba(0,0,0,.35)}
+.kmenu.on{display:block}.kmgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.kmcard{background:#f4f4f7;border-radius:20px;padding:10px 12px;font-size:20px;font-weight:900;text-align:left;box-shadow:0 3px 0 rgba(0,0,0,.09)}
+.kmcard:active{transform:scale(.97)}.kmcard .kmi{font-size:34px}.kmcard .kms{display:block;font-size:16px;font-weight:700;opacity:.72;margin-top:2px}.kmcal{margin-top:10px;border-top:3px solid #eee;padding-top:8px}.kmcal h3{margin:0 0 5px;font-size:24px}.kmev{display:flex;gap:10px;align-items:center;padding:7px 5px;border-bottom:1px solid #ddd;font-size:17px}.kmev:last-child{border-bottom:0}.kmev .kmd{min-width:90px;color:var(--kid);font-weight:900}.kmev .kmt{font-weight:800}.mustban{display:none;background:#fff3c4;border:4px solid #f5b400;border-radius:18px;margin:8px 6px 2px;padding:7px 12px;text-align:center;font-size:24px;font-weight:900}
 /* progress bar */
 .goalrow{display:flex;align-items:center;gap:12px;margin:14px 6px 4px 10px}
 .barwrap{position:relative;flex:1;height:46px}
@@ -105,11 +110,12 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
 .h .ic{font-size:38px}.h .s{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:26px}
 .h .s.wait{animation:pulse 1.3s infinite}
 /* modal */
-.modal{position:absolute;inset:0;background:rgba(20,20,40,.55);display:none;align-items:center;justify-content:center;z-index:60}
+.modal{position:absolute;inset:0;background:rgba(20,20,40,.55);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
 .modal.on{display:flex}
-.mx{position:absolute;top:-30px;right:-30px;width:72px;height:72px;border-radius:50%;background:#fff;color:#333;font:900 58px/66px system-ui,sans-serif;text-align:center;box-shadow:0 4px 0 rgba(0,0,0,.25),0 0 0 4px #333}
+.mx{position:sticky;top:0;z-index:3;float:right;width:62px;height:62px;margin:0 0 5px 10px;border-radius:50%;background:#fff;color:#222;font:900 50px/56px system-ui,sans-serif;text-align:center;box-shadow:0 4px 0 rgba(0,0,0,.25),0 0 0 4px #333}
 .mx:active{transform:scale(.9)}
-.box{position:relative;background:#fff;border-radius:40px;padding:22px 30px;text-align:center;min-width:60%;max-width:92%;animation:boxin .35s cubic-bezier(.2,1.6,.4,1)}
+.box{position:relative;background:#fff;border-radius:40px;padding:18px 24px 24px;text-align:center;min-width:60%;max-width:92%;max-height:calc(100vh - 32px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;animation:boxin .35s cubic-bezier(.2,1.6,.4,1)}
+.chorephoto{max-height:46vh;max-width:90%;border-radius:14px;display:block;margin:8px auto;background:#fff;border:5px solid #fff;filter:brightness(1.35) contrast(1.4) saturate(1.08);box-shadow:0 0 0 4px #1b263b,0 7px 20px rgba(0,0,0,.35)}
 @keyframes boxin{from{transform:scale(.4);opacity:0}}
 .box .big{font-size:130px;line-height:1.1}
 .box .q{font-size:34px;font-weight:900;margin:4px 0 12px}
@@ -242,14 +248,13 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
   <div class="top">
     <div class="homebtn" id="home"><span class="eh" data-c="1f3e0"></span><span style="font-size:24px;font-weight:900;vertical-align:middle"> Home</span></div>
     <div class="who"><span class="face" id="kface"></span><span id="kname"></span></div>
-    <div class="newsbtn" id="newsbtn"></div>
-    <div class="streak" id="streak"></div>
-    <div class="awbtn" id="awbtn"></div>
-    <div class="bal" id="kbal"></div>
+    <div class="menubtn" id="menubtn"><span class="mi">&#9776;</span><span>Menu</span><span class="bal" id="kbal"></span></div>
   </div>
-  <div class="goalrow"><div class="barwrap"><div class="bar"><div class="fill" id="fill"></div><div class="pend" id="pend"></div></div></div>
+  <div class="kmenu" id="kmenu"></div>
+  <div class="goalrow" style="display:none"><div class="barwrap"><div class="bar"><div class="fill" id="fill"></div><div class="pend" id="pend"></div></div></div>
     <div class="goalbtn" id="goalbtn"></div></div>
-  <div class="barlbl" id="barlbl"></div>
+  <div class="barlbl" id="barlbl" style="display:none"></div>
+  <div class="mustban" id="mustban"></div>
   <div class="doing" id="doing" style="display:none"></div>
   <div class="body">
     <div class="chorewrap"><div class="chores" id="chores"></div>
@@ -484,23 +489,42 @@ function render(){
   if(kid)renderKid();
 }
 
+var MENU=false;
+function safeText(x){return String(x==null?"":x).replace(/[&<>\"]/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]})}
+function streakInfo(SK){L("streak_tap");MENU=false;$("kmenu").classList.remove("on");modal('<div class="big">'+E("1f525")+'</div><div class="q">'+(SK.current||0)+' day'+(SK.current===1?"":"s")+' in a row!</div><div class="q" style="font-size:24px;opacity:.8">'+(SK.today?E("2705")+' You did a job today. Come back tomorrow!':'Do a job today to keep your '+E("1f525")+' going!')+'</div><div class="q" style="font-size:20px;opacity:.6">Best: '+(SK.best||0)+'</div>');addOk()}
+function calWhen(e){
+  var d=e.all_day?new Date(e.start+"T00:00:00"):new Date(e.start*1000),today=new Date(),tom=new Date();tom.setDate(today.getDate()+1);
+  var same=function(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate()},day=same(d,today)?"Today":same(d,tom)?"Tomorrow":d.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"});
+  return day+(e.all_day?"":" · "+d.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}))
+}
+function renderKidMenu(){
+  var b=S.balance[kid]||0,p=(S.pending_points||{})[kid]||0,SK=(S.streak||{})[kid]||{current:0},MY=((S.awards||{})[kid])||[],G=myGoal(),gc=G.r.cost;
+  $("kbal").innerHTML=b+" "+E("2b50");
+  var ev=(S.calendar||[]).slice(0,10),cal=ev.length?ev.map(function(x){return '<div class="kmev"><span class="kmd">'+safeText(calWhen(x))+'</span><span class="kmt">'+safeText(x.title)+'</span></div>'}).join(""):'<div class="kmev"><span class="kmt">Nothing coming up.</span></div>';
+  $("kmenu").innerHTML='<div class="kmgrid">'+
+    '<div class="kmcard"><span class="kmi">'+E("2b50")+'</span> '+b+' points<span class="kms">'+(p?E("1f50d")+' +'+p+' waiting for inspection':'No points waiting')+'</span></div>'+
+    '<div class="kmcard" id="kmstreak"><span class="kmi">'+E("1f525")+'</span> '+(SK.current||0)+' day streak<span class="kms">Best: '+(SK.best||0)+(SK.today?' · done today':' · do a job today')+'</span></div>'+
+    '<div class="kmcard" id="kmawards"><span class="kmi">'+E("1f3c5")+'</span> '+MY.length+' awards<span class="kms">Achievements and records</span></div>'+
+    '<div class="kmcard" id="kmnews"><span class="kmi">'+E("1f4f0")+'</span> News<span class="kms">What is new for the kids</span></div>'+
+    '<div class="kmcard" id="kmgoal" style="grid-column:1/-1"><span class="kmi">'+E(G.r.icon)+'</span> Goal: '+safeText(G.r.name)+'<span class="kms">'+b+' of '+gc+' points'+(b>=gc?' · ready!':' · '+(gc-b)+' to go')+'</span></div></div>'+
+    '<div class="kmcal"><h3>'+E("1f4c5")+' Family calendar</h3>'+cal+'</div>';
+  $("kmenu").classList.toggle("on",MENU);
+  $("kmstreak").onclick=function(){streakInfo(SK)};$("kmawards").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openAwards()};
+  $("kmnews").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openNews(0)};$("kmgoal").onclick=function(){MENU=false;$("kmenu").classList.remove("on");pickGoal()};
+}
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
   $("kface").innerHTML=E(k.icon);$("kname").innerHTML=k.name+" "+trophies(kid)+(houseName()?'<span style="font-size:.55em;opacity:.75;margin-left:8px">'+E("1f3e0")+' '+houseName()+'</span>':'');
-  $("newsbtn").innerHTML=E("1f4f0");$("newsbtn").onclick=function(){openNews(0)};
   var SK=(S.streak||{})[kid]||{current:0};
-  $("streak").innerHTML=E("1f525")+' <b>'+(SK.current||0)+'</b>'+(SK.today?'':'<span class="sk2">Do a job today!</span>');$("streak").className="streak"+(SK.today?"":" atrisk")+(SK.current?"":" cold");
-  $("streak").onclick=function(){L("streak_tap");modal('<div class="big">'+E("1f525")+'</div><div class="q">'+(SK.current||0)+' day'+(SK.current===1?"":"s")+' in a row!</div><div class="q" style="font-size:24px;opacity:.8">'+(SK.today?E("2705")+' You did a job today. Come back tomorrow!':'Do a job today to keep your '+E("1f525")+' going!')+'</div><div class="q" style="font-size:20px;opacity:.6">Best: '+(SK.best||0)+'</div>');addOk()};
-  var MY=((S.awards||{})[kid])||[];var HT=heldTrophies(kid).filter(function(a){return a.icon==="1f3c6"}).length;   // one bare "11" read as points; medals kept for good vs trophies held now
-  $("awbtn").innerHTML=E("1f3c5")+'<span class="n">'+MY.length+'</span>'+(HT?' '+E("1f3c6")+'<span class="n">'+HT+'</span>':'');$("awbtn").onclick=function(){openAwards()};
   var b=S.balance[kid],p=S.pending_points[kid],g=goal();
-  $("kbal").innerHTML=b+" "+E("2b50");
   var G=myGoal(),gc=G.r.cost;
   $("fill").style.width=Math.min(100,b/gc*100)+"%";
   $("pend").style.left=Math.min(100,b/gc*100)+"%";$("pend").style.width=Math.max(0,Math.min(100-b/gc*100,p/gc*100))+"%";
   $("goalbtn").innerHTML='<div class="gi">'+E(G.r.icon)+(b>=gc?E("2705"):"")+'</div><div class="gc">'+gc+' '+E("2b50")+'</div><div class="gt">'+(G.auto?"goal":"my goal")+'</div>';
   $("goalbtn").onclick=pickGoal;
   $("barlbl").innerHTML=(p?E("1f50d")+" +"+p+" waiting for inspection &nbsp; ":"")+(b<gc?(gc-b)+" more "+E("2b50")+" to "+E(G.r.icon)+" "+G.r.name:E("1f389")+" You have enough for "+E(G.r.icon)+" "+G.r.name+"! "+E("1f389"));
+  renderKidMenu();
+  var MF=((S.must_do_first||{})[kid])||{};$("mustban").style.display=MF.rewards?"block":"none";$("mustban").innerHTML=MF.rewards?E("1f4da")+' '+safeText(MF.name)+' first! '+(MF.on?'Other chores come back at '+hm12(MF.until)+'. ':'')+'Rewards come back when it is done.':"";
   var A=(S.active||{})[kid];
   if(A){var ac=S.config.chores.find(function(x){return x.id===A.chore})||{name:A.chore,icon:"2b50"};
     var tsz=(A.team||[]).length,Tm=((S.typical||{})[A.chore]||{}).minutes||ac.est_minutes||10,REC=(S.records||{})[tsz>1?A.chore+"@"+tsz:A.chore];
@@ -532,17 +556,19 @@ function renderKid(){
     if($("dohelp"))$("dohelp").onclick=function(){L("add_helper_open",{chore:A.chore});pickHelpers("Who is helping with "+ac.name+"?",function(ps){teamUp(A.chore,ps)})};
   } else $("doing").style.display="none";
   var busyNow=!!(S.active||{})[kid];
-  $("chores").classList.toggle("two",busyNow);$("barlbl").style.display=busyNow?"none":"";
+  $("chores").classList.toggle("two",busyNow);$("barlbl").style.display="none";
   // don't show chores a kid can't do right now (presumed clean, someone else waiting on it, someone else's claim)
   var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.hidden||(c.only&&c.only.indexOf(kid)<0)||!here(c))return false;
     if(bd.clean_until)return false;
     if((bd.pending_by||[]).length&&!c.shared&&bd.pending_by.indexOf(kid)<0)return false;
     if(c.slot&&bd.claimed_by&&bd.claimed_by!==kid)return false;
     if(c.each_daily&&(bd.done_today||[]).indexOf(kid)>=0&&(bd.pending_by||[]).indexOf(kid)<0)return false;   // done today (each kid once a day)
-    return true}),PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
+    return true});
+  if(MF.on)vis=vis.filter(function(c){return c.id===MF.chore||c.bedtime_ok});
+  var PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
-  var WD=(S.wind_down||{}).on,lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)};   // "Clean up first!" and, from wind-down, Brush teeth lead
-  var hero=function(c){return c.id.indexOf("help_")===0};   // a robot that needs rescuing (or water) comes before everything
+  var WD=(S.wind_down||{}).on,lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)||(MF.on&&c.id===MF.chore)};   // mandatory jobs and, from wind-down, Brush teeth lead
+  var hero=function(c){return c.id.indexOf("help_")===0||(MF.on&&c.id===MF.chore)};   // robot rescue or the after-school priority
   vis=vis.filter(hero).concat(vis.filter(function(c){return !hero(c)&&lead(c)}),vis.filter(function(c){return !hero(c)&&!lead(c)}));   // then "Tidy up first!"
   var ch="";vis.slice(page*PER,page*PER+PER).forEach(function(c){
     var bd=S.board[c.id]||{price:c.points,pending_by:[]},cls="tile",badge="";
@@ -582,7 +608,8 @@ function renderKid(){
       '<div class="swapnote">'+(T.pending?E("23f3")+" Waiting for a grown-up":ready.length?E("1f389")+" Present #"+ready.map(function(o){return o.present}).join(", #")+" is yours to open!":T.left.length+" presents wrapped")+'</div></div>';
     $("presents").innerHTML=ph;$("swapbtn").onclick=askSwap;
   } else $("presentsp").style.display="none";
-  var RR=(S.reward_ready||{})[kid]||{};
+  var RR=(S.reward_ready||{})[kid]||{},RF=((S.refundable||{})[kid]||[]);
+  var rfh=RF.map(function(x){var left=Math.max(0,Math.ceil(x.ts+120-Date.now()/1000));return '<div class="rw" style="background:#fff3e0;border:3px solid #ff9800"><div class="ic">'+E(x.reward_icon||"21a9")+'</div><div style="flex:1;font-size:18px;font-weight:900">'+safeText(x.reward_name||x.reward)+'<br><span style="font-size:15px">Undo for <span class="cdk" data-ready="'+(x.ts+120)+'">'+Math.floor(left/60)+':'+('0'+left%60).slice(-2)+'</span></span></div><div class="btn" data-refund="'+x.id+'" style="font-size:20px;font-weight:900;padding:8px 12px;background:#ffe0b2">'+E("21a9")+' Refund</div></div>'}).join("");
   var myTv=[];Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(tid){((S.tv.tvs[tid].grants)||[]).forEach(function(g){if(g.kid===kid&&g.what!=="vr")myTv.push({tid:tid,g:g})})});
   var tvh="";myTv.forEach(function(m){var nm=tvShort(m.tid);
     tvh+='<div class="rw" style="background:#e8f5e9;border:3px solid #43a047"><div class="ic">'+E("1f4fa")+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.2">'+nm+' TV<br>'+
@@ -598,11 +625,13 @@ function renderKid(){
     if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===r.id})){rw+='<div class="rw" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:20px;font-weight:900;line-height:1.15">'+E("1f64b")+' '+r.name+' is yours! A grown-up will start it</div></div>';return}
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
   var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Tidy up first!</b> and get it checked. Then rewards come back.</div>':'';
+  if(MF.rewards){CF=true;banner='<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f4da")+' '+safeText(MF.name)+' first! Rewards come back when it is done.</div>'}
   if((S.wind_down||{}).on){banner='<div style="width:100%;background:#e8eaf6;border:4px solid #5c6bc0;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f319")+' Almost bedtime! No more rewards after '+hm12(S.wind_down.at)+'. '+E("1faa5")+' Brush your teeth!</div>';CF=true}
   if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
   var RWL=rw.split("\u0001").filter(Boolean),RPER=tvh?3:4,rpages=Math.max(1,Math.ceil(RWL.length/RPER));if(RWP>=rpages)RWP=rpages-1;
   var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
-  $("tvnow").innerHTML=tvh;
+  $("tvnow").innerHTML=rfh+tvh;
+  document.querySelectorAll("[data-refund]").forEach(function(n){n.onclick=function(e){e.stopPropagation();refundAsk(n.dataset.refund)}});
   setTimeout(function(){if($("cfban"))$("cfban").onclick=function(e){e.stopPropagation();cleanupModal()}},0);   // TV time running stays in sight even when Buy is folded
   $("rewards").innerHTML=banner+RWL.slice(RWP*RPER,RWP*RPER+RPER).join("");$("rwpg").innerHTML=pagerSm("rw",RWP,rpages);
   $("buybody").style.display=FOLD.buy?"":"none";$("buychev").innerHTML=FOLD.buy?"&#9650;":"&#9660;";
@@ -649,7 +678,7 @@ function getSeen(k){try{return parseFloat(localStorage.getItem(seenKey(k))||"0")
 function setSeen(k,t){seen[k]=t;try{localStorage.setItem(seenKey(k),String(t))}catch(e){}}
 function newInspections(k){var t=Math.max(getSeen(k),seen[k]||0);return reports(k).filter(function(r){return r.inspected_ts&&r.inspected_ts>t}).reverse()}
 
-function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(((S.chores_first||{})[k]||{}).on){cleanupModal();return}if(remindJob(k,lastUse))return;
@@ -726,7 +755,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
   modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+c.name+'</div>'+
     (c.trophy&&!bd.price?'':'<div class="q" style="font-size:30px">'+(bd.price==null?"A grown-up picks the "+E("2b50"):stars(bd.price)+" "+bd.price+" "+E("2b50"))+'</div>')+
     ((c.desc_for||{})[kid]||c.desc?'<div class="q" style="font-size:24px;opacity:.85">'+E("1f4cd")+' '+((c.desc_for||{})[kid]||c.desc)+'</div>':'')+
-    (c.photo?'<img src="/api/chore_photo/'+cid+'" alt="" style="max-height:34vh;max-width:80%;border-radius:12px;display:block;margin:6px auto">':'')+
+    (c.photo?'<img class="chorephoto" src="/api/chore_photo/'+cid+'" alt="">':'')+
     (c.trophy?'<div class="q" style="font-size:28px;color:#b8860b">'+E("1f3c6")+' Earns a trophy!</div>':'')+
     (c.bundle?(function(){var inc=bd.covers||[],cl=c.bundle.filter(function(x){return inc.indexOf(x)<0}),CC=function(x){return S.config.chores.find(function(y){return y.id===x})||{name:x,icon:"2b50"}};
       return '<div class="q" style="font-size:24px;background:#fff8e1;border-radius:16px;padding:6px 12px;text-align:left">'+(inc.length?inc.map(function(x){var b=S.board[x]||{};return E(CC(x).icon)+' '+CC(x).name+' <b>'+(b.price||0)+'</b>'+E("2b50")}).join('<br>'):'')+
@@ -1277,6 +1306,10 @@ function presentPick(r,i,done){ // spin across the presents, land on the drawn n
     document.querySelector('.pp[data-n="'+cur+'"]').classList.add("hot");chime([300+cur*40]);t++;setTimeout(spin,90+t*12)})();
 }
 /* --- spend --- */
+function refundAsk(ref){var x=(((S.refundable||{})[kid])||[]).find(function(z){return z.id===ref});if(!x){renderKid();return}
+  modal('<div class="big">'+E(x.reward_icon||"21a9")+E("21a9")+'</div><div class="q">Undo '+safeText(x.reward_name||x.reward)+'?</div><div class="q" style="font-size:25px;opacity:.8">Your '+x.cost+' '+E("2b50")+' come back, and any reward time stops.</div><div class="faces"><div class="btn yes" id="refundyes" style="font-size:38px;font-weight:900;padding:12px 26px">'+E("21a9")+' Refund</div><div class="btn no" id="refundno" style="font-size:38px;font-weight:900;padding:12px 26px">Keep it</div></div>');
+  $("refundno").onclick=closeModal;$("refundyes").onclick=function(){if(busy)return;busy=true;api("/api/refund",{kid:kid,ref:ref}).then(function(r){busy=false;if(r.ok){S=r.state;modal('<div class="big">'+E("2b50")+E("21a9")+'</div><div class="q">Refunded!</div><div class="q" style="font-size:26px">Your points are back.</div>');addOk(function(){renderKid();syncTimers()})}else{modal('<div class="big">'+E("23f1")+'</div><div class="q">'+safeText(r.error||"Too late to refund")+'</div>');addOk()}}).catch(function(){busy=false})}}
+function offerRefund(ref){$("mbox").insertAdjacentHTML("beforeend",'<div class="faces" style="margin-top:10px"><div class="btn" id="refundbuy" style="font-size:30px;font-weight:900;padding:10px 20px;background:#ffe0b2">'+E("21a9")+' Undo purchase (2 min)</div></div>');$("refundbuy").onclick=function(){refundAsk(ref)}}
 // what each kid pays when n watch together (reward.together_cost {"2":12,"3":10}); 1 = alone
 function costFor(r,n){var tc=r.together_cost||{},best=null;if(n>1)Object.keys(tc).forEach(function(k){if(+k<=n&&(best===null||+k>best))best=+k});return best===null?r.cost:tc[best]}
 function minCost(r){return Math.min.apply(null,[r.cost].concat(Object.keys(r.together_cost||{}).map(function(k){return r.together_cost[k]})))}
@@ -1286,6 +1319,7 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
   var r=S.config.rewards.find(function(x){return x.id===rid}),b=S.balance[kid];
   if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===rid})){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">You bought '+r.name+'! A grown-up will help you set it up and start your time.</div>');addOk();return}
   if((S.wind_down||{}).on){modal('<div class="big">'+E("1f319")+E("1faa5")+'</div><div class="q">It\'s almost bedtime!</div><div class="q" style="font-size:28px">No more rewards after '+hm12(S.wind_down.at)+'. Brush your teeth and get ready for bed. Rewards come back in the morning.</div>');addOk();return}
+  var mf=((S.must_do_first||{})[kid])||{};if(mf.rewards){modal('<div class="big">'+E("1f4da")+'</div><div class="q">'+safeText(mf.name)+' first!</div><div class="q" style="font-size:28px">Rewards come back when it is done.</div>');addOk();return}
   if(((S.chores_first||{})[kid]||{}).on){cleanupModal();return}
   var rr=((S.reward_ready||{})[kid]||{})[rid];
   if(rr&&rr>S.now){var mins=Math.ceil((rr-S.now)/60),sb=(S.screen_break||{})[kid]&&["show","movie","games"].indexOf(rid)>=0;
@@ -1315,7 +1349,7 @@ function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
   $("wtog").onclick=function(){L("who_watches",{who:"together"});
     function draw(){var n=1+Object.keys(sel).length,each=costFor(r,Math.max(2,n));
       modal('<div class="q">'+E("1f465")+' Who is watching with you?</div><div class="toygrid">'+others.map(function(k){
-        var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],need=costFor(r,sel[k.id]?n:n+1),why=((S.chores_first||{})[k.id]||{}).on?E("1f9f9")+" chores first":bal<need?"needs "+(need-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
+        var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],need=costFor(r,sel[k.id]?n:n+1),why=((S.must_do_first||{})[k.id]||{}).rewards?E("1f4da")+" homework first":((S.chores_first||{})[k.id]||{}).on?E("1f9f9")+" chores first":bal<need?"needs "+(need-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
         return '<div class="toyb" data-w="'+k.id+'" style="'+(sel[k.id]?"border:6px solid "+k.color+";background:#fff":"")+(why?";opacity:.45":"")+'">'+E(k.icon)+'<span class="lbl">'+k.name+(sel[k.id]?" "+E("2705"):"")+(why?'<br><span style="font-size:18px">'+why+'</span>':'')+'</span></div>'}).join("")+'</div>'+
       '<div class="q" style="font-size:24px">'+[kid].concat(Object.keys(sel)).map(function(m){return E(KI2(m).icon)+' '+each+E("2b50")}).join(" &nbsp; ")+'</div>'+
       '<div class="faces"><div class="btn yes" id="wgo" style="font-size:36px;font-weight:900;padding:12px 26px'+(Object.keys(sel).length?'':';opacity:.4')+'">'+E("25b6")+' Watch together</div></div>');
@@ -1325,11 +1359,11 @@ function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
     draw()}}
 function buy(r,tv,withKids){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[]}).then(function(res){busy=false;
     if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(res.error||"Can't buy that")+'</div>');addOk();return}S=res.state;boughtHere[res.event.id]=1;
-    if(res.event.await_ok){confetti(120);modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">'+r.name+' is yours! Go get a grown-up to help you set it up.</div><div class="q" style="font-size:26px;opacity:.85">'+E("23f1")+' Your '+(r.minutes||"")+' minutes start when they say go.</div>');addOk(function(){renderKid()});return}
+    if(res.event.await_ok){confetti(120);modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">'+r.name+' is yours! Go get a grown-up to help you set it up.</div><div class="q" style="font-size:26px;opacity:.85">'+E("23f1")+' Your '+(r.minutes||"")+' minutes start when they say go.</div>');offerRefund(res.event.id);addOk(function(){renderKid()});return}
     var tog=(withKids||[]).length?'<div class="q" style="font-size:28px">'+E("1f465")+' '+[kid].concat(withKids).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'';
     var q=res.event.queued?'<div class="q" style="font-size:26px;background:#fff8e1;border-radius:16px;padding:6px 12px">'+E("23f3")+' Your time starts when the show before yours ends.</div>':'';
     modal('<div class="celebrate"><div class="big">'+E(r.icon)+'</div><div class="q">'+E("1f973")+' '+r.name+'! '+E("1f973")+'</div>'+tog+q+(r.minutes?'<div class="q" style="font-size:30px">'+E("23f1")+' '+r.minutes+' minutes. Then a '+r.break_min+' minute break.</div>':'')+'</div>');
-    confetti(260);chime([523,784,1047,1319,1047,1319,1568]);addOk(function(){renderKid();syncTimers()})}).catch(function(){busy=false})}
+    offerRefund(res.event.id);confetti(260);chime([523,784,1047,1319,1047,1319,1568]);addOk(function(){renderKid();syncTimers()})}).catch(function(){busy=false})}
 }
 
 /* --- modal / idle --- */
@@ -1340,8 +1374,9 @@ function addOk(after){ // every message waits for a tap: kids read slowly
 function modal(h){$("mbox").innerHTML='<div class="mx" id="mx" aria-label="Close">&times;</div>'+h;$("mx").onclick=function(e){e.stopPropagation();closeModal()};$("m").classList.add("on");poke()}
 function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.chores:[]).forEach(function(c){delete c._note});$("m").classList.remove("on")}
 function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
-  L("go_home",{why:typeof why==="string"?why:"tap"});$("awards").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
+  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;$("kmenu").classList.remove("on");$("awards").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
+$("menubtn").onclick=function(e){e.stopPropagation();MENU=!MENU;L("menu",{open:MENU});renderKidMenu()};
 $("exit").onclick=function(){L("hub_exit");$("exit").style.background="#ffe082";$("exit").innerHTML=E("1f44b")+" Bye!";api("/api/exit",{})};
 if(SANDBOX!=null)$("exit").onclick=function(){try{window.parent.postMessage({chore_demo:"close"},"*")}catch(e){}};   // the demo's host closes it
 var IDLE_MS=300000; // back to "Who are you?" after 5 min untouched
