@@ -4,6 +4,7 @@ Chore Time needs Python 3.11+ and nothing else for the core. For the Home Assist
 
 ```bash
 pip install websockets catt     # watch "It's me" + notification buttons; casting to Hubs and TVs
+pip install numpy pillow        # room_eye: cameras learning what tidy rooms look like
 ```
 
 ## Run it as a service (systemd, user)

@@ -119,6 +119,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
    ```bash
    python3 server.py                      # core only: standard library, nothing to install
    pip install websockets catt            # for watch buttons and Hub/TV casting
+   pip install numpy pillow               # for room_eye (cameras learning tidy rooms)
    ```
    There's a systemd unit in [docs/install.md](docs/install.md).
 5. Put **`http://<server>:8790/`** on a tablet or Hub for the kids, and **`/inspect`** on your phone. Add it to Home Assistant as an iframe dashboard with `tools/ha_iframe_view.py`.

@@ -9,6 +9,8 @@ jobs:
         with: {python-version: "3.12"}
       - uses: actions/setup-node@v4
         with: {node-version: "20"}
+      - name: optional extras the tests cover (room eye pictures)
+        run: pip install numpy pillow
       - name: unit tests
         run: python -m unittest discover -s tests -v
       - name: render every page against the demo family
