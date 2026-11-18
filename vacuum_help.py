@@ -6,7 +6,7 @@
     in a room (a brush or wheel jam, trapped, bumper stuck) also marks that room untidy at once.
   * Water: the dock's clean water tank is empty or its dirty water tank is full. The job: change the water.
 
-Nothing else opens a job: worn parts, filters, the dust bag and other dock upkeep stay grown-up maintenance.
+Dirty sensors are a quick kid job. Worn parts, filters, the dust bag and other dock upkeep stay grown-up maintenance.
 
 Each job is a built-in on-demand chore per robot ("help_rescue_<id>", "help_water_<id>"). It opens with a one-time
 price, so it arrives as BIG NEWS (flashing, with a fanfare) on the kids' screens, and it goes through inspection like
@@ -88,7 +88,7 @@ def chores(cfg):
                              "extra stars for that part."))
         if r.get("sensors_left"):   # trusted: no inspection; the kid's "yes, I did it" resets the robot's reminder
             out.append(dict(common, id=sensors_id(r), name="Clean " + r["name"] + "'s sensors", icon="1f9fd", help="sensors",
-                            trust=True, photo=r.get("sensors_photo"),
+                            quick=True, trust=True, photo=r.get("sensors_photo"),
                             confirm="Did you wipe every spot shown in blue?",
                             desc="Wipe every spot shown in blue in the picture with a soft dry cloth: the ones underneath "
                                  "(tip " + r["name"] + " up gently) and the ones on its front. Then put it back on its dock."))

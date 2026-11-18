@@ -125,7 +125,7 @@ class RobotHeroJobs(Case):
         self.tick()
         job = self.job("help_sensors_down")
         self.assertIsNone(job.get("closed"))
-        self.assertTrue(job["trust"] and job["confirm"])
+        self.assertTrue(job["quick"] and job["trust"] and job["confirm"])
         self.assertEqual(self.app.state()["board"]["help_sensors_down"]["price"], 2)
         before = self.app.state()["balance"]["max"]
         ev = self.app.post("/api/report", {"kid": "max", "chore": "help_sensors_down", "feeling": "ok"})[1]["event"]
