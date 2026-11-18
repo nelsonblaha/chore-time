@@ -1990,6 +1990,15 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"items": shown if shown is not None else (GUARD.get("house_tasks") or [])[:20],
                                    "private": meta.get("private", []), "to_review": meta.get("to_review", 0),
                                    "on": "house_tasks" in GUARD})
+        if p == "/api/room_eye":   # cameras learning tidy rooms: label queue (no pictures here), recent checks, counts
+            import room_eye
+            e_ = room_eye.EYE
+            if not e_:
+                return self.send(200, {"on": False})
+            return self.send(200, {"on": True, "queue": e_.open_queue(), "checks": e_.S["checks"][-20:],
+                                   "pending": e_.S["pending"], "samples": {c_: {lab: sum(1 for x in e_.S["samples"]
+                                                                                  if x["camera"] == c_ and x["label"] == lab)
+                                                                           for lab in ("tidy", "untidy")} for c_ in e_.cfg["cameras"]}})
         if p == "/health":
             return self.send(200, {"ok": True})
         self.send(404, {"error": "not found"})
@@ -2017,6 +2026,12 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})
+        if p == "/api/room_eye/label":   # a grown-up names a spot the camera found, and says if it's a vacuum hazard
+            import room_eye
+            if b.get("by") not in insp or not room_eye.EYE:
+                return self.send(400, {"error": "unknown grown-up or cameras off"})
+            ok_ = room_eye.EYE.label(str(b.get("id") or ""), b.get("name"), bool(b.get("hazard")), b["by"])
+            return self.send(200 if ok_ else 404, {"ok": ok_})
         if p == "/api/envelope_cancel":   # "start over" after a jam: drop the stuck job so it can't print twice
             envelopes.cancel(str(b.get("job") or ""))
             ilog({"src": "envelope", "kid": b.get("kid"), "cancel": b.get("job")})
@@ -4429,6 +4444,9 @@ def start_modules():
         if (HOUSE.get("robot_locator") or {}).get("robots"):
             import locator
             go("robot-locator", locator.run, globals())   # which room each robot is in, even off-cleaning
+        if (HOUSE.get("room_eye") or {}).get("capture_url"):
+            import room_eye
+            go("room-eye", room_eye.run, globals())   # cameras learn tidy rooms, mark messy ones, spot the robots
         if (HOUSE.get("vacuum_help") or {}).get("robots"):
             go("vacuum-help", vacuum_help.run, globals())   # hero jobs: rescue a stuck robot, change its water
     if GROCY.get("url"):

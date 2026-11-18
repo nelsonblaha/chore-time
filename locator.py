@@ -12,6 +12,7 @@ house.json:
 Publishes, per robot, a sensor whose state is the room name (same names as the room sensor), or "unknown", with
 attributes:
   source       map (cleaning: the integration's own room) | position (learned outline) | dock | unknown
+               (a camera sighting from room_eye teaches the outline and gives a fresh position fix)
   why          when unknown: no position yet, position too old, unlearned, tied, robot <state>
   observed_at  when the room was last actually seen (epoch seconds); expires_at = observed_at + 60 s
   robot, robot_changed   the vacuum's state and when it entered it (a fix from before that is never used)
@@ -141,9 +142,28 @@ class Locator:
                 out["why"] = "tied" if f["votes"] else "unlearned"
         return out
 
+    def teach(self, now):
+        """Camera sightings (room_eye): a robot seen moving in a camera's room on an empty floor. Its live position
+        learns that room (3 votes: a sighting is better evidence than one map sample) and becomes its fresh fix."""
+        q = self.g.get("LOCATOR_TEACH") or []
+        changed = False
+        while q:
+            t = q.pop(0)
+            vac = t["vacuum"]
+            if vac not in self.cfg or now - t.get("at", now) > 20:
+                continue
+            xy = self.position(vac)
+            if not xy:
+                continue
+            for _ in range(3):
+                self.learn(vac, *xy, t["room"])
+            self.fix[vac] = {"xy": xy, "room": t["room"], "votes": {t["room"]: "camera"}, "at": now}
+            changed = True
+        return changed
+
     def tick(self):
         now = time.time()
-        changed = False
+        changed = self.teach(now)
         for vac, rc in self.cfg.items():
             vs = self.g["ha_get"](vac, self.tok)
             st, since = vs.get("state"), epoch(vs)
