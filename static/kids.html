@@ -51,7 +51,14 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
 .menubtn:active{transform:scale(.94)}.menubtn .mi{font-size:38px}.menubtn .bal{margin:0;padding:0;background:none;box-shadow:none;font-size:34px}
 .kmenu{display:none;position:absolute;z-index:48;top:82px;right:14px;width:min(540px,calc(100vw - 28px));max-height:calc(100vh - 96px);overflow-y:auto;background:#fff;border:5px solid var(--kid);border-radius:28px;padding:12px;box-shadow:0 16px 45px rgba(0,0,0,.35)}
 .kmenu.on{display:block}.kmgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.kmcard{background:#f4f4f7;border-radius:20px;padding:10px 12px;font-size:20px;font-weight:900;text-align:left;box-shadow:0 3px 0 rgba(0,0,0,.09)}
-.kmcard:active{transform:scale(.97)}.kmcard .kmi{font-size:34px}.kmcard .kms{display:block;font-size:16px;font-weight:700;opacity:.72;margin-top:2px}.kmcal{margin-top:10px;border-top:3px solid #eee;padding-top:8px}.kmcal h3{margin:0 0 5px;font-size:24px}.kmev{display:flex;gap:10px;align-items:center;padding:7px 5px;border-bottom:1px solid #ddd;font-size:17px}.kmev:last-child{border-bottom:0}.kmev .kmd{min-width:90px;color:var(--kid);font-weight:900}.kmev .kmt{font-weight:800}.mustban{display:none;background:#fff3c4;border:4px solid #f5b400;border-radius:18px;margin:8px 6px 2px;padding:7px 12px;text-align:center;font-size:24px;font-weight:900}
+.kmcard:active{transform:scale(.97)}.kmcard .kmi{font-size:34px}.kmcard .kms{display:block;font-size:16px;font-weight:700;opacity:.72;margin-top:2px}.mustban{display:none;background:#fff3c4;border:4px solid #f5b400;border-radius:18px;margin:8px 6px 2px;padding:7px 12px;text-align:center;font-size:24px;font-weight:900}
+/* ---------- full-screen family calendar ---------- */
+#calendar{padding:12px;background:linear-gradient(160deg,#f7fbff,#fff8e8)}
+.calhead{display:flex;align-items:center;gap:14px;margin-bottom:10px}.calback,.calnav{background:#fff;border-radius:22px;box-shadow:0 5px 0 rgba(0,0,0,.12);font-size:38px;font-weight:900;padding:4px 16px}
+.calback:active,.calnav:active{transform:scale(.92)}.caltitle{flex:1;text-align:center;font-size:34px;font-weight:900}.calnav{min-width:92px;text-align:center;color:var(--kid)}
+.callegend{display:flex;align-items:center;justify-content:center;gap:22px;margin:-3px 0 8px;font-size:18px;font-weight:900}.calkey{display:inline-flex;align-items:center;gap:7px}.caldot{width:18px;height:18px;border-radius:6px;background:#607d8b}.caldot.kids{background:#1565c0}.caldot.family{background:#ad1457}
+.calgrid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:7px}.calday{min-width:0;background:rgba(255,255,255,.85);border:3px solid #dce4ea;border-radius:20px;padding:7px;overflow-y:auto;overscroll-behavior:contain}.calday.today{border:6px solid #ffb300;background:#fff8d6;padding:4px;box-shadow:0 0 0 3px rgba(255,179,0,.2)}
+.caldow{text-align:center;text-transform:uppercase;font-size:17px;font-weight:900;letter-spacing:.5px;color:#52616b}.calnum{text-align:center;font-size:30px;font-weight:900;line-height:1.05;margin:2px 0 7px}.calday.today .calnum::after{content:" TODAY";display:block;font-size:12px;color:#9a5800;letter-spacing:.5px}.calevent{border-radius:12px;background:#607d8b;color:#fff;padding:5px 7px;margin:5px 0;font-size:15px;font-weight:900;line-height:1.15;overflow-wrap:anywhere;border-left:7px solid rgba(0,0,0,.2)}.calevent.kids{background:#1565c0}.calevent.family{background:#ad1457}.caltime{display:block;font-size:12px;font-weight:800;opacity:.9;margin-bottom:2px}.calempty{text-align:center;color:#90a4ae;font-size:13px;font-weight:800;margin-top:14px}
 /* progress bar */
 .goalrow{display:flex;align-items:center;gap:12px;margin:14px 6px 4px 10px}
 .barwrap{position:relative;flex:1;height:46px}
@@ -268,6 +275,12 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
         <div class="hist" id="pzslot"></div><div id="jobbody" style="display:none"><div class="hist" id="hist"></div><div id="hpg"></div></div></div>
     </div>
   </div>
+</section>
+
+<section id="calendar" class="screen">
+  <div class="calhead"><div class="calback" id="calback">&#9664; Menu</div><div class="calnav" id="calprev" aria-label="Previous week">&#9664;</div><div class="caltitle" id="caltitle"></div><div class="calnav" id="calnext" aria-label="Next week">&#9654;</div></div>
+  <div class="callegend" id="callegend"></div>
+  <div class="calgrid" id="calgrid"></div>
 </section>
 
 <section id="news" class="screen" style="align-items:center;justify-content:center;text-align:center;background:linear-gradient(160deg,#fff3c4,#ffd6f0,#d6ecff);z-index:40">
@@ -492,25 +505,43 @@ function render(){
 var MENU=false;
 function safeText(x){return String(x==null?"":x).replace(/[&<>\"]/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]})}
 function streakInfo(SK){L("streak_tap");MENU=false;$("kmenu").classList.remove("on");modal('<div class="big">'+E("1f525")+'</div><div class="q">'+(SK.current||0)+' day'+(SK.current===1?"":"s")+' in a row!</div><div class="q" style="font-size:24px;opacity:.8">'+(SK.today?E("2705")+' You did a job today. Come back tomorrow!':'Do a job today to keep your '+E("1f525")+' going!')+'</div><div class="q" style="font-size:20px;opacity:.6">Best: '+(SK.best||0)+'</div>');addOk()}
-function calWhen(e){
-  var d=e.all_day?new Date(e.start+"T00:00:00"):new Date(e.start*1000),today=new Date(),tom=new Date();tom.setDate(today.getDate()+1);
-  var same=function(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate()},day=same(d,today)?"Today":same(d,tom)?"Tomorrow":d.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"});
-  return day+(e.all_day?"":" · "+d.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}))
+var CALWEEK=null;
+function calKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+function calWeek(d){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate()),n=(x.getDay()+6)%7;x.setDate(x.getDate()-n);return x}
+function calSource(e){return /kids?/i.test(String(e.source||""))?"kids":"family"}
+function calOnDay(e,d){
+  var key=calKey(d),tom=new Date(d);tom.setDate(tom.getDate()+1);
+  return e.all_day?String(e.start)<=key&&String(e.end)>key:Number(e.start)<tom.getTime()/1000&&Number(e.end)>d.getTime()/1000
 }
+function renderCalendar(){
+  if(!CALWEEK)CALWEEK=calWeek(new Date());
+  var end=new Date(CALWEEK);end.setDate(end.getDate()+6);
+  $("caltitle").textContent=CALWEEK.getFullYear()===end.getFullYear()&&CALWEEK.getMonth()===end.getMonth()?CALWEEK.toLocaleDateString([],{month:"long",day:"numeric"})+" – "+end.getDate()+", "+end.getFullYear():CALWEEK.toLocaleDateString([],{month:"short",day:"numeric"})+" – "+end.toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
+  var today=calKey(new Date()),html="",events=S.calendar||[];
+  var sources=[];events.forEach(function(e){var s=String(e.source||"Calendar");if(sources.indexOf(s)<0)sources.push(s)});sources.sort(function(a,b){return (calSource({source:a})==="kids"?-1:1)-(calSource({source:b})==="kids"?-1:1)});
+  $("callegend").innerHTML=sources.map(function(s){return '<span class="calkey"><span class="caldot '+calSource({source:s})+'"></span>'+safeText(s)+'</span>'}).join("");
+  for(var i=0;i<7;i++){
+    var d=new Date(CALWEEK);d.setDate(d.getDate()+i);var rows=events.filter(function(e){return calOnDay(e,d)});
+    html+='<div class="calday'+(calKey(d)===today?' today':'')+'"><div class="caldow">'+d.toLocaleDateString([],{weekday:"short"})+'</div><div class="calnum">'+d.getDate()+'</div>'+
+      (rows.length?rows.map(function(e){var tm=e.all_day?'All day':new Date(Number(e.start)*1000).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});return '<div class="calevent '+calSource(e)+'"><span class="caltime">'+safeText(tm)+'</span>'+safeText(e.title)+'</div>'}).join(""):'<div class="calempty">No events</div>')+'</div>'
+  }
+  $("calgrid").innerHTML=html
+}
+function openCalendar(){L("calendar_open");MENU=false;$("kmenu").classList.remove("on");CALWEEK=calWeek(new Date());$("kid").classList.remove("on");$("calendar").classList.add("on");renderCalendar()}
+function closeCalendar(){L("calendar_close");$("calendar").classList.remove("on");$("kid").classList.add("on");renderKid()}
 function renderKidMenu(){
   var b=S.balance[kid]||0,p=(S.pending_points||{})[kid]||0,SK=(S.streak||{})[kid]||{current:0},MY=((S.awards||{})[kid])||[],G=myGoal(),gc=G.r.cost;
   $("kbal").innerHTML=b+" "+E("2b50");
-  var ev=(S.calendar||[]).slice(0,10),cal=ev.length?ev.map(function(x){return '<div class="kmev"><span class="kmd">'+safeText(calWhen(x))+'</span><span class="kmt">'+safeText(x.title)+'</span></div>'}).join(""):'<div class="kmev"><span class="kmt">Nothing coming up.</span></div>';
   $("kmenu").innerHTML='<div class="kmgrid">'+
     '<div class="kmcard"><span class="kmi">'+E("2b50")+'</span> '+b+' points<span class="kms">'+(p?E("1f50d")+' +'+p+' waiting for inspection':'No points waiting')+'</span></div>'+
     '<div class="kmcard" id="kmstreak"><span class="kmi">'+E("1f525")+'</span> '+(SK.current||0)+' day streak<span class="kms">Best: '+(SK.best||0)+(SK.today?' · done today':' · do a job today')+'</span></div>'+
     '<div class="kmcard" id="kmawards"><span class="kmi">'+E("1f3c5")+'</span> '+MY.length+' awards<span class="kms">Achievements and records</span></div>'+
     '<div class="kmcard" id="kmnews"><span class="kmi">'+E("1f4f0")+'</span> News<span class="kms">What is new for the kids</span></div>'+
-    '<div class="kmcard" id="kmgoal" style="grid-column:1/-1"><span class="kmi">'+E(G.r.icon)+'</span> Goal: '+safeText(G.r.name)+'<span class="kms">'+b+' of '+gc+' points'+(b>=gc?' · ready!':' · '+(gc-b)+' to go')+'</span></div></div>'+
-    '<div class="kmcal"><h3>'+E("1f4c5")+' Family calendar</h3>'+cal+'</div>';
+    '<div class="kmcard" id="kmcalendar" style="grid-column:1/-1;background:#e3f2fd"><span class="kmi">'+E("1f4c5")+'</span> Calendar<span class="kms">Open the family week</span></div>'+
+    '<div class="kmcard" id="kmgoal" style="grid-column:1/-1"><span class="kmi">'+E(G.r.icon)+'</span> Goal: '+safeText(G.r.name)+'<span class="kms">'+b+' of '+gc+' points'+(b>=gc?' · ready!':' · '+(gc-b)+' to go')+'</span></div></div>';
   $("kmenu").classList.toggle("on",MENU);
   $("kmstreak").onclick=function(){streakInfo(SK)};$("kmawards").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openAwards()};
-  $("kmnews").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openNews(0)};$("kmgoal").onclick=function(){MENU=false;$("kmenu").classList.remove("on");pickGoal()};
+  $("kmnews").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openNews(0)};$("kmcalendar").onclick=openCalendar;$("kmgoal").onclick=function(){MENU=false;$("kmenu").classList.remove("on");pickGoal()};
 }
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
@@ -1374,9 +1405,12 @@ function addOk(after){ // every message waits for a tap: kids read slowly
 function modal(h){$("mbox").innerHTML='<div class="mx" id="mx" aria-label="Close">&times;</div>'+h;$("mx").onclick=function(e){e.stopPropagation();closeModal()};$("m").classList.add("on");poke()}
 function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.chores:[]).forEach(function(c){delete c._note});$("m").classList.remove("on")}
 function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
-  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;$("kmenu").classList.remove("on");$("awards").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
+  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
 $("menubtn").onclick=function(e){e.stopPropagation();MENU=!MENU;L("menu",{open:MENU});renderKidMenu()};
+$("calback").onclick=closeCalendar;
+$("calprev").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()-7);L("calendar_week",{move:-1,week:calKey(CALWEEK)});renderCalendar()};
+$("calnext").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()+7);L("calendar_week",{move:1,week:calKey(CALWEEK)});renderCalendar()};
 $("exit").onclick=function(){L("hub_exit");$("exit").style.background="#ffe082";$("exit").innerHTML=E("1f44b")+" Bye!";api("/api/exit",{})};
 if(SANDBOX!=null)$("exit").onclick=function(){try{window.parent.postMessage({chore_demo:"close"},"*")}catch(e){}};   // the demo's host closes it
 var IDLE_MS=300000; // back to "Who are you?" after 5 min untouched

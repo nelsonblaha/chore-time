@@ -16,7 +16,7 @@ const tv0=Object.keys((st.tv||{}).tvs||{})[0]||'*', k0=K[0], k1=K[1]||K[0], k2=K
 const ask=a=>a.map(i=>'askChore("'+i+'");').join('');
 for(const f of ['static/kids.html','static/inspect.html','static/tvlock.html','static/now.html']){
   const c=ctx();[...fs.readFileSync(f,'utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].forEach(m=>vm.runInContext(m[1],c));
-  if(f.includes('kids')){vm.runInContext('S='+JSON.stringify(st)+';render();'+K.map(k=>'kid="'+k+'";page=0;renderKid();openAwards();'+K.map(x=>'openAwards("'+x+'");').join('')+'showNewAwards();'+ask([r0])+'kid="'+k1+'";'+ask(bundles)+
+  if(f.includes('kids')){vm.runInContext('S='+JSON.stringify(st)+';render();'+K.map(k=>'kid="'+k+'";page=0;renderKid();openCalendar();CALWEEK.setDate(CALWEEK.getDate()+7);renderCalendar();closeCalendar();openAwards();'+K.map(x=>'openAwards("'+x+'");').join('')+'showNewAwards();'+ask([r0])+'kid="'+k1+'";'+ask(bundles)+
       'whoWatches(S.config.rewards[0],"'+tv0+'");S.paused=S.paused||{};S.paused["'+k1+'"]={chore:"'+shared+'",ts:S.now-3600,elapsed:60,team:["'+k1+'"]};remindJob("'+k1+'",0);'+
       'S.active=S.active||{};S.active["'+k2+'"]={chore:"'+r1+'",ts:S.now-3600,team:["'+k2+'"]};remindJob("'+k2+'",0);'+
       'var _al='+JSON.stringify(rooms.slice(0,7))+'.map(function(c,i){return {id:"t"+i,chore:c,price:9,base:3}});showAnnounce(_al,function(){});if(AWV.held[0])awardDetail(AWV.held[0],AWV.owner,true);if(AWV.my[0])awardDetail(AWV.my[0],AWV.owner,false);').join(''),c);

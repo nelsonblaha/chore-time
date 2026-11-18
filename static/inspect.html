@@ -403,13 +403,20 @@ function prankish(k){var mine=S.history.filter(function(h){return h.type==="repo
   return n>=2}
 function renderMostly(){var r=S.history.find(function(h){return h.id===MOSTLY});if(!r){closePM();return}var k=kidOf(r.kid);
   if($("mnow"))return;  // keep what the parent is typing
-  $("pmbody").innerHTML='<h2 class="h2b">🧩 Mostly done</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><span class="mute">full job '+r.points+' ⭐</span></div>'+
-    '<label class="mute">Points for what\'s done now</label>'+ptsSlider("mnow",Math.max(0,r.points-1),null,Math.max(10,r.points))+
-    '<label class="mute" style="margin-top:8px;display:block">Points for what\'s left (anyone can do it)</label>'+ptsSlider("mleft",1,null,Math.max(10,r.points))+
-    '<label class="mute" style="margin-top:8px;display:block">What\'s left? (kids see this)</label>'+listEd("mwhat","","e.g. pen on the shelf")+
-    '<button class="ok tvgo" id="mgo">Save: pay now, leave the rest</button>';
-  $("mgo").onclick=function(){post("/api/inspect",{ref:r.id,ok:true,points:+$("mnow").value,leftover_points:+$("mleft").value,leftover_note:$("mwhat").value.trim()},
-    "+"+$("mnow").value+" now · "+$("mleft").value+" left").then(closePM)};wireSlider("mnow");wireSlider("mleft");wireList("mwhat")}
+  var now=Math.max(1,Math.ceil((r.points||2)/2)),left=Math.max(1,Math.floor((r.points||2)/2)),mx=Math.max(10,r.points||0);
+  $("pmbody").innerHTML='<h2 class="h2b">🧩 Award part now & leave the rest open</h2><div class="card row"><span class="big">'+E(k.icon)+E(r.chore_icon)+'</span><div><b>'+esc(k.name)+' · '+esc(r.chore_name)+'</b><div class="mute">The full job currently shows '+r.points+' ⭐. This option will <b>not</b> mark it finished.</div></div></div>'+
+    '<label style="display:block;font-weight:800">Stars you are awarding '+esc(k.name)+' now</label>'+ptsSlider("mnow",now,null,mx)+
+    '<label style="margin-top:8px;display:block;font-weight:800">Stars the remaining job will still offer</label>'+ptsSlider("mleft",left,null,mx)+
+    '<label style="margin-top:8px;display:block;font-weight:800">What remains? <span class="mute">Kids see this</span></label>'+listEd("mwhat","","e.g. organize the papers and put away loose markers")+
+    '<div class="card" id="mpreview" style="margin-top:12px;border:3px solid var(--acc,#326f69)"></div>'+
+    '<button class="ok tvgo" id="mgo"></button>';
+  $("mleft").min=1;
+  var preview=function(){var a=Math.max(0,+$("mnow").value||0),l=Math.max(1,+$("mleft").value||1),what=$("mwhat").value.trim();
+    $("mpreview").innerHTML='<b>What this will do</b><div style="margin-top:6px">⭐ Award <b>'+esc(k.name)+' '+a+' stars now</b></div><div>🧩 Keep <b>'+esc(r.chore_name)+'</b> available for <b>'+l+' stars</b></div>'+(what?'<div>📋 Remaining work: '+esc(what).replace(/\n/g," · ")+'</div>':'<div class="tag warn" style="margin-top:6px">Add what is left so the kids know what the remaining '+l+' stars are for.</div>');
+    $("mgo").textContent='Award '+k.name+' '+a+' ⭐ now · leave '+l+' ⭐ available'};
+  $("mgo").onclick=function(){var a=Math.max(0,+$("mnow").value||0),l=Math.max(1,+$("mleft").value||1),what=$("mwhat").value.trim();if(!what){toast("Add what is left first");return}
+    post("/api/inspect",{ref:r.id,ok:true,points:a,leftover_points:l,leftover_note:what},"Awarded "+k.name+" "+a+" ⭐ · job stays open for "+l+" ⭐").then(closePM)};
+  wireSlider("mnow",null,preview);wireSlider("mleft",null,preview);wireList("mwhat");$("mwhat").oninput=preview;preview()}
 function tourNeeds(id){var c=S.config.chores.find(function(x){return x.id===id}),bd=S.board[id]||{},now=S.now;
   if(!c||c.hidden)return null;
   if((c.daily||c.weekly)&&bd.clean_until)return null;                       // done for the day/week: never applies
@@ -517,10 +524,13 @@ function render(){
         return team.map(function(m){return '<div class="chips tsel" data-m="'+m+'"><span style="min-width:90px;display:inline-block">'+E(kidOf(m).icon)+' '+esc(kidOf(m).name)+'</span>'+
             [0,1,2,3,4,5,6,8,10].map(function(n){return '<button class="'+(sel[m]===n?"ok":"")+'" data-tp="'+n+'">'+(sel[m]===n?"✓ ":"")+n+'</button>'}).join("")+'</div>'}).join("")+
           '<div class="chips"><button class="ok" data-tpass="1">✓ Pass: '+team.map(function(m){return esc(kidOf(m).name)+' '+sel[m]}).join(' + ')+'</button><button class="no" data-x="1">Not yet…</button></div>'})():
+      fixed&&!r.partial&&!other?'<div class="card" style="margin-top:10px;background:var(--bg)"><b>Choose the inspection result</b>'+
+        '<div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="ok" data-fullpass="1">✅ Full job — award '+esc(k.name)+' '+r.points+' ⭐</button><button data-mostly="'+r.id+'">🧩 Part done — award some & leave some</button><button class="no" data-x="1">↩ Not yet — send it back</button></div>'+
+        '<details style="margin-top:8px"><summary class="mute" style="cursor:pointer">More options</summary><div class="row" style="margin-top:6px;flex-wrap:wrap"><button data-is="'+r.id+'">Tell '+esc(k.name)+' I am inspecting</button><button data-fix="'+r.id+'">Correct who did it or the award</button>'+
+        '<button data-kw="'+r.id+'">Keep working without awarding yet</button>'+(prankish(r.kid)?'<button class="no" data-prank="'+r.id+'">Reject a fake report (−1 ⭐)</button>':'')+'</div></details></div>':
       '<div class="chips">'+[0,1,2,3,4,5,6,8,10].map(function(n){var on=(fixed&&n===r.points)||(r.ask!=null&&n===r.ask);return'<button class="'+(on?"ok":"")+'" data-p="'+n+'">'+(on?"✓ ":"")+n+'</button>'}).join("")+
       '<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div>')+
-      (fixed&&!r.partial&&r.chore!=="toy_swap"&&r.chore!=="other"?'<div class="row" style="margin-top:6px"><button data-mostly="'+r.id+'">🧩 Mostly done…</button></div>':'')+
-      '<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(prankish(r.kid)?'<button class="no" data-prank="'+r.id+'" title="Nothing was done: reject it and take 1 star">🚫 Reject with penalty (−1 ⭐)</button>':'')+(r.partial||other?'':'<button data-kw="'+r.id+'" title="Back to them as still in progress: same team and deal, not a fail">🔁 Keep working…</button>')+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div></div>'});
+      (!(fixed&&!r.partial&&!other&&!team)?'<div class="row" style="margin-top:6px"><button data-is="'+r.id+'">🔍 Inspect</button><button data-fix="'+r.id+'">✏️ Fix…</button>'+(prankish(r.kid)?'<button class="no" data-prank="'+r.id+'" title="Nothing was done: reject it and take 1 star">🚫 Reject with penalty (−1 ⭐)</button>':'')+(r.partial||other?'':'<button data-kw="'+r.id+'" title="Back to them as still in progress: same team and deal, not a fail">🔁 Keep working…</button>')+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<button data-chk="'+r.id+'">📋 Letter checklist</button>':'')+(r.inspecting?'<span class="mute">'+esc(inspOf(r.inspecting.by).name)+' inspecting · <span class="cdu2" data-since="'+r.inspecting.ts+'"></span></span>':'')+'</div>':'')+'</div>'});
   var cert=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};return c.slot&&bd.certify_at&&bd.claimed_by&&bd.certified==null&&!bd.claim_done&&Date.now()/1000>=bd.certify_at});   // only if the kid hasn't said "I did it"
   cert.forEach(function(c){var bd=S.board[c.id],k=kidOf(bd.claimed_by),when=new Date(bd.slot*1000);   // e.g. church reading: the grown-up says whether it happened
     ph='<div class="card"><div class="row"><span class="big">'+E(k.icon)+E(c.icon)+'</span><div style="flex:1"><b>Did '+esc(k.name)+' do it?</b> · '+esc(c.name)+
@@ -554,6 +564,8 @@ function render(){
     c.querySelector("[data-drok]").onclick=function(){post("/api/inspect",{ref:id,ok:true,points:0,label:"Dressed"},"Ready to go ✓")};
     c.querySelector("[data-x]").onclick=function(){NOTYET=id;openPM("notyet")}});
   document.querySelectorAll('#pending .card:not([data-swap]):not([data-dr])').forEach(function(c){var id=c.dataset.r;
+    if(c.querySelector("[data-fullpass]"))c.querySelector("[data-fullpass]").onclick=function(){var r=S.history.find(function(h){return h.id===id});
+      post("/api/inspect",{ref:id,ok:true,points:r.points},"Full job passed · awarded "+kidOf(r.kid).name+" "+r.points+" ⭐")};
     c.querySelectorAll("[data-p]").forEach(function(b){b.onclick=function(){var l=c.querySelector(".lbl");
       post("/api/inspect",{ref:id,ok:true,points:+b.dataset.p,label:l?l.value:""},"Inspected ✓ +"+b.dataset.p)}});
     c.querySelectorAll(".tsel [data-tp]").forEach(function(b){b.onclick=function(){var m=b.parentNode.dataset.m,sel=TSEL[id];sel[m]=+b.dataset.tp;

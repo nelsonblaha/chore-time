@@ -1812,6 +1812,17 @@ class ServiceSchedule(unittest.TestCase):
         self.assertEqual((rows[0]["title"], rows[0]["source"], rows[0]["all_day"]), ("Science fair", "Family", False))
         self.assertEqual(set(rows[0]), {"title", "source", "start", "end", "all_day"})
 
+    def test_week_calendar_includes_recent_and_future_events_but_not_older_ones(self):
+        self.sc.CFG.clear(); self.sc.CFG.update({"timezone": "America/Denver", "agenda": {"past_days": 14, "days": 28}})
+        now = datetime(2026, 11, 18, 12, tzinfo=timezone(timedelta(hours=-7)))
+        self.sc.CACHE["agenda_sources"] = {"base": [
+            {"title": "Too old", "source": "Kids", "start": "2026-10-01", "end": "2026-10-02", "all_day": True},
+            {"title": "Last week", "source": "Kids", "start": "2026-11-10", "end": "2026-11-11", "all_day": True},
+            {"title": "Next week", "source": "Family", "start": "2026-11-25", "end": "2026-11-26", "all_day": True},
+        ]}
+        rows = self.sc.agenda(now)
+        self.assertEqual([(x["title"], x["source"]) for x in rows], [("Last week", "Kids"), ("Next week", "Family")])
+
 
 class MustDoFirst(Case):
     def test_thursday_homework_blocks_chores_then_only_rewards_until_reported(self):

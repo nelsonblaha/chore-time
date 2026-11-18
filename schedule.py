@@ -7,7 +7,7 @@ house.json "kid_calendar" (all optional):
   no_school    regex: an all-day event whose title matches means no school that day (default: holiday, break,
                intersession, "no school", "off school", vacation); naming a kid makes it that kid's day off only
   school_anyway  regex that wins over no_school (default: "last day", "resumes", "first day")
-  agenda      optional kids-screen agenda: days, max_events, base {name/include/exclude}, and extra_sources
+  agenda      optional kids-screen calendar: past_days, days, max_events, base {name/include/exclude}, and extra_sources
               [{name, ics_url, include, exclude}]. Only titles and times are retained; descriptions, locations,
               links and guest lists are discarded. Keep every private iCal address in the private house.json.
 Days the calendar covers are cached in the data folder (kid_calendar.json: {"days": {"YYYY-MM-DD": true|false}}),
@@ -221,7 +221,7 @@ def _agenda_cfg(source, default_name):
 
 
 def agenda(now=None):
-    """Merged, de-duplicated upcoming agenda for the kids' menu."""
+    """Merged, de-duplicated calendar window for the kids' week view."""
     ac = CFG.get("agenda") or {}
     if not ac:
         return []
@@ -229,20 +229,21 @@ def agenda(now=None):
     now = now or datetime.now(zone)
     if not isinstance(now, datetime):
         now = datetime.fromtimestamp(float(now), zone)
-    until = now + timedelta(days=float(ac.get("days") or 14))
+    since = now - timedelta(days=float(ac.get("past_days") or 35))
+    until = now + timedelta(days=float(ac.get("days") or 84))
     rows, seen = [], set()
     for items in CACHE.get("agenda_sources", {}).values():
         for e in items:
             if e.get("all_day"):
-                visible = e.get("end", "") > now.date().isoformat() and e.get("start", "") <= until.date().isoformat()
+                visible = e.get("end", "") > since.date().isoformat() and e.get("start", "") <= until.date().isoformat()
             else:
-                visible = float(e.get("end") or 0) > now.timestamp() and float(e.get("start") or 0) <= until.timestamp()
+                visible = float(e.get("end") or 0) > since.timestamp() and float(e.get("start") or 0) <= until.timestamp()
             key = (re.sub(r"\W+", "", str(e.get("title") or "").lower()), e.get("start"), e.get("end"))
             if visible and key not in seen:
                 seen.add(key)
                 rows.append(e)
     rows.sort(key=lambda e: (e["start"] if not e.get("all_day") else datetime.fromisoformat(e["start"]).replace(tzinfo=zone).timestamp(), e["title"]))
-    return rows[:int(ac.get("max_events") or 24)]
+    return rows[:int(ac.get("max_events") or 200)]
 
 
 def refresh(fetch=None):
@@ -262,8 +263,12 @@ def refresh(fetch=None):
     CACHE["off"].update(off)
     ac = CFG.get("agenda") or {}
     if ac:
+        zone = ZoneInfo(CFG.get("timezone") or "America/Denver")
+        past_days, future_days = int(ac.get("past_days") or 35), int(ac.get("days") or 84)
+        window = {"start": datetime.now(zone) - timedelta(days=past_days),
+                  "horizon_days": past_days + future_days}
         base = _agenda_cfg(ac.get("base") or {}, "Kids")
-        CACHE["agenda_sources"]["base"] = agenda_events(text, **base)
+        CACHE["agenda_sources"]["base"] = agenda_events(text, **base, **window)
         wanted = {"base"} | {"extra:%d" % i for i, source in enumerate(ac.get("extra_sources") or []) if source.get("ics_url")}
         for key in list(CACHE["agenda_sources"]):
             if key not in wanted:
@@ -273,7 +278,7 @@ def refresh(fetch=None):
                 continue
             try:
                 extra = fetch(source["ics_url"]) if fetch else urllib.request.urlopen(source["ics_url"], timeout=30).read().decode("utf-8", "replace")
-                CACHE["agenda_sources"]["extra:%d" % i] = agenda_events(extra, **_agenda_cfg(source, "Family"))
+                CACHE["agenda_sources"]["extra:%d" % i] = agenda_events(extra, **_agenda_cfg(source, "Family"), **window)
             except Exception:  # noqa: BLE001
                 pass   # keep that source's last good agenda
     CACHE["fetched"] = time.time()
