@@ -10,7 +10,6 @@ class LeftoverTask(unittest.TestCase):
 
     def setUp(self):
         fixture.Vacuum.setUp(self)
-        self.va.START_QUIET_S = 0
         self.p.D.update(phase="running", groups=[{"mode": "vac_and_mop", "rooms": ["Kitchen"]}], gi=0,
                         run_started=self.now[0] - 7200, saw_clean=True, pauses=[], saved={"mode": "vacuum", "fan": "max"})
 
