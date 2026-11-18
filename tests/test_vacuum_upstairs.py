@@ -178,6 +178,43 @@ class Upstairs(unittest.TestCase):
         launch, _ = self.run_until_start()
         self.assertEqual(launch["rooms"], ["Bath"])                  # only the pressed room
 
+    def gives_up_at_once(self):
+        launch, _ = self.run_until_start()
+        self.assertIsNotNone(launch)
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        self.tick(10)
+        self.S("vacuum.up", "returning")
+        self.tick(10)
+        self.S("vacuum.up", "docked")
+        self.S("binary_sensor.up_cleaning", "off")
+        self.S("select.up_map", "Map 2")              # it flips itself back to the other map
+        for _ in range(4):
+            self.tick()
+
+    def test_a_robot_that_gives_up_at_once_is_a_failed_start_and_backs_off(self):
+        # 11-18: on its old map the robot cleaned 14 s, went home, and the status said "done" with the rooms still due
+        self.gives_up_at_once()
+        self.assertEqual(self.p.D["phase"], "idle")
+        why = self.p.D["runs"][-1]["why"]
+        self.assertIn("gave up after", why)
+        self.assertIn("'Map 2'", why)
+        self.S("select.up_map", "Upstairs")
+        self.assertIsNone(self.run_until_start()[0])             # no retry every quiet window
+        self.assertIn("start(s) failed", self.posts[-1][2]["why"])
+        self.assertIn("gave up after", self.posts[-1][2]["last_run"])
+
+    def test_a_room_pressed_after_the_failure_still_goes(self):
+        self.gives_up_at_once()
+        self.tick(1800)                                          # (the usual 30 minutes between attempts)
+        self.S("input_text.up_requests", '{"Bath": %d}' % self.now[0])
+        self.assertIsNotNone(self.run_until_start()[0])
+
+    def test_the_status_says_what_it_waits_for(self):
+        self.occ({"bedroom": "still"})
+        self.tick()
+        self.assertTrue(self.posts[-1][2]["why"].startswith("waiting for upstairs to be empty"), self.posts[-1][2]["why"])
+
     def test_two_robots_never_share_settings(self):
         down = load_copy()
         down.configure({"vacuum": "vacuum.down", "room_sensor": "sensor.down_room", "cleaning": "binary_sensor.down_cleaning",

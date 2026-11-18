@@ -29,6 +29,7 @@ VAC = ROOM_SENSOR = STATUS = BATTERY = ERROR = IN_CLEAN = MODE_SEL = ENABLE = AC
 REQUESTS = None
 MAP_FLAG = 0
 MAP_SELECT = MAP_NAME = None
+FLOOR = "downstairs"
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
@@ -81,6 +82,8 @@ def configure(v):
     PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
     NAME = v.get("name", "Vacuum autopilot")
     OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
+    global FLOOR
+    FLOOR = v.get("floor") or OCC.get("floor") or "downstairs"   # for the status sentence
     UNTIDY_BLOCKS, SMART = bool(v.get("untidy_blocks")), v.get("smart_mode")
 
 
@@ -99,6 +102,8 @@ PARK_DOCK_S = 10 * 60        # Q5
 DWELL_S = 120                # a room counts as robot-cleaned after this long in it while cleaning
 PREV_GRACE_S = 90            # sensors of the room it just left still belong to the robot
 RETRY_S = 30 * 60
+FAILED_START_S = 60          # a run whose robot cleaned for less than this gave up: a failed start, not "done"
+BACKOFF_S = (2 * 3600, 4 * 3600, 8 * 3600, 24 * 3600)   # after 1, 2, 3, 4+ failed starts in a row
 BETWEEN_QUIET_S = 5 * 60     # the next group of rooms needs 5 quiet minutes, not the 20 s a paused room needs to resume
 MAX_RUN_S = 3 * 3600         # a run older than this never launches another group (a stuck robot freed hours later goes home)
 HANDS_OFF = ("mapping",)     # robot statuses during which the autopilot sends nothing at all
@@ -525,12 +530,26 @@ class Pilot:
         groups = ([{"mode": "vacuum", "rooms": vac}] if vac else []) + ([{"mode": "vac_and_mop", "rooms": mop}] if mop else [])
         if self.smart_now():   # the robot's own automatic mode: it decides vacuum or mop per room, one pass
             groups = [{"mode": "smart_mode", "rooms": list(rooms)}]
-        self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None)
+        self.D.update(phase="running", groups=groups, gi=0, run_started=now, paused_at=0, pauses=[], trouble=None,
+                      clean_first=0, clean_last=0)
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
         self.log("start", rooms=rooms, saved=self.D["saved"])
         self.launch(now)
 
     def finish(self, why, now):
+        D = self.D
+        if (why == "done" or why.startswith("docked with the robot's task")) and "clean_first" in D:   # (a run from before this rule: not judged)
+            span = (D.get("clean_last") or 0) - (D.get("clean_first") or 0)
+            if span < FAILED_START_S:   # it set off and gave up at once (e.g. a map that no longer matches the house)
+                other = self.other_map()
+                why = "started %s and gave up after %d s%s" % (
+                    datetime.fromtimestamp(D.get("run_started") or now).strftime("%H:%M"), max(0, span),
+                    "; the robot went back to its %r map" % other.strip() if other else "")
+                n = D.get("fail_streak", 0) + 1
+                D.update(fail_streak=n, backoff_until=now + BACKOFF_S[min(n, len(BACKOFF_S)) - 1], failed_at=now)
+                self.log("failed_start", span=span, streak=n, map_other=other)
+            else:
+                D.update(fail_streak=0, backoff_until=0)
         sv = self.D.get("saved") or {}
         if sv.get("mode") in ("vacuum", "vac_and_mop", "mop", "custom", "smart_mode"):
             self.call("select.select_option", {"entity_id": MODE_SEL, "option": sv["mode"]})
@@ -673,9 +692,25 @@ class Pilot:
                 # on another map: the clean script loads ours first (the robot is switched to the right map automatically)
                 ok_robot = vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
                     (not BATTERY or float(self.get(BATTERY).get("state") or 0) >= 50) and (not ERROR or self.get(ERROR).get("state") in ("none", None))
-                if rooms and not ok_robot:
-                    info["why"] = "robot busy/not ready"
-                elif rooms and q is not None and q >= START_QUIET_S and now - D.get("last_attempt", 0) > RETRY_S:
+                reqs = self.room_requests()
+                # after failed starts, wait (2 h, 4 h, 8 h, then daily); a room pressed since the failure still goes
+                held = now < D.get("backoff_until", 0) and not any(t > D.get("failed_at", 0) for t in reqs.values())
+                hm = lambda t: datetime.fromtimestamp(t).strftime("%H:%M")
+                if not rooms:
+                    info.setdefault("why", "nothing due: every room is cleaned, blocked or not asked for")
+                elif not ok_robot:
+                    info["why"] = "not starting: the robot is %s%s" % (vs, ", charging" if vs == "docked" else "")
+                elif held:
+                    last = (D["runs"] or [{}])[-1].get("why", "")
+                    info["why"] = "not starting before %s: the last %d start(s) failed (%s)" % (
+                        hm(D["backoff_until"]), D.get("fail_streak", 0), last)
+                elif q is None or q < START_QUIET_S:
+                    info["why"] = ("waiting for %s to be empty: quiet %d of %d minutes%s" % (
+                        FLOOR, (q or 0) // 60, START_QUIET_S // 60, " (%s)" % who if who else "")) if q is not None \
+                        else "waiting: can't tell whether %s is empty" % FLOOR
+                elif now - D.get("last_attempt", 0) <= RETRY_S:
+                    info["why"] = "waiting to retry at %s" % hm(D["last_attempt"] + RETRY_S)
+                else:
                     D["last_attempt"] = now
                     self.start(rooms, now)
         elif ph == "running":
@@ -685,6 +720,8 @@ class Pilot:
                     self.log("trouble", state=vs, robot_in=D.get("cur"))
             if vs == "cleaning":
                 D["saw_clean"] = True
+                D["clean_first"] = D.get("clean_first") or now
+                D["clean_last"] = now
                 who = self.person_entered(now)
                 if who:
                     self.call("vacuum.pause", {"entity_id": VAC})
@@ -763,8 +800,35 @@ class Pilot:
                 if now - D["docking_since"] > 120:
                     D["docking_since"] = 0
                     self.finish("docked", now)
+        if "why" not in info:
+            info["why"] = self.doing(D, vs)
         self.publish(info, vs, room)
         self.save()
+
+    def doing(self, D, vs):
+        """one sentence: what a run is doing now"""
+        ph = D["phase"]
+        if ph == "idle":
+            return "idle"
+        gr = (D.get("groups") or [{}])[D.get("gi", 0)] if D.get("groups") else {}
+        rooms = gr.get("rooms") or []
+        done = [r for r in rooms if D["visits"].get(r, 0) >= D.get("run_started", 0)]
+        left = [r for r in rooms if r not in done and r != D.get("cur")]
+        togo = ", %d room%s to go" % (len(left), "" if len(left) == 1 else "s") if left else ""
+        if ph == "running":
+            if vs == "cleaning":
+                return "cleaning %s%s" % (D.get("cur") or "(room unknown)", togo)
+            return "run under way: the robot is %s%s" % (vs, togo)
+        if ph == "paused":
+            p = (D.get("pauses") or [{}])[-1]
+            return "paused: someone came in (%s); resumes after they leave" % (p.get("who") or "someone")
+        if ph == "between":
+            return "between room groups: waiting for %s to stay empty" % FLOOR
+        if ph == "resuming":
+            return "resuming the run"
+        if ph == "docking":
+            return "going home: people stayed, the run is over"
+        return ph
 
     def other_map(self):
         """the robot's selected map when it is a different one than our rooms belong to (None when it's ours or unknown);
@@ -788,7 +852,11 @@ class Pilot:
                  "groups": D.get("groups"), "gi": D.get("gi"),
                  "visits": {k: datetime.fromtimestamp(t).strftime("%a %H:%M") for k, t in D["visits"].items()},
                  "segments": self.segment_status(), "suction_now": self.tier(), "phase": D["phase"],
-                 "last_event": D.get("last_event"), "runs": D["runs"][-5:]}
+                 "last_event": D.get("last_event"), "runs": D["runs"][-5:],
+                 "last_run": ("%s: %s" % (datetime.fromtimestamp(D["runs"][-1]["end"]).strftime("%a %H:%M"), D["runs"][-1]["why"])
+                              if D["runs"] and D["runs"][-1].get("end") else None),
+                 "backoff_until": (datetime.fromtimestamp(D["backoff_until"]).strftime("%a %H:%M")
+                                   if D.get("backoff_until", 0) > time.time() else None)}
         key = json.dumps([D["phase"], attrs], sort_keys=True, default=str)
         if key != self.last_pub or time.time() - D.get("pub_ts", 0) > 300:
             attrs["heartbeat"] = datetime.fromtimestamp(time.time()).astimezone().isoformat(timespec="seconds")   # so HA's last_updated moves
