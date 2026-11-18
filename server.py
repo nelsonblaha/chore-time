@@ -2334,6 +2334,9 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "do it together: team up first"})
             ev = append({"type": "report", "kid": b["kid"], "chore": b["chore"],
                          "feeling": b.get("feeling"), "points": bd["price"], **extra})
+            if ch_.get("trust") and not extra.get("partial"):   # a trusted job: the kid's word is the inspection
+                append({"type": "inspect", "ref": ev["id"], "by": "vacuum" if ch_.get("help_robot") else LEAD_ADULT,
+                        "ok": True, "points": int(bd["price"] or 0), "label": "", "trusted": True})
         elif p == "/api/spend":
             if b.get("kid") not in kids or b.get("reward") not in rewards:
                 return self.send(400, {"error": "unknown kid/reward"})
@@ -2947,7 +2950,7 @@ class H(BaseHTTPRequestHandler):
             threading.Thread(target=notify_started, args=(ev["members"][0], ev["chore"], ev["members"], "team"), daemon=True).start()
         if p == "/api/pause" and ev.get("type") == "pause":
             threading.Thread(target=notify_started, args=(ev["kid"], ev["chore"], ev.get("team"), "paused"), daemon=True).start()
-        if p == "/api/report" and ev.get("type") == "report":
+        if p == "/api/report" and ev.get("type") == "report" and not (chores.get(ev.get("chore")) or {}).get("trust"):
             threading.Thread(target=notify_report, args=(ev, derive()), daemon=True).start()
         if ev.get("type") in ("inspect", "undo") and ev.get("ref"):
             threading.Thread(target=clear_report_notice, args=(ev["ref"],), daemon=True).start()

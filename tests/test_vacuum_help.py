@@ -9,8 +9,9 @@ from test_chore_app import Case
 
 ERR, DOCK, ROOM, WATER = ("sensor.down_robot_vacuum_error", "sensor.down_robot_dock_error",
                           "sensor.down_robot_current_room", "binary_sensor.down_robot_dock_dirty_water_box")
-HELP = {"points": {"rescue": 3, "water": 2},
+HELP = {"points": {"rescue": 3, "water": 2, "sensors": 2},
         "robots": [{"id": "down", "name": "Robo", "floor": "Downstairs", "error": ERR, "dock_error": DOCK,
+                    "sensors_left": "sensor.down_robot_sensor_time_left", "sensors_reset": "button.down_robot_reset_sensor",
                     "water": [WATER], "room": ["sensor.down_robot_room_live", ROOM],
                     "rooms": {"Kitchen": ["kitchen"], "Porch": ["porch"]}}]}
 SPACES = [{"id": "kitchen", "name": "Kitchen", "floor": "Downstairs", "map_rooms": ["kitchen"], "chores": ["kitchen"]},
@@ -24,7 +25,7 @@ class RobotHeroJobs(Case):
         self.vh = vacuum_help
         self.s.HOUSE["vacuum_help"], self.s.HOUSE["tidy_spaces"] = HELP, SPACES
         self.h = vacuum_help.Helper(vars(self.s), HELP)
-        for e, v in ((ERR, "none"), (DOCK, "ok"), (WATER, "off"), (ROOM, "Kitchen")):
+        for e, v in ((ERR, "none"), (DOCK, "ok"), (WATER, "off"), (ROOM, "Kitchen"), ("sensor.down_robot_sensor_time_left", "5000")):
             self.app.set(e, v, ago=3600)
 
     def job(self, cid):
@@ -117,6 +118,25 @@ class RobotHeroJobs(Case):
         st = self.app.state()
         self.assertTrue(st["board"]["kitchen"]["clean_until"])
         self.assertIn("It is stuck:", st["board"]["help_rescue_down"]["note"])
+
+    def test_dusty_sensors_open_a_trusted_job_that_resets_the_reminder(self):
+        # "Trust the kids on this chore, no inspection needed. They get 2 points ... shown that image ... confirm"
+        self.app.set("sensor.down_robot_sensor_time_left", "-234")
+        self.tick()
+        job = self.job("help_sensors_down")
+        self.assertIsNone(job.get("closed"))
+        self.assertTrue(job["trust"] and job["confirm"])
+        self.assertEqual(self.app.state()["board"]["help_sensors_down"]["price"], 2)
+        before = self.app.state()["balance"]["max"]
+        ev = self.app.post("/api/report", {"kid": "max", "chore": "help_sensors_down", "feeling": "ok"})[1]["event"]
+        st = self.app.state()
+        self.assertEqual(st["balance"]["max"], before + 2)                       # paid at once: no inspection
+        self.assertEqual(next(h for h in st["history"] if h.get("id") == ev["id"])["status"], "inspected")
+        self.tick()
+        self.assertIn(("button.press", {"entity_id": "button.down_robot_reset_sensor"}), self.app.calls)
+        self.app.set("sensor.down_robot_sensor_time_left", "108000")             # the reminder is back up
+        self.tick()
+        self.assertEqual(self.job("help_sensors_down").get("closed"), "on_demand")
 
     def test_maintenance_never_opens_a_job(self):
         # worn parts, filters, the dust bag and other dock upkeep are grown-up work

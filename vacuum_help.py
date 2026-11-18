@@ -86,10 +86,20 @@ def chores(cfg):
                         desc="A robot hero mission: free " + r["name"] + " and press the Home button on top so it can go "
                              "home. It comes with tidying: tidy at least part of the room where it got stuck, for "
                              "extra stars for that part."))
+        if r.get("sensors_left"):   # trusted: no inspection; the kid's "yes, I did it" resets the robot's reminder
+            out.append(dict(common, id=sensors_id(r), name="Clean " + r["name"] + "'s sensors", icon="1f9fd", help="sensors",
+                            trust=True, photo=r.get("sensors_photo"),
+                            confirm="Did you wipe every spot shown in blue?",
+                            desc="Wipe every spot shown in blue in the picture with a soft dry cloth: the ones underneath "
+                                 "(tip " + r["name"] + " up gently) and the ones on its front. Then put it back on its dock."))
         out.append(dict(common, id=water_id(r), name="Fresh water for " + r["name"], icon="1f4a7", help="water",
                         desc=r["name"] + " is thirsty! Change its water at the dock: empty the dirty tank, fill the "
                              "clean one."))
     return [{k: v for k, v in c.items() if v is not None or k == "points"} for c in out]
+
+
+def sensors_id(r):
+    return "help_sensors_" + r["id"]
 
 
 def need(robot, read):
@@ -277,9 +287,42 @@ class Helper:
                     elif not bd.get("opened") and K.get("episode") and K.get("clear_since"):
                         K.update(episode=None, clear_since=0)   # done (or never opened): forget the episode
                         changed = True
+            if robot.get("sensors_left"):
+                changed = self.sensors(robot, R, st, int(pts.get("sensors", 2)), now) or changed
         if changed:
             self.save()
             g["after_change"]()
+
+    def sensors(self, robot, R, st, price, now):
+        """The robot's sensors are due a wipe (its reminder reads 0 or less): a trusted job opens. When a kid says it's
+        done, the robot's reminder is reset (its reset button); once the reminder is back up, the job closes."""
+        g, cid, K = self.g, sensors_id(robot), R.setdefault("sensors", {})
+        changed = False
+        for r in st.get("history") or []:
+            if r.get("chore") == cid and r.get("type") == "report" and r.get("status") == "inspected" \
+                    and r["id"] not in (K.get("reset") or []):
+                K["reset"] = (K.get("reset") or [])[-20:] + [r["id"]]
+                if robot.get("sensors_reset"):
+                    g["ha_call"]("button.press", {"entity_id": robot["sensors_reset"]}, self.tok)
+                g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "sensors", "action": "reset", "ref": r["id"]})
+                changed = True
+        try:
+            left = float(self.read(robot["sensors_left"]).get("state"))
+        except (TypeError, ValueError):
+            return changed
+        bd = st["board"].get(cid) or {}
+        if left <= 0:
+            if not bd.get("opened") and not busy(cid, st) and not (st.get("bedtime") or {}).get("on"):
+                g["append"]({"type": "reopen", "chore": cid, "by": "vacuum", "help": "sensors",
+                             "note": robot["name"] + "'s sensors are dusty: it can't see well. Look at the picture!"})
+                g["append"]({"type": "price", "chore": cid, "points": price, "by": "vacuum"})
+                g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "sensors", "action": "open", "price": price})
+                changed = True
+        elif bd.get("opened") and not busy(cid, st):
+            g["append"]({"type": "close_od", "chore": cid, "by": "vacuum"})
+            g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "sensors", "action": "close"})
+            changed = True
+        return changed
 
 
 def run(g):
