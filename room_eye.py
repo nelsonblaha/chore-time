@@ -20,6 +20,7 @@ Only the grown-ups' labels are ever used as evidence; the camera's own verdicts 
 house.json:
   "room_eye": {
     "capture_url": "http://127.0.0.1:8791",       # GET /cameras, POST /capture {camera, purpose} -> image/jpeg
+    "capture_token_file": "~/.local/share/chore-lane/room-eye-capture.token",
     "every_h": 4, "settle_s": 5,
     "cameras": {"sun_room": {"spaces": ["sun_room"], "lights": ["light.sun_room"],
                              "motion": "binary_sensor.sun_room_camera_motion",
@@ -174,10 +175,22 @@ class Eye:
         self.motion_prev = {}
 
     # ---- plumbing (replaced in tests)
+    def capture_token(self):
+        """Read on every request so the loopback service's bearer can be rotated without restarting us."""
+        path = Path(self.cfg.get("capture_token_file") or "~/.local/share/chore-lane/room-eye-capture.token").expanduser()
+        try:
+            token = path.read_text().strip()
+        except OSError as ex:
+            raise RuntimeError("camera capture authentication unavailable") from ex
+        if not token:
+            raise RuntimeError("camera capture authentication unavailable")
+        return token
+
     def http(self, method, path, body=None, timeout=30):
         req = urllib.request.Request(self.cfg["capture_url"].rstrip("/") + path, method=method,
                                      data=json.dumps(body).encode() if body is not None else None,
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json",
+                                              "Authorization": "Bearer " + self.capture_token()})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, dict(r.headers), r.read()
 
@@ -187,6 +200,22 @@ class Eye:
             return {k: bool((v or {}).get("on")) for k, v in json.loads(b).items()}
         except Exception:  # noqa: BLE001
             return {}
+
+    def capture_allowed(self, cam, wake=False):
+        """Recheck permission immediately before touching the room. Unknown fails closed.
+
+        Normal learning only uses a camera whose vacancy policy has it on. Inspection shots may ask the service to
+        wake a camera, but only when that camera explicitly advertises inspection permission.
+        """
+        try:
+            _, _, b = self.http("GET", "/cameras", timeout=10)
+            state = (json.loads(b).get(cam) or {})
+        except Exception:  # noqa: BLE001
+            return False, "camera permission unavailable"
+        field = "inspection_allowed" if wake else "on"
+        if state.get(field) is not True:
+            return False, state.get("reason") or "camera is private"
+        return True, None
 
     def capture(self, cam, purpose, wake=False):
         """(jpeg, people) or (None, why). wake: the camera service may turn the camera on just for this picture."""
@@ -238,6 +267,9 @@ class Eye:
         self.flashed_at[cam] = time.time()
 
     def shoot(self, cam, purpose, wake=False, shades=False):
+        allowed, why = self.capture_allowed(cam, wake)
+        if not allowed:
+            return None, why
         was = self.flash(cam, shades)
         try:
             return self.capture(cam, purpose, wake)
@@ -493,7 +525,7 @@ class Eye:
             p = self.S["pending"].get(cam)
             if p:
                 jpeg, people = self.shoot(cam, "tidy_label")
-                if jpeg and people <= 0:
+                if jpeg and people == 0:
                     self.keep(cam, jpeg, p["label"], "click")
                     del self.S["pending"][cam]
                     self.S["last_check"][cam] = now
@@ -502,7 +534,7 @@ class Eye:
                 boot = self.bootstrap(cam, st)
                 jpeg, people = self.shoot(cam, "tidy_label" if boot else "tidy_check")
                 self.S["last_check"][cam] = now
-                if jpeg and people <= 0:
+                if jpeg and people == 0:
                     if boot:
                         self.keep(cam, jpeg, boot, "map")
                     else:

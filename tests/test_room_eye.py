@@ -4,8 +4,12 @@
 Pictures here are synthetic: a fixed textured "room", lit a little differently each time, with or without mess.
 """
 import io
+import copy
+import tempfile
 import time
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -62,13 +66,15 @@ class RoomEyeLive(Case):
         import room_eye
         self.re = room_eye
         self.s.HOUSE["tidy_spaces"] = SPACES
-        self.s.HOUSE["room_eye"] = CAM
+        cfg = copy.deepcopy(CAM)
+        self.s.HOUSE["room_eye"] = cfg
         self.app.set(LIGHT, "off", entity_id=["light.kitchen_1", "light.kitchen_2"])
         self.app.set("vacuum.robo", "docked")
-        self.eye = room_eye.Eye(vars(self.s), CAM)
+        self.eye = room_eye.Eye(vars(self.s), cfg)
         room_eye.EYE = self.eye
         self.on, self.people, self.next_pic, self.shots = True, 0, picture(), []
         self.eye.cameras_on = lambda: {"cam1": self.on}
+        self.eye.capture_allowed = lambda cam, wake=False: (True, None)
         self.eye.capture = lambda cam, purpose, wake=False: (self.shots.append((purpose,)) or self.next_pic, self.people)
         self.eye.sleep = lambda s: None
         self.t = time.time()
@@ -154,6 +160,58 @@ class RoomEyeLive(Case):
         self.people = 1
         self.tick()
         self.assertEqual(self.samples("tidy"), 0)
+
+    def test_a_picture_with_unknown_people_count_is_never_kept(self):
+        self.app.pass_report("zoe", "kitchen", points=4)
+        self.people = -1
+        self.tick()
+        self.assertEqual(self.samples("tidy"), 0)
+
+    def test_capture_requests_use_the_private_bearer_file(self):
+        class Response:
+            status, headers = 200, {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read(self):
+                return b"ok"
+
+        with tempfile.TemporaryDirectory() as td:
+            token_file = Path(td) / "capture.token"
+            token_file.write_text("test-secret\n")
+            token_file.chmod(0o600)
+            self.eye.cfg["capture_token_file"] = str(token_file)
+            with mock.patch("urllib.request.urlopen", return_value=Response()) as opened:
+                self.assertEqual(self.eye.http("GET", "/cameras"), (200, {}, b"ok"))
+            req = opened.call_args.args[0]
+            self.assertEqual(req.get_header("Authorization"), "Bearer test-secret")
+
+    def test_capture_requests_fail_closed_without_a_bearer(self):
+        self.eye.cfg["capture_token_file"] = "/definitely/missing/room-eye.token"
+        with mock.patch("urllib.request.urlopen") as opened:
+            with self.assertRaisesRegex(RuntimeError, "authentication unavailable"):
+                self.eye.http("GET", "/cameras")
+        opened.assert_not_called()
+
+    def test_private_camera_is_rejected_before_lights_or_shades_change(self):
+        self.eye.capture_allowed = self.re.Eye.capture_allowed.__get__(self.eye)
+        self.eye.http = lambda *args, **kwargs: (200, {}, b'{"cam1":{"on":true,"inspection_allowed":false}}')
+        self.eye.cfg["cameras"]["cam1"]["shades"] = ["cover.k_shade"]
+        before = len(self.app.calls)
+        jpeg, why = self.eye.shoot("cam1", "inspection_before", wake=True, shades=True)
+        self.assertIsNone(jpeg)
+        self.assertIn("private", why)
+        self.assertEqual(self.app.calls[before:], [])
+
+    def test_automatic_camera_permission_must_be_explicitly_on(self):
+        self.eye.capture_allowed = self.re.Eye.capture_allowed.__get__(self.eye)
+        for payload in (b'{"cam1":{"on":false,"inspection_allowed":true}}', b'{"cam1":{}}', b'{}'):
+            self.eye.http = lambda *args, payload=payload, **kwargs: (200, {}, payload)
+            self.assertFalse(self.eye.capture_allowed("cam1")[0])
 
     def test_robot_seen_by_a_camera_teaches_the_locator(self):
         import locator
