@@ -492,6 +492,7 @@ function drawBed(){var B=S.bedtime||{},el=$("bed");if(!B.on){if(el.style.display
     bm.querySelector("#bty").onclick=function(){api("/api/report",{kid:k,chore:bt.id,feeling:"ok"}).then(function(r){L("bed_routine_done",{kid:k,chore:bt.id,ok:r.ok});if(r.ok)S=r.state;bm.remove();drawBed()})}}})}
 function render(){
   if(!S)return;
+  if(S.music_interruption&&location.pathname!=="/music-block"){location.replace("/music-block?back="+encodeURIComponent(location.pathname+location.search));return}
   drawBed();
   var h="";
   var DRK=Object.keys((S.dress&&S.dress.on&&S.dress.kids)||{}).filter(function(x){return S.dress.kids[x]!=="ready"});

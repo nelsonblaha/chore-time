@@ -1715,6 +1715,30 @@ class GrownUpFromHA(unittest.TestCase):
         self.assertIn("Spotify waits for mandatory chores", inspect)
         self.assertIn('data-a="od"', inspect)
         self.assertNotIn('data-od="', inspect)
+        block = (REPO / "static" / "music-block.html").read_text()
+        self.assertIn("These kids need to finish mandatory chores before music:", block)
+
+
+class SpotifyChoreInterruption(Case):
+    def test_only_fresh_complete_ha_receipt_is_exposed(self):
+        raw = {"state": "blocked", "attributes": {"receiver": "media_player.den", "rooms": ["den"],
+                                                      "attempted_at": 90, "valid_until": 130, "attempt_id": "a1"}}
+        self.assertEqual(self.s.normalize_spotify_interruption(raw, now=100),
+                         {"receiver": "media_player.den", "rooms": ["den"], "attempted_at": 90.0,
+                          "valid_until": 130.0, "attempt_id": "a1"})
+        self.assertIsNone(self.s.normalize_spotify_interruption(raw, now=130))
+        raw["attributes"].pop("receiver")
+        self.assertIsNone(self.s.normalize_spotify_interruption(raw, now=100))
+
+    def test_display_ip_maps_to_physical_room(self):
+        hubs, tvs = self.s.HUBS, self.s.TVS
+        try:
+            self.s.HUBS, self.s.TVS = {"den_hub": {"ip": "10.0.0.2", "room": "den"}}, {"tv": {"ip": "10.0.0.3", "room": "kitchen"}}
+            self.assertEqual(self.s.display_for_ip("10.0.0.2"), {"kind": "hub", "id": "den_hub", "room": "den"})
+            self.assertEqual(self.s.display_for_ip("10.0.0.3"), {"kind": "tv", "id": "tv", "room": "kitchen"})
+            self.assertIsNone(self.s.display_for_ip("10.0.0.9"))
+        finally:
+            self.s.HUBS, self.s.TVS = hubs, tvs
 
 
 class PausedTeamJobs(Case):

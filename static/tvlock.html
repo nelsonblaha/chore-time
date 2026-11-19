@@ -137,6 +137,7 @@ function drawDress(S){var D=S.dress||{},el=document.getElementById("dress");DRS=
 function tickDress(){var c=document.getElementById("dclk");if(!c||!DRS)return;var t=Math.max(0,Math.round(Date.now()/1000-DRS));c.textContent=Math.floor(t/60)+":"+("0"+t%60).slice(-2)}
 setInterval(tickDress,1000);
 function load(){fetch("/api/state").then(function(r){return r.json()}).then(function(S){
+  if(S.music_interruption){location.replace("/music-block?back="+encodeURIComponent(location.pathname+location.search));return}
   if(S.ver_tv){if(VER0===null)VER0=S.ver_tv;else if(S.ver_tv!==VER0){location.replace(location.pathname+"?v="+Date.now());return}}
   drawDress(S);
   var h="",ear=S.earned||{},top=Math.max.apply(null,S.config.kids.map(function(k){return S.balance[k.id]})),tope=Math.max.apply(null,S.config.kids.map(function(k){return ear[k.id]||0}));

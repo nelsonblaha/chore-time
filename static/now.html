@@ -101,6 +101,7 @@ function lockTv(tv){var nm=TVN[tv]||tv;
       if(st.status==="no"||st.status==="timeout"){modal('<div class="big">🚫</div><div class="q">'+(st.status==="no"?adultName()+" said no.":"No answer.")+'</div><div class="btn" onclick="closeM()">OK</div>');return}
       if(++n<70)setTimeout(poll,2000)})})()})}
 function load(){api("/api/state").then(function(s){if(!s||!s.config)return;
+  if(s.music_interruption){location.replace("/music-block?back="+encodeURIComponent(location.pathname+location.search));return}
   if(s.adult_go){location.href="/inspect?hub=1&back=now&by="+s.adult_go+"&v="+Date.now();return}
   S=s;draw()})}
 /* grown-up login: the lead grown-up taps "It's me" on the watch -> their parent screen (same as the kid Hubs) */

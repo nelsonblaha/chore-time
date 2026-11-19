@@ -2108,6 +2108,9 @@ class H(BaseHTTPRequestHandler):
             st = derive()
             hub_ = next((h for h, x in (HOUSE.get("hubs") or {}).items() if x.get("ip") == self.client_address[0]), None)
             st["hub"], st["hub_motion"] = hub_, (GUARD.get("hub_motion") or {}).get(hub_)
+            display_ = display_for_ip(self.client_address[0])
+            interrupt_ = active_spotify_interruption((display_ or {}).get("room"))
+            st["display"], st["music_interruption"] = display_, interrupt_
             try:
                 seen = json.loads(NEWS_SEEN.read_text())
             except (OSError, ValueError):
@@ -3155,6 +3158,8 @@ def keep_hubs_on_chores(tok):
     for hid, h in HUBS.items():
         if datetime.now().hour < h.get("from_h", 0):
             continue   # the kids-room Hub is in their bedroom: don't light it up at 5 AM
+        if active_spotify_interruption(h.get("room") or hid):
+            continue   # its already-open Chore page is showing the silent block; never cast over it
         last = GUARD.setdefault("hub_check", {}).get(hid, 0)
         if now - last < HUB_RECHECK_S:
             continue
@@ -3333,6 +3338,46 @@ def ha_get(ent, tok):
         return json.loads(urllib.request.urlopen(req, timeout=5).read())
     except Exception:  # noqa: BLE001
         return {"state": "unavailable", "attributes": {}}
+
+
+SPOTIFY_INTERRUPTION = "sensor.spotify_chore_interruption"
+
+
+def normalize_spotify_interruption(raw, now=None):
+    """HA's short-lived positive-Spotify receipt, or None once it is stale/incomplete."""
+    now = time.time() if now is None else now
+    attrs = (raw or {}).get("attributes") or {}
+    try:
+        until = float(attrs.get("valid_until") or 0)
+        attempted = float(attrs.get("attempted_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    rooms = attrs.get("rooms") if isinstance(attrs.get("rooms"), list) else []
+    if (raw or {}).get("state") in (None, "unknown", "unavailable") or until <= now or not attrs.get("receiver") or not rooms or not attrs.get("attempt_id"):
+        return None
+    return {"receiver": attrs["receiver"], "rooms": [str(x) for x in rooms], "attempted_at": attempted,
+            "valid_until": until, "attempt_id": str(attrs["attempt_id"])}
+
+
+def refresh_spotify_interruption(tok):
+    GUARD["music_interruption"] = normalize_spotify_interruption(ha_get(SPOTIFY_INTERRUPTION, tok))
+
+
+def display_for_ip(ip):
+    for display_id, cfg_ in HUBS.items():
+        if cfg_.get("ip") == ip:
+            return {"kind": "hub", "id": display_id, "room": cfg_.get("room") or display_id}
+    for display_id, cfg_ in TVS.items():
+        if cfg_.get("ip") == ip:
+            return {"kind": "tv", "id": display_id, "room": cfg_.get("room") or display_id}
+    return None
+
+
+def active_spotify_interruption(room):
+    item = GUARD.get("music_interruption")
+    if not item or item.get("valid_until", 0) <= time.time():
+        return None
+    return item if room and room in item.get("rooms", []) else None
 
 
 def ha_post_state(ent, state, attrs, tok):
@@ -3606,6 +3651,7 @@ def watch_tvs():
             GUARD["vr_said"].add((t["ref"], round(t["start"]), 0))
     while True:
         try:
+            refresh_spotify_interruption(tok)
             try:
                 vr_timers(tok)
             except Exception as ex:  # noqa: BLE001
@@ -3710,6 +3756,9 @@ def watch_tvs():
                                                    "actions": [{"action": "CHORE_TVPLUS_" + tid, "title": "+10 min"},
                                                                {"action": "CHORE_TVLOCK_" + tid, "title": "Lock now"}]}}, tok)
             for tid, t in TVS.items():
+                if active_spotify_interruption(t.get("room") or tid):
+                    GUARD["status"][tid] = {"what": "music_block", "dur": 0, "at": time.time()}
+                    continue   # HA paused Spotify; do not cast, lock, announce, or change volume over its explanation
                 what, dur = tv_status(t, tok)
                 allowed = False
                 if dress_on:   # no TV time for anyone until they're dressed: straight to the clothes screen

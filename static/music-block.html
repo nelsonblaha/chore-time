@@ -8,7 +8,7 @@ main{width:min(950px,100%);text-align:center}.music{font-size:60px;line-height:1
 </style></head><body><main><div class="music">🎵⏸️</div><h1 id="heading">These kids need to finish mandatory chores before music:</h1><div class="kids" id="kids"></div><div class="foot" id="foot"></div></main>
 <script>
 var $=function(id){return document.getElementById(id)},esc=function(s){return String(s==null?'':s)},emoji=function(hex){try{return String.fromCodePoint(parseInt(hex,16))}catch(e){return '⭐'}};
-function render(s){var b=(s.music_block||{}).blockers||[],by={};b.forEach(function(x){var a=by[x.kid]||(by[x.kid]=[]);if(x.kind==='cleanup'&&(x.items||[]).length)(x.items||[]).forEach(function(i){a.push(i)});else a.push(x.name||'Required chore')});
+function render(s){if(location.pathname==='/music-block'&&!s.music_interruption){var back=(new URLSearchParams(location.search)).get('back')||'/';location.replace(back);return}var b=(s.music_block||{}).blockers||[],by={};b.forEach(function(x){var a=by[x.kid]||(by[x.kid]=[]);if(x.kind==='cleanup'&&(x.items||[]).length)(x.items||[]).forEach(function(i){a.push(i)});else a.push(x.name||'Required chore')});
   var ids=Object.keys(by),kids=(s.config||{}).kids||[];$('kids').textContent='';
   if(!ids.length){$('heading').textContent='Mandatory chores are finished.';var d=document.createElement('div');d.className='clear';d.textContent='✅ Music can play now';$('kids').appendChild(d);$('foot').textContent='';return}
   $('heading').textContent='These kids need to finish mandatory chores before music:';
