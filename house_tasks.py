@@ -4,9 +4,10 @@ Every minute: the grown-ups' chores that are due (Grocy chores not marked for th
 and batteries that need replacing. Each item can carry context (Grocy userfields):
 
   ctx_show_on    displays it belongs on, comma list (empty = everywhere)
-  ctx_show_when  only show while this Home Assistant condition holds, e.g.  person.ben = home
+  ctx_show_when  only show while this Home Assistant condition holds, e.g.  person.jordan = home
   ctx_done_when  done by itself when this holds, e.g.  binary_sensor.washer_running = off and sensor.x > 50
   ctx_priority   High / Normal / Low: High comes first everywhere
+  ctx_group      label for jobs that should stay together as one trip/project
   ctx_rooms      where it's done, comma list of rooms. Each screen in house.json "house_tasks": {"displays":
                  {"kitchen": "Kitchen", "upstairs": "Upstairs"}, "floors": {"Downstairs": ["Kitchen", …]}} gets its own ranking: overdue, then
                  due today, then undated; a job in the screen's room (or anywhere on its floor, for a floor-wide screen) ranks
@@ -79,8 +80,26 @@ def is_here(item, room, floor_of):
     return room in rooms or room in {floor_of.get(r) for r in rooms}
 
 
+def keep_groups(items):
+    """Preserve ranking between groups, but keep every labelled group's members contiguous."""
+    members = {}
+    for item in items:
+        if item.get("group"):
+            members.setdefault(item["group"], []).append(item)
+    out, emitted = [], set()
+    for item in items:
+        group = item.get("group")
+        if not group:
+            out.append(item)
+        elif group not in emitted:
+            out.extend(members[group])
+            emitted.add(group)
+    return out
+
+
 def rank(items, room, floor_of, now):
-    return sorted(items, key=lambda i: (-score(i, room, floor_of, now), i.get("due") or 9e12, i.get("name") or ""))
+    ordered = sorted(items, key=lambda i: (-score(i, room, floor_of, now), i.get("due") or 9e12, i.get("name") or ""))
+    return keep_groups(ordered)
 
 
 def plan_list(list_items, jobs, mapping):
@@ -291,6 +310,7 @@ class HouseTasks:
             it["show_on"] = [x.strip() for x in str(uf.get("ctx_show_on") or "").split(",") if x.strip()]
             it["rooms"] = [x.strip() for x in str(uf.get("ctx_rooms") or "").split(",") if x.strip()]
             it["priority"] = str(uf.get("ctx_priority") or "").strip().lower() or "normal"
+            it["group"] = str(uf.get("ctx_group") or "").strip() or None
             sw = check(uf.get("ctx_show_when"), self.get)
             it["visible"] = sw is not False
             dw = uf.get("ctx_done_when")
@@ -304,7 +324,8 @@ class HouseTasks:
                     self.g["ilog"]({"src": "house", "action": "auto_done", "item": key, "name": it["name"], "when": dw})
                     continue
             shown.append(it)
-        shown.sort(key=lambda i: (i.get("priority") != "high", not i["overdue"], i["due"] or 9e12, i["name"]))
+        shown = keep_groups(sorted(shown, key=lambda i: (
+            i.get("priority") != "high", not i["overdue"], i["due"] or 9e12, i["name"])))
         due = [i for i in shown if i["visible"] and (i["kind"] != "chore" or (i["due"] and i["due"] <= now + 86400))]
         cfg = self.g["HOUSE"].get("house_tasks") or {}
         floor_of = {room: floor for floor, rooms in (cfg.get("floors") or {}).items() for room in rooms}

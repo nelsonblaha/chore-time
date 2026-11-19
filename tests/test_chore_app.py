@@ -1361,6 +1361,21 @@ class HouseTasks(unittest.TestCase):
         self.assertEqual(a["items"][0]["name"], "Turn off the sprinkler")
         self.assertEqual(a["displays"]["kitchen"][0]["name"], "Turn off the sprinkler")
 
+    def test_a_labelled_trip_stays_together_and_is_published(self):
+        self.g["HOUSE"]["house_tasks"] = {"floors": {"Out": ["Yard"]}, "displays": {"door": "Yard"}}
+        self.grocy["/objects/tasks"] = [
+            {"id": 1, "name": "Turn off water", "done": 0,
+             "userfields": {"ctx_priority": "High", "ctx_rooms": "Yard", "ctx_group": "One yard trip"}},
+            {"id": 2, "name": "Unrelated urgent job", "done": 0,
+             "userfields": {"ctx_priority": "High", "ctx_rooms": "Yard"}},
+            {"id": 3, "name": "Measure roof", "done": 0,
+             "userfields": {"ctx_rooms": "Yard", "ctx_group": "One yard trip"}},
+        ]
+        self.H.HouseTasks(self.g).tick()
+        items = self.ha["sensor.house_tasks"]["attributes"]["items"]
+        self.assertEqual([item["id"] for item in items], [1, 3, 2])
+        self.assertEqual(items[0]["group"], "One yard trip")
+
     def test_a_floor_wide_screen_leads_with_its_floor(self):
         self.g["HOUSE"]["house_tasks"] = {"floors": {"Down": ["Kitchen", "Hall"], "Up": ["Bath", "Bedroom"]},
                                           "displays": {"up": "Up"}}

@@ -816,11 +816,13 @@ var HOUSE_OPEN=false;
 function drawHouse(){houseData().then(function(h){var box=$("housebox");if(!h||!h.on){box.innerHTML="";return}
   var items=(h.items||[]).filter(function(i){return !HOUSE_DONE[i.kind+":"+i.id]});
   var priv=(h.private||[]).filter(function(p){return p.open});
+  var lastGroup=null,rows=items.map(function(i){var heading=i.group&&i.group!==lastGroup?'<div class="mute" style="margin:10px 4px 3px;font-weight:800">🌿 '+esc(i.group)+'</div>':'';lastGroup=i.group||null;
+    return heading+'<div class="card row hrow"><b style="flex:1">'+(i.kind==="battery"?"🔋 ":"")+esc(i.name)+'</b>'+hwhen(i)+
+      (i.rooms&&i.rooms.length?'<span class="mute">'+esc(i.rooms.slice(0,2).join(", "))+(i.rooms.length>2?"…":"")+'</span>':'')+
+      '<button class="ok hdone" data-k="'+i.kind+'" data-i="'+i.id+'">✓</button></div>'}).join("");
   box.innerHTML='<details id="housedet"'+(HOUSE_OPEN?' open':'')+'><summary>🏠 House jobs <span class="mute">'+items.length+' due'+
     (h.to_review?' · '+h.to_review+' to review in Grocy':'')+'</span></summary>'+
-    items.map(function(i){return '<div class="card row hrow"><b style="flex:1">'+(i.kind==="battery"?"🔋 ":"")+esc(i.name)+'</b>'+hwhen(i)+
-      (i.rooms&&i.rooms.length?'<span class="mute">'+esc(i.rooms.slice(0,2).join(", "))+(i.rooms.length>2?"…":"")+'</span>':'')+
-      '<button class="ok hdone" data-k="'+i.kind+'" data-i="'+i.id+'">✓</button></div>'}).join("")+
+    rows+
     priv.map(function(p){return '<div class="mute">🔒 '+esc(p.owner)+': '+p.open+' private'+(p.overdue?' ('+p.overdue+' overdue)':'')+'</div>'}).join("")+
     (items.length?'':'<div class="mute">Nothing due 🎉</div>')+'</details>';
   $("housedet").ontoggle=function(){HOUSE_OPEN=this.open};   // closed until a grown-up opens it; stays as they left it across refreshes
