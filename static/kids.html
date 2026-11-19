@@ -355,7 +355,7 @@ var NO_CDN=/[?&]sandbox=/.test(location.search);   // a visitor's demo: emoji as
 function E(code){if(!code)return"";if(CUSTOM_ICONS[code])return '<img class="e" src="'+CUSTOM_ICONS[code]+'" alt="">';if(NO_CDN)return '<span class="e">'+cp(code)+'</span>';return '<img class="e" src="'+TW+code+'.svg" alt="'+cp(code)+'" onerror="this.outerHTML=this.alt">'}
 function hydrate(root){(root||document).querySelectorAll(".eh").forEach(function(n){n.outerHTML=E(n.dataset.c)})}
 hydrate();
-var S=null,kid=null,idleT=null,seen={},busy=false,page=0;
+var S=null,kid=null,idleT=null,seen={},busy=false,page=0,PIN_OK={};
 var FOLD={buy:false,jobs:false},RWP=0,HP=0;   // Buy and My jobs start folded each time a kid opens their screen; each pages
 function pagerSm(id,pg,pages){if(pages<2)return "";return '<div class="pager sm"><div class="pg'+(pg>0?'':' off')+'" data-pgm="'+id+':-1">&#9664;</div><div class="pgd">'+
   Array.apply(null,Array(pages)).map(function(_,i){return '<span class="'+(i===pg?"on":"")+'"></span>'}).join("")+'</div><div class="pg'+(pg<pages-1?'':' off')+'" data-pgm="'+id+':1">&#9654;</div></div>'}
@@ -434,6 +434,7 @@ if(SANDBOX!=null){
 var lastSig=null;
 function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");location.href=adultPage(s.adult_go);return}   // approved on the watch, even if this page reloaded meanwhile
   var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
+  if(kid){var protectedKid=S.config.kids.find(function(x){return x.id===kid&&x.pin_required});if(protectedKid&&PIN_OK[kid]!==S.pin_epoch){L("kid_pin_session_closed",{kid:kid});kid=null;MENU=false;DETAIL=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on")}}
   if(inspModalRef){var ir=S.history.find(function(h){return h.id===inspModalRef});
     if(!ir||ir.status!=="pending"){inspModalRef=null;if($("m").classList.contains("on"))closeModal()}}
   checkAttention();
@@ -813,7 +814,7 @@ function changeKidPin(reset,target){target=target||kid;var who=S.config.kids.fin
   if(reset){chooseNew();return}
   pinPad(who,"Enter your current PIN","Then you can choose a new one",function(value,fail){busy=true;api("/api/kid_unlock",{kid:target,pin:value}).then(function(r){busy=false;if(!r.ok){fail(r.error);return}current=value;chooseNew()}).catch(function(){busy=false;fail("Try again.")})})
 }
-function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id===k});if(who&&who.pin_required&&!unlocked&&!HA_MODE){if((S.pin_reset_open||{})[k])changeKidPin(true,k);else kidPin(k);return}L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id===k});if(who&&who.pin_required&&!unlocked&&!HA_MODE){if((S.pin_reset_open||{})[k])changeKidPin(true,k);else kidPin(k);return}if(who&&who.pin_required)PIN_OK[k]=S.pin_epoch;L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(((S.chores_first||{})[k]||{}).on){cleanupModal();return}if(remindJob(k,lastUse))return;

@@ -269,7 +269,10 @@ class SoundSettings(Case):
         code,allowed=self.app.post("/api/assist_answer",{"nonce":nonce,"ok":True,"by":"jordan"})
         self.assertEqual(code,200)
         self.assertIn("ava",allowed["state"]["pin_reset_open"])
-        self.assertEqual(self.app.post("/api/kid_pin_change",{"kid":"ava","new_pin":"915"})[0],200)
+        before=allowed["state"]["pin_epoch"]
+        changed=self.app.post("/api/kid_pin_change",{"kid":"ava","new_pin":"915"})
+        self.assertEqual(changed[0],200)
+        self.assertNotEqual(before,changed[1]["state"]["pin_epoch"])
         self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"2353"})[0],403)
         self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"915"})[0],200)
         self.assertNotIn("ava",self.app.state()["pin_reset_open"])

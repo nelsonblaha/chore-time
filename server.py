@@ -1852,7 +1852,9 @@ def derive():
     laundry_chore = DRESS.get("laundry_chore")
     if dress.get("on") and laundry_chore and (board.get(laundry_chore) or {}).get("opened"):
         dress["laundry_hint"] = DRESS.get("laundry_message") or "A lot of your favorite clothes are in the laundry pile."
+    pin_epoch = hashlib.sha256("|".join(k["id"] + ":" + str(k.get("pin_hash") or "") for k in c["kids"]).encode()).hexdigest()[:12]
     return {"version": ver, "ver_tv": ver_tv, "sound_effects": sound_enabled(),
+            "pin_epoch": pin_epoch,
             "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
