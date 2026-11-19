@@ -5362,6 +5362,10 @@ def start_modules():
         if (HOUSE.get("room_eye") or {}).get("capture_url"):
             import room_eye
             go("room-eye", room_eye.run, globals())   # cameras learn tidy rooms, mark messy ones, spot the robots
+            for camera, cc in HOUSE["room_eye"].get("cameras",{}).items():
+                if cc.get("visual_robot"):
+                    import robot_camera
+                    go("robot-camera-" + camera, robot_camera.run, globals(), camera, cc["visual_robot"])
         if (HOUSE.get("vacuum_help") or {}).get("robots"):
             go("vacuum-help", vacuum_help.run, globals())   # hero jobs: rescue a stuck robot, change its water
     if GROCY.get("url"):

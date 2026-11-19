@@ -579,6 +579,8 @@ class Pilot:
             last = max(confirmed, self.D.get("prior_schedule_dates", {}).get(seg, 0))
             sch = SCHEDULE.get(seg) or {}
             d = {"chores": cids, "rooms": rooms, "last_robot": (confirmed if not getattr(self, "room_cleaning_sensor", None) or "room_credit_since" in self.D else 0), "mop": seg in MOP, "eligible": False}
+            if getattr(self, "room_cleaning_sensor", None) and "room_credit_since" in self.D:
+                d["last_completed"] = confirmed
             d["requested"] = seg in requests
             d["incomplete"] = seg in incomplete
             if d["incomplete"]:

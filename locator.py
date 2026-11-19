@@ -59,6 +59,20 @@ def epoch(s):
         return 0
 
 
+def robot_position(g, token, vac, timeout=25):
+    """Live x/y from the robot, or None. (HA REST: call the service and return its response.)"""
+    req = urllib.request.Request(
+        f"{g['HA_URL']}/api/services/roborock/get_vacuum_current_position?return_response",
+        data=json.dumps({"entity_id": vac}).encode(), method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+        p = (r.get("service_response") or {}).get(vac) or {}
+        return (int(p["x"]), int(p["y"])) if "x" in p else None
+    except Exception:  # noqa: BLE001  (the robot answers "map failure" while it re-orients)
+        return None
+
+
 class Locator:
     def __init__(self, g):
         self.g = g
@@ -84,17 +98,7 @@ class Locator:
         self.pub_at = {}        # vacuum -> when it was last sent
 
     def position(self, vac):
-        """Live x/y from the robot, or None. (HA REST: call the service and return its response.)"""
-        req = urllib.request.Request(
-            f"{self.g['HA_URL']}/api/services/roborock/get_vacuum_current_position?return_response",
-            data=json.dumps({"entity_id": vac}).encode(), method="POST",
-            headers={"Authorization": f"Bearer {self.tok}", "Content-Type": "application/json"})
-        try:
-            r = json.loads(urllib.request.urlopen(req, timeout=25).read())
-            p = (r.get("service_response") or {}).get(vac) or {}
-            return (int(p["x"]), int(p["y"])) if "x" in p else None
-        except Exception:  # noqa: BLE001  (the robot answers "map failure" while it re-orients)
-            return None
+        return robot_position(self.g, self.tok, vac)
 
     def cell(self, x, y):
         return f"{x // CELL},{y // CELL}"
@@ -167,6 +171,46 @@ class Locator:
             else:
                 out["why"] = "tied" if f["votes"] else "unlearned"
         return out
+
+    def visual_sightings(self, now):
+        changed = False
+        cameras = (self.g['HOUSE'].get('room_eye') or {}).get('cameras',{})
+        for camera, settings in cameras.items():
+            cfg = settings.get('visual_robot')
+            if not cfg:
+                continue
+            vac, room = cfg['vacuum'], cfg['room']
+            if vac not in self.cfg:
+                continue
+            path = self.g['DATA'] / ('robot-camera-' + camera + '.json')
+            if not path.exists():
+                continue
+            last = self.M.get('_camera_watermarks',{}).get(camera,0)
+            try:
+                stored = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(stored,list):
+                continue
+            events = [row for row in stored if isinstance(row,dict) and type(row.get('at')) in (int,float)
+                      and last < row['at'] <= now and {'vacuum','room','camera','xy','map'} <= row.keys()]
+            if not events or self.g['ha_get'](cfg['map_select'],self.tok).get('state') != cfg['map_name']:
+                continue
+            for event in events:
+                at, xy = event['at'], event['xy']
+                if (event['vacuum'] != vac or event['camera'] != camera or event['room'] != room
+                        or event['map'] != cfg['map_name'] or now-at >= 86400):
+                    continue
+                # Replaying a verified pair can teach its historical map cell. It cannot create live presence.
+                if isinstance(xy,(list,tuple)) and len(xy) == 2 and all(type(x) is int for x in xy):
+                    self.learn(vac,*xy,room)
+                if now-at <= 15 and self.floor_empty(self.cfg[vac],now):
+                    robot = self.g['ha_get'](vac,self.tok)
+                    if robot.get('state') in ('cleaning','returning') and epoch(robot) <= at:
+                        self.add(vac,'camera:'+camera,'camera',room,at)
+                self.M.setdefault('_camera_watermarks',{})[camera] = at
+                changed = True
+        return changed
 
     def teach(self, now):
         """Camera sightings (room_eye): a robot seen moving in a camera's room on an empty floor. Its live position
@@ -321,7 +365,8 @@ class Locator:
 
     def tick(self):
         now = time.time()
-        changed = self.teach(now)
+        changed = self.visual_sightings(now)
+        changed = self.teach(now) or changed
         changed = self.motion(now) or changed
         changed = self.corrections(now) or changed
         for vac, rc in self.cfg.items():
