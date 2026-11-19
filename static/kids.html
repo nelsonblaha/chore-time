@@ -455,10 +455,10 @@ function houseName(k){var H=S.households||[],w=(S.kid_where||{})[k||kid],h=H.fin
 function goal(){return Math.max.apply(null,S.config.rewards.filter(function(r){return here(r)}).map(function(r){return r.cost}).concat([1]))}
 
 // what everyone is doing, on the login screen (otherwise you only see a kid's show time on their own screen)
-function letterSteps(A){   // a letter's steps, the current one big: write, print the envelope, fold it in, hand it over, a grown-up reads it
+function letterSteps(A){   // inspect the loose letter before it ever goes inside the prepared envelope
   if(!(S.envelope&&S.envelope.chores.indexOf(A.chore)>=0))return "";
   var pt=Math.max.apply(null,(A.team||[kid]).map(function(m){return (S.envelope.printed||{})[m]||0})),cur=pt>=A.ts?2:0;
-  return '<br><span style="font-size:18px;white-space:nowrap">'+[["270d","Write"],["1f5a8","Envelope"],["2709","Fold in"],["1f4ec","Hand over"],["1f50d","Grown-up reads"]].map(function(x,i){
+  return '<br><span style="font-size:18px;white-space:nowrap">'+[["270d","Write"],["1f5a8","Print"],["1f4ee","Stamp"],["1f4ec","Bring loose"],["1f50d","Grown-up reads"],["2709","Fold in"]].map(function(x,i){
     return '<span style="'+(i===cur?'font-weight:900;background:#fff3c4;border-radius:10px;padding:0 6px':i<cur?'opacity:.45':'opacity:.7')+'">'+(i<cur?E("2705"):E(x[0]))+(i===cur?' '+x[1]:'')+'</span>'}).join(' › ')+'</span>'}
 function jobName(j,c){return j&&j.title?String(j.title).replace(/[<>&"]/g,function(x){return {"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[x]}):c.name}   // the kid's own name for the job, if they gave one
 function actLines(who){var out=[],now=Date.now()/1000,CH=function(id){return S.config.chores.find(function(c){return c.id===id})||{icon:"2b50",name:id}};
@@ -857,7 +857,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
     (T?'<div class="q" style="font-size:22px;opacity:.7">'+E("23f1")+' usually about '+Math.max(1,Math.round(T.minutes))+' min</div>':'')+
     (function(){if(!(S.envelope&&S.envelope.chores.indexOf(cid)>=0&&(bd.pending_by||[]).indexOf(kid)>=0))return '';
       var pr=S.history.find(function(h){return h.type==="report"&&h.status==="pending"&&h.chore===cid&&(h.team||[h.kid]).indexOf(kid)>=0});
-      if(pr&&pr.delivered)return '<div class="q" style="font-size:28px;color:#2e7d32">'+E("1f4ec")+' Delivered! Waiting for a grown-up to look.</div>';
+      if(pr&&pr.delivered)return '<div class="q" style="font-size:28px;color:#2e7d32">'+E("1f4ec")+' Brought for inspection! Keep the letter out of the envelope until a grown-up approves it.</div>';
       return '<div class="q" style="font-size:28px;background:#fff8e1;border-radius:16px;padding:8px 14px">'+E("1f449")+' '+S.envelope.handoff+'</div>'+
         '<div class="faces" style="flex-wrap:wrap"><div class="btn yes" id="envdel" style="font-size:32px;font-weight:900;padding:12px 26px">'+E("2705")+' '+S.envelope.handoff_done+'</div>'+
         '<div class="btn" id="envre" style="font-size:24px;padding:8px 20px;background:#e3f2fd">'+E("1f5a8")+' Print the envelope again</div></div>'})()+
@@ -890,7 +890,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
       $("envdone").onclick=function(){L("env_delivered",{});c._env=true;c._delivered=true;afterYes()};
     }
     else if(envJob)modal('<div class="big">'+E(c.icon)+E("2728")+'</div><div class="q">You\'re almost there!</div>'+
-      '<div class="q" style="font-size:28px">Last step: print the envelope '+E("2709")+'<br>then put your letter in it.</div>'+
+      '<div class="q" style="font-size:28px">Next: print the envelope and put a stamp on it.<br><b>Keep your letter OUT of the envelope</b> so a grown-up can read it first.</div>'+
       '<div class="faces"><div class="btn yes" id="ry" style="font-size:34px;font-weight:900;padding:12px 30px">'+E("1f5a8")+' Print the envelope</div><div class="btn no" id="rn" style="font-size:24px;padding:8px 20px">Not done writing</div></div>');
     else modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+(c.confirm||'Did you really finish<br>'+c.name+'?')+'</div>'+
       '<div class="faces"><div class="btn yes" id="ry">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="rn">'+E("274c")+'<span class="lbl">No</span></div></div>');
@@ -966,8 +966,8 @@ function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){retu
     $("envy").onclick=function(){check()};$("envn").onclick=function(){fix("jam",t0)}}
   function check(){modal('<div class="big">'+E("2709")+E("1f50d")+'</div><div class="q">Look at your envelope!</div><div class="q" style="font-size:26px">Is the address on the FRONT (not the flap side), the right way up?</div>'+
       '<div class="faces"><div class="btn yes" id="envgood" style="'+big+'">'+E("2705")+' Looks right</div><div class="btn no" id="envbad" style="'+big+'">'+E("274c")+' It\'s wrong</div></div>');
-    $("envgood").onclick=function(){L("env_good",{});modal('<div class="big">'+E("2709")+E("2728")+'</div><div class="q">Your envelope is ready!</div><div class="q" style="font-size:28px">'+String(EV.handoff).replace(/[&<>]/g,function(x){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[x]})+'</div>'+
-        '<div class="faces" style="flex-wrap:wrap"><div class="btn yes" id="envok" style="'+big+'">'+E("2705")+' '+EV.handoff_done+'</div><div class="btn" id="envlater" style="font-size:24px;padding:8px 20px">'+E("23f3")+' Not yet, still folding</div></div>');
+    $("envgood").onclick=function(){L("env_good",{});modal('<div class="big">'+E("1f4ee")+E("1f4ec")+'</div><div class="q">Your envelope is printed. Now it needs its stamp!</div><div class="q" style="font-size:28px">'+String(EV.handoff).replace(/[&<>]/g,function(x){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[x]})+'</div>'+
+        '<div class="faces" style="flex-wrap:wrap"><div class="btn yes" id="envok" style="'+big+'">'+E("2705")+' '+EV.handoff_done+'</div><div class="btn" id="envlater" style="font-size:24px;padding:8px 20px">'+E("23f3")+' Not yet, still getting it ready</div></div>');
       $("envlater").onclick=function(){L("env_later",{});closeModal()};$("envok").onclick=function(){L("env_delivered",{});c._delivered=true;done()}};
     $("envbad").onclick=function(){L("env_bad",{});modal('<div class="q">'+E("1f504")+' Let\'s fix it with a new envelope.</div>'+
         steps(["Printed on the flap side? Turn the next envelope over.","Upside down? Turn it around so the other end goes in first.","Match the picture, then push it in until the printer grabs it."])+

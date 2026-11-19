@@ -512,8 +512,9 @@ function render(){
     var tn=team?team.map(function(x){return kidOf(x).name}).join(" + "):k.name,EACH=!!choreOf(r.chore).each_kid;
     if(r.partial)took=' <span class="tag" style="background:#ede7f6;color:#4527a0">🙋 partly done — full job is '+(r.full_price==null?'?':r.full_price)+'⭐; it stays available</span>'+(r.worked?' · worked '+Math.round(r.worked/60)+' min':'');
     var split=team?' <span class="tag">👥 '+(r.split&&Object.keys(r.split).length?'deal: '+Object.keys(r.split).map(function(m){return kidOf(m).name+" "+r.split[m]}).join(", ")+', rest to the others':'shared equally')+'</span> <a href="#" data-split="'+r.id+'">edit split</a>':'';
-    ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?(r.delivered?' <span class="tag clean">📬 handed over</span>':' <span class="tag warn">✉️ not handed over yet</span>'):'')+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
+    ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
       (other?'<div class="row" style="margin-top:8px"><input class="lbl" placeholder="What did they do?" value="'+esc(r.note?r.note.charAt(0)+r.note.slice(1).toLowerCase():"")+'" style="flex:1"></div>':'')+
+      (S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<div class="tag '+(r.delivered?'clean':'warn')+'" style="margin-top:6px">'+(r.delivered?'📬 Kid says the loose letter and printed, stamped envelope were brought for inspection. Keep them separate until you approve.':'✉️ The loose letter and printed, stamped envelope have not been brought for inspection yet.')+'</div>':'')+
       photosHtml(r)+
       (r.ask!=null?'<div class="mute" style="margin-top:4px">🙋 asks <b>'+r.ask+' ⭐</b> — go look, then settle</div>':'')+
       (AG?'<div class="'+(agWarn?'tag warn':'mute')+'" style="margin-top:6px;display:inline-block">'+(agWarn?'⚠️ This was a team job: ':'🤝 Last agreed: ')+
@@ -563,7 +564,10 @@ function render(){
   document.querySelectorAll('#pending .card[data-dr]').forEach(function(c){var id=c.dataset.r;
     c.querySelector("[data-drok]").onclick=function(){post("/api/inspect",{ref:id,ok:true,points:0,label:"Dressed"},"Ready to go ✓")};
     c.querySelector("[data-x]").onclick=function(){NOTYET=id;openPM("notyet")}});
-  document.querySelectorAll('#pending .card:not([data-swap]):not([data-dr])').forEach(function(c){var id=c.dataset.r;
+  // Only inspection-job cards carry data-r. Some jobs contain nested .card UI (for
+  // example the cohesive full/partial/not-yet chooser); walking every descendant
+  // rebound its buttons with an undefined job id after the correct outer binding.
+  document.querySelectorAll('#pending > .card:not([data-swap]):not([data-dr])').forEach(function(c){var id=c.dataset.r;
     if(c.querySelector("[data-fullpass]"))c.querySelector("[data-fullpass]").onclick=function(){var r=S.history.find(function(h){return h.id===id});
       post("/api/inspect",{ref:id,ok:true,points:r.points},"Full job passed · awarded "+kidOf(r.kid).name+" "+r.points+" ⭐")};
     c.querySelectorAll("[data-p]").forEach(function(b){b.onclick=function(){var l=c.querySelector(".lbl");

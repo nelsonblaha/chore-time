@@ -124,6 +124,20 @@ class App:
         return r["event"]
 
 
+class StaticUiRegressions(unittest.TestCase):
+    """Small wiring checks for browser-only failures the fake DOM cannot click through."""
+
+    def test_nested_inspection_card_does_not_rebind_full_job_without_a_report_id(self):
+        html = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("'#pending > .card:not([data-swap]):not([data-dr])'", html)
+        self.assertNotIn("'#pending .card:not([data-swap]):not([data-dr])'", html)
+
+    def test_letter_stays_out_of_the_envelope_until_inspection(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("Keep your letter OUT of the envelope", html)
+        self.assertIn("Keep the letter out of the envelope until a grown-up approves it", html)
+
+
 class Case(unittest.TestCase):
     config = None
 
