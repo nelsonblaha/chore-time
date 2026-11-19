@@ -1922,10 +1922,12 @@ class ChoresFirst(Case):
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show"})[0], 409)
         self.assertEqual(a.post("/api/spend", {"kid": "max", "reward": "show", "with": ["ava"]})[0], 409)   # not by watching along
         # not yet: still blocked, back to the kid
-        rep = a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok"})[1]["event"]
+        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok"})[0], 409)
+        checklist = ["Legos off the floor", "Shoes away"]
+        rep = a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok", "checklist": checklist})[1]["event"]
         self.assertEqual(a.post("/api/inspect", {"ref": rep["id"], "by": "jordan", "ok": False, "feedback": "shoes"})[0], 200)
         self.assertTrue(a.state()["chores_first"]["ava"]["on"])
-        rep = a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok"})[1]["event"]
+        rep = a.post("/api/report", {"kid": "ava", "chore": "cleanup_ava", "feeling": "ok", "checklist": checklist})[1]["event"]
         self.assertEqual(a.post("/api/inspect", {"ref": rep["id"], "by": "jordan", "ok": True, "points": 0})[0], 200)
         st = a.state()
         self.assertFalse(st["chores_first"]["ava"]["on"])

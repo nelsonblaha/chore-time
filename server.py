@@ -2415,6 +2415,11 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "already waiting for inspection"})
             if b["chore"] != "other" and b["kid"] in (bd.get("pending_by") or []):   # the same kid twice (a second tap on a waiting tile)
                 return self.send(409, {"error": "already waiting for inspection"})
+            if ch_.get("cleanup_for"):
+                required = ((st.get("chores_first") or {}).get(b["kid"]) or {}).get("items") or []
+                checked = b.get("checklist") if isinstance(b.get("checklist"), list) else []
+                if required and checked != required:
+                    return self.send(409, {"error": "check each clean-up item first"})
             extra = {}
             if b["chore"] == "toy_swap":
                 kc = next(k for k in c["kids"] if k["id"] == b["kid"])

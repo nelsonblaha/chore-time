@@ -785,8 +785,10 @@ function cleanupModal(){var F=(S.chores_first||{})[kid]||{},cid="cleanup_"+kid,b
     '<div class="faces"><div class="btn yes" id="cfdone" style="font-size:38px;font-weight:900;padding:14px 28px'+(its.length&&!allTicked?';opacity:.55':'')+'">'+E("2705")+' All done! Check it</div></div>'+
     '<div class="q" style="font-size:22px;opacity:.75">Tap each thing when it\'s done. Then a grown-up checks, and rewards come back.</div>');
   document.querySelectorAll("#mbox [data-cft]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var i=+n.dataset.cft,key=kid+":"+i+":"+its[i];cfTick[key]=!cfTick[key];L("cleanup_tick",{i:i,on:cfTick[key]});cleanupModal()}});
-  $("cfdone").onclick=function(){if(busy)return;busy=true;L("cleanup_done",{ticked:its.filter(function(t,i){return cfTick[kid+":"+i+":"+t]}).length,of:its.length});
-    api("/api/report",{kid:kid,chore:cid,feeling:"ok"}).then(function(r){busy=false;if(r.ok){S=r.state;renderKid()}
+  $("cfdone").onclick=function(){if(!allTicked){L("cleanup_incomplete",{ticked:its.filter(function(t,i){return cfTick[kid+":"+i+":"+t]}).length,of:its.length});
+      modal('<div class="big">'+E("2611")+'</div><div class="q">Check each thing after you finish it first.</div>');addOk();return}
+    if(busy)return;busy=true;L("cleanup_done",{ticked:its.length,of:its.length});
+    api("/api/report",{kid:kid,chore:cid,feeling:"ok",checklist:its}).then(function(r){busy=false;if(r.ok){S=r.state;renderKid()}
       modal('<div class="big">'+E(r.ok?"1f50d":"274c")+'</div><div class="q">'+(r.ok?"Great job! A grown-up will come check.":(r.error||"Ask a grown-up"))+'</div>');chime([523,659,784]);addOk()}).catch(function(){busy=false})}}
 function hm12(t){var a=String(t||"").split(":"),h=+a[0];return (h%12||12)+":"+(a[1]||"00")+(h<12?" AM":" PM")}
 // "reject with penalty": asked for an inspection with nothing done. Big pictures for a kid who can't read much yet.
