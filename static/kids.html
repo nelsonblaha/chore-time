@@ -1442,13 +1442,14 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
   if(r.needs_ok){var until=S.adult_busy_until||0;if(until>S.now){modal('<div class="big">'+E("23f3")+'</div><div class="q">Every grown-up is busy</div><div class="q" style="font-size:26px">Adult-help requests come back when someone is available, in about '+Math.max(1,Math.ceil((until-S.now)/60))+' minutes.</div>');addOk();return}
     modal('<div class="big">'+E(r.icon)+E("1f9d1")+'</div><div class="q">Ask to buy '+r.name+'?</div><div class="q" style="font-size:26px;opacity:.85">No stars are spent until a grown-up says yes. If they are busy, adult-help requests take a one-hour break.</div><div class="faces"><div class="btn yes" id="sy">'+E("1f64b")+'<span class="lbl">Ask</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">Cancel</span></div></div>');
     $("sn").onclick=closeModal;$("sy").onclick=function(){requestRewardConsent(r)};return}
+  if(tvR){
+    modal('<div class="big">'+E(r.icon)+E("1f465")+'</div><div class="q">Set up '+r.name+'</div><div class="q" style="font-size:26px">Choose the TV and everyone who will watch. No points are spent yet.</div><div class="q" style="font-size:23px;opacity:.82">Just me: '+r.cost+' '+E("2b50")+' &middot; '+togetherLine(r)+'</div><div class="faces"><div class="btn yes" id="sy" style="font-size:34px;font-weight:900;padding:12px 22px">'+E("1f4fa")+'<span class="lbl">Choose TV &amp; viewers</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">Cancel</span></div></div>');
+    $("sn").onclick=closeModal;$("sy").onclick=function(){
+      modal('<div class="big">'+E(r.icon)+'</div><div class="q">Which TV?</div><div class="faces">'+TVL().map(function(t){return '<div class="btn" data-tv="'+t.id+'">'+E(t.icon)+E("1f4fa")+'<span class="lbl">'+t.name+'</span></div>'}).join("")+'</div>');
+      document.querySelectorAll("#mbox [data-tv]").forEach(function(n){n.onclick=function(){whoWatches(r,n.dataset.tv)}})};return}
   modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+(b<r.cost?lo:r.cost)+' '+E("2b50")+'?</div>'+(lo<r.cost?'<div class="q" style="font-size:24px;opacity:.8">'+E("1f465")+' Cheaper together! '+togetherLine(r)+(b<r.cost?' (alone: '+r.cost+')':'')+'</div>':'')+'<div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
   $("sn").onclick=closeModal;
-  $("sy").onclick=function(){
-    if(["show","movie","games"].indexOf(r.id)>=0){
-      modal('<div class="big">'+E(r.icon)+'</div><div class="q">Which TV?</div><div class="faces">'+TVL().map(function(t){return '<div class="btn" data-tv="'+t.id+'">'+E(t.icon)+E("1f4fa")+'<span class="lbl">'+t.name+'</span></div>'}).join("")+'</div>');
-      document.querySelectorAll("#mbox [data-tv]").forEach(function(n){n.onclick=function(){whoWatches(r,n.dataset.tv)}});
-    } else buy(r,null)};
+  $("sy").onclick=function(){buy(r,null)};
 }
 // be honest about who is watching. Together = everyone watching pays, one shared clock.
 // Separate shows on the same TV run one after the other.

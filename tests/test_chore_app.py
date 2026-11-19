@@ -137,6 +137,11 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Keep your letter OUT of the envelope", html)
         self.assertIn("Keep the letter out of the envelope until a grown-up approves it", html)
 
+    def test_tv_reward_setup_names_the_viewer_choice_before_purchase(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("Choose TV &amp; viewers", html)
+        self.assertIn("Choose the TV and everyone who will watch. No points are spent yet.", html)
+
 
 class Case(unittest.TestCase):
     config = None
