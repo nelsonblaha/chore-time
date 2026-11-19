@@ -44,6 +44,7 @@ MOP = set()      # segments that get vacuum + mop; the rest vacuum only
 SENSORS = {}     # person-evidence sensor -> the segment it sits in (the robot trips its own room's sensors)
 HELD = set()     # of those, sensors whose On holds for many minutes (a thermostat's motion): only the turn-on counts
 PUBLISH, LOG_SRC, NAME = "sensor.vacuum_autopilot", "vac", "Vacuum autopilot"   # one per robot: own sensor, log, name
+PRESENCE_PAUSE_PUBLISH = "binary_sensor.downstairs_vacuum_presence_pause"
 OCC = {}         # presence-tracker floor vacancy instead of motion sensors (vacuum.occupancy), see occ_presence()
 TV_IDS = None    # TVs that count as "someone here" (None = every TV; [] = none, e.g. a floor without TVs)
 SLEEP_PROTECTION = {}
@@ -80,8 +81,14 @@ def configure(v):
     global NIGHT_CARPET_OFF, SEG_LIGHTS
     SEG_LIGHTS = dict(v.get("segment_lights") or {})
     NIGHT_CARPET_OFF = bool(v.get("night_carpet_boost_off"))
-    global ENTRY_SENSORS, ENTRY_DOORS
+    global ENTRY_SENSORS, ENTRY_DOORS, APPROACH_SENSORS, APPROACH_ROOMS, PRESENCE_PAUSE_PUBLISH
     ENTRY_SENSORS, ENTRY_DOORS = set(v.get("entry_sensors") or []), set(v.get("entry_doors") or [])
+    APPROACH_SENSORS = set(v.get("approach_sensors") or ENTRY_SENSORS)
+    APPROACH_ROOMS = set(v.get("approach_rooms") or [])
+    floor_name = v.get("floor") or (v.get("occupancy") or {}).get("floor") or "downstairs"
+    safe_floor = "".join(c if c.isalnum() else "_" for c in floor_name.lower()).strip("_")
+    PRESENCE_PAUSE_PUBLISH = v.get("presence_pause_publish") or \
+        "binary_sensor.%s_vacuum_presence_pause" % safe_floor
     NIGHT = (int(v.get("night_from_h", 20)), int(v.get("night_until_h", 7)))
     global RESUME_QUIET_S, SCHEDULE, EVERY_H, DINNER
     RESUME_QUIET_S = int(v.get("resume_quiet_s", 20))
@@ -106,6 +113,8 @@ def configure(v):
 # a person enters through an entry point (stairs, entry hall, a door) or walks through rooms. Only that pauses it.
 ENTRY_SENSORS = set()   # motion at the ways onto this floor (house.json vacuum.entry_sensors)
 ENTRY_DOORS = set()     # door contacts: opened = a person, always (vacuum.entry_doors)
+APPROACH_SENSORS = set()  # first hints someone could be approaching this floor; fail closed for camera privacy
+APPROACH_ROOMS = set()    # presence-tracker rooms on stairs/landing, even when not assigned to this floor
 PATH_WINDOW_S = 90      # 2+ different non-robot rooms tripping within this = someone walking through
 START_QUIET_S = 20 * 60      # Q6
 SCHEDULE = {}   # segment -> {"nightly_after": "19:00", "needs_dinner": bool, "every_h": N}
@@ -178,6 +187,7 @@ class Pilot:
         self.D.setdefault("manual_seen", {})
         self.tok = g["ha_token"]()
         self.last_pub = None
+        self.last_pause_pub = None
         g.setdefault("VACUUM_PLANNERS", {})[self.floor] = self
         if not self.D["visits"] and not self.room_cleaning_sensor:
             self.backfill()
@@ -505,6 +515,83 @@ class Pilot:
         if len(segs) >= 2:
             return "walked through " + ", ".join(sorted(segs))
         return None
+
+    def immediate_presence_risk(self, now, include_path=False):
+        """The earliest reason somebody may enter this floor. This is intentionally more conservative than a
+        confirmed arrival: the camera lease and the vacuum both yield before a person can reach the floor."""
+        for entity in sorted(APPROACH_SENSORS):
+            state = self.get(entity)
+            value = state.get("state")
+            if value == "on":
+                return {"reason_code": "approach_motion", "reason": "stairs/approach motion (%s)" % entity,
+                        "sensor": entity, "observed_at": epoch(state) or now}
+            if value in (None, "unknown", "unavailable"):
+                return {"reason_code": "approach_sensor_unavailable",
+                        "reason": "stairs/approach sensor unavailable (%s)" % entity,
+                        "sensor": entity, "observed_at": now}
+        edges = entry_edges.recent(now)
+        for entity in sorted(ENTRY_DOORS):
+            state = self.get(entity)
+            stamp = edges.get(entity, 0)
+            if state.get("state") == "on" or 0 <= now - stamp <= RESUME_QUIET_S:
+                self.D.setdefault("seen_on", {})[entity] = max(
+                    self.D.setdefault("seen_on", {}).get(entity, 0), stamp, epoch(state))
+                return {"reason_code": "entry_door", "reason": "entry door opened (%s)" % entity,
+                        "sensor": entity, "observed_at": max(stamp, epoch(state)) or now}
+        if OCC:
+            tracker = self.get(OCC["sensor"])
+            attrs = tracker.get("attributes") or {}
+            for room in sorted(APPROACH_ROOMS):
+                info = (attrs.get("rooms") or {}).get(room) or {}
+                state = info.get("state")
+                if state not in (None, "clear", "vacant"):
+                    return {"reason_code": "approach_room",
+                            "reason": "stairs/approach room %s is %s" % (room, state),
+                            "sensor": OCC["sensor"], "observed_at": float(info.get("since") or now)}
+            who, _ = self.occ_presence(starting=True)
+            if who:
+                uncertain = any(word in who for word in ("unknown", "uncertain", "unavailable"))
+                return {"reason_code": "floor_uncertain" if uncertain else "presence_detected",
+                        "reason": ("floor placement uncertain: " if uncertain else "presence detected: ") + who,
+                        "sensor": OCC["sensor"], "observed_at": now}
+        if include_path:
+            who = self.person_entered(now)
+            if who:
+                sensor = who if who in SENSORS or who in ENTRY_DOORS else None
+                return {"reason_code": "person_path", "reason": "person path: " + who,
+                        "sensor": sensor, "observed_at": now}
+        return None
+
+    def presence_pause(self, now, include_path=False):
+        """Latch the shared camera/vacuum pause signal through the same quiet debounce used before resuming."""
+        risk = self.immediate_presence_risk(now, include_path)
+        previous = self.D.get("presence_pause") or {}
+        if risk:
+            risk.update(since=previous.get("since") or risk["observed_at"], last_seen=now, clearing=False)
+        else:
+            if OCC:
+                self.occ_quiet()  # begin the resume timer while the privacy signal finishes its own debounce
+            risk = dict(previous, clearing=True) if previous.get("last_seen") and \
+                now - previous["last_seen"] < RESUME_QUIET_S else {}
+        self.D["presence_pause"] = risk
+        return risk
+
+    def publish_presence_pause(self, risk, now):
+        attrs = {"friendly_name": "%s presence pause" % FLOOR.title(), "icon": "mdi:motion-sensor",
+                 "floor": FLOOR, "vacuum_entity": VAC, "reason_code": risk.get("reason_code"),
+                 "reason": risk.get("reason"), "sensor": risk.get("sensor"),
+                 "since": int(risk["since"]) if risk.get("since") else None,
+                 "observed_at": int(risk["observed_at"]) if risk.get("observed_at") else None,
+                 "clearing": bool(risk.get("clearing")), "published_at": int(now)}
+        state = "on" if risk else "off"
+        signature = json.dumps([state, {k: v for k, v in attrs.items() if k != "published_at"}], sort_keys=True)
+        if signature == getattr(self, "last_pause_pub", None) and now - self.D.get("pause_pub_at", 0) < 30:
+            return
+        try:
+            self.g["ha_post_state"](PRESENCE_PAUSE_PUBLISH, state, attrs, self.tok)
+            self.last_pause_pub, self.D["pause_pub_at"] = signature, now
+        except Exception as ex:  # noqa: BLE001
+            print("vacuum presence-pause publish failed", ex, flush=True)
 
     def leftover(self, vs, incl, now):
         """Docked LEFTOVER_S+, battery LEFTOVER_BATTERY+, and the cleaning flag still on: the robot keeps an unfinished
@@ -1064,6 +1151,8 @@ class Pilot:
         D = self.D
         st_ = self.get(STATUS).get("state") if STATUS else None
         if st_ in HANDS_OFF:   # e.g. mapping the floor: no command of any kind (no pause, dock, fan, voice, start)
+            pause_signal = self.presence_pause(now)
+            self.publish_presence_pause(pause_signal, now)
             if D.get("hands_off") != st_:
                 D["hands_off"] = st_
                 self.log("hands_off", status=st_, phase=D["phase"])
@@ -1084,6 +1173,9 @@ class Pilot:
         self.return_lights(vs, now)
         self.dinner_reopens()
         ph = D["phase"]
+        pause_signal = self.presence_pause(
+            now, include_path=ph == "running" and vs == "cleaning" and D.get("run_kind") != "manual")
+        self.publish_presence_pause(pause_signal, now)
         info = {}
         if ph == "idle":
             # Physical button work is a separate durable FIFO. It always gets first admission, but it never
@@ -1124,7 +1216,7 @@ class Pilot:
                 info["why"] = "switched off" + ("; cleaning the requested rooms when vacant" if rooms else "")
             if rooms or on:
                 info["eligible"] = rooms
-                q, who = self.quiet_for() if rooms else (None, None)
+                q, who = ((0, pause_signal["reason"]) if pause_signal else self.quiet_for()) if rooms else (None, None)
                 info["quiet_min"] = None if q is None else round(min(q, 99 * 3600) / 60)
                 # on another map: the clean script loads ours first (the robot is switched to the right map automatically)
                 ok_robot = vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
@@ -1173,7 +1265,7 @@ class Pilot:
                 D["saw_clean"] = True
                 D["clean_first"] = D.get("clean_first") or now
                 D["clean_last"] = now
-                who = None if D.get("run_kind") == "manual" else self.person_entered(now)
+                who = None if D.get("run_kind") == "manual" or not pause_signal else pause_signal["reason"]
                 if who:
                     self.call("vacuum.pause", {"entity_id": VAC})
                     D.update(phase="paused", paused_at=now, pause_sent=now, resume_fallback=False, occ_quiet_since=None)
@@ -1227,14 +1319,15 @@ class Pilot:
                 self.finish("run too old to continue", now)
             elif hold:
                 info["why"] = "manual clean queued: " + hold
-            elif manual or (self.quiet_for(held=False)[0] or 0) >= BETWEEN_QUIET_S:
+            elif manual or (not pause_signal and (self.quiet_for(held=False)[0] or 0) >= BETWEEN_QUIET_S):
                 D["gi"] += 1
                 D["phase"] = "running"
                 self.launch(now)
             elif now - D.get("between_since", now) > PARK_DOCK_S:
                 self.finish("people back between rooms", now)
         elif ph == "paused":
-            q, who = self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
+            q, who = (0, pause_signal["reason"]) if pause_signal else \
+                self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
             age = max(0, now - D["paused_at"])
             if vs in ("returning", "docked"):
                 D["phase"] = "docking"
@@ -1259,7 +1352,8 @@ class Pilot:
                 D["phase"] = "docking"
                 self.log("dock", who=who)
         elif ph == "resuming":
-            q, who = self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
+            q, who = (0, pause_signal["reason"]) if pause_signal else \
+                self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
             if vs in ("returning", "docked"):
                 D["phase"] = "docking"
             elif q < RESUME_QUIET_S:

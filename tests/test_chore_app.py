@@ -613,8 +613,10 @@ class Vacuum(unittest.TestCase):
         real_time = va.time.time
         va.time.time = lambda: self.now[0]
         self.addCleanup(setattr, va.time, "time", real_time)   # the time module is shared: later tests need the real clock
-        self.H, self.calls = {}, []
+        self.H, self.calls, self.posts = {}, [], []
         for e in va.SENSORS:
+            self.S(e, "off", 3000)
+        for e in va.APPROACH_SENSORS:
             self.S(e, "off", 3000)
         self.S(va.VAC, "docked", fan_speed="max")
         for e, v in ((va.ROOM_SENSOR, "Hall"), (va.IN_CLEAN, "off"), (va.BATTERY, "100"), (va.ERROR, "none"),
@@ -627,7 +629,7 @@ class Vacuum(unittest.TestCase):
                       "front_hall": {"clean_until": 0, "last_clean": 0}}
         self.tmp = Path(tempfile.mkdtemp())
         g = {"DATA": self.tmp, "ilog": lambda r: None, "ha_get": lambda e, t: self.H.get(e, {"state": "unavailable", "attributes": {}}),
-             "ha_call": lambda svc, d, t: self.calls.append((svc, d)), "ha_post_state": lambda *a: None,
+             "ha_call": lambda svc, d, t: self.calls.append((svc, d)), "ha_post_state": lambda *a: self.posts.append(a),
              "derive": lambda: {"board": self.board, "active": {}, "paused": {}}, "TVS": {}, "tv_status": lambda t, k: ("off", 0),
              "ADULTS": adults, "HOUSE": house, "ha_token": lambda: "x",
              "adult_home": lambda who, tok: self.H.get(adults[who]["presence"], {}).get("state") == adults[who].get("home_state", "home")}
@@ -757,19 +759,19 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.living_room_motion", "on")
         self.assertNotIn("vacuum.pause", self.tick())
 
-    def test_stairs_alone_is_someone_upstairs_not_a_person_coming_down(self):
-        # the stairs sensor fired with the upstairs hall's: someone on the landing, nobody came down
+    def test_stairs_alone_pauses_before_someone_can_reach_the_floor(self):
         self.run_into_living_room()
         self.S("binary_sensor.stairs_motion", "on")
-        self.assertNotIn("vacuum.pause", self.tick())
+        self.assertIn("vacuum.pause", self.tick())
+        entity, state, attrs, _ = next(p for p in reversed(self.posts) if p[0].endswith("vacuum_presence_pause"))
+        self.assertEqual((entity, state, attrs["reason_code"], attrs["sensor"]),
+                         ("binary_sensor.downstairs_vacuum_presence_pause", "on", "approach_motion",
+                          "binary_sensor.stairs_motion"))
 
     def test_person_pauses_and_it_resumes_once_every_sensor_is_off(self):
         self.run_into_living_room()
         self.S("binary_sensor.stairs_motion", "on")
-        self.tick()
-        self.S("binary_sensor.kitchen_motion", "on")      # ...and then shows up downstairs
         self.assertIn("vacuum.pause", self.tick())
-        self.S("binary_sensor.kitchen_motion", "off", 0)
         self.S(self.va.VAC, "paused")
         self.S("binary_sensor.stairs_motion", "off", 0)
         self.assertNotIn("vacuum.send_command", self.tick(10))   # sensors only just went off

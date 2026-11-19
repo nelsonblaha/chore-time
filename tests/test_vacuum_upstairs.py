@@ -24,6 +24,8 @@ UP = {
     "segments": {"Hall": {"rooms": ["hall"], "mop": True}, "Bedroom": {"rooms": ["bedroom"], "chore": "bedroom"},
                  "Bath": {"rooms": ["bath"], "mop": True}, "Study": {"rooms": ["study"]}, "Study Closet": {"rooms": ["study_closet"]}},
     "guest_switches": {"Bedroom": "input_boolean.bedroom_guest"},
+    "approach_sensors": ["binary_sensor.stairs_motion", "binary_sensor.landing_motion"],
+    "approach_rooms": ["stairs", "stairs_down"],
     "occupancy": {"sensor": OCC, "floor": "upstairs",
                   "seal": {"study": {"doors": ["binary_sensor.study_hall_door", "binary_sensor.study_bath_door"],
                                      "segments": ["Study", "Study Closet"]}}},
@@ -49,6 +51,7 @@ class Upstairs(unittest.TestCase):
                      ("sensor.up_battery", "100"), ("sensor.up_error", "none"), ("select.up_mode", "vacuum"),
                      ("input_boolean.up_autopilot", "on"), ("input_boolean.bedroom_guest", "off"),
                      ("binary_sensor.study_hall_door", "on"), ("binary_sensor.study_bath_door", "on"),
+                     ("binary_sensor.stairs_motion", "off"), ("binary_sensor.landing_motion", "off"),
                      ("select.up_map", "Upstairs ")):
             self.S(e, v)
         self.occ({})
@@ -133,7 +136,7 @@ class Upstairs(unittest.TestCase):
         self.occ({}, roster=False)
         self.assertIsNone(self.run_until_start()[0])
 
-    def test_uncertain_holds_back_a_start_but_does_not_pause_a_run(self):
+    def test_uncertain_holds_back_a_start_and_pauses_a_run_for_privacy(self):
         self.occ({"hall": "uncertain"})
         self.assertIsNone(self.run_until_start()[0])
         self.occ({})
@@ -141,9 +144,20 @@ class Upstairs(unittest.TestCase):
         self.S("vacuum.up", "cleaning")
         self.tick()
         self.occ({"hall": "uncertain"})
-        self.assertNotIn("vacuum.pause", [c[0] for c in self.tick()])
+        self.assertIn("vacuum.pause", [c[0] for c in self.tick()])
+        signal = next(p for p in reversed(self.posts) if p[0] == "binary_sensor.upstairs_vacuum_presence_pause")
+        self.assertEqual((signal[1], signal[2]["reason_code"]), ("on", "floor_uncertain"))
         self.occ({"hall": "occupied"})
         self.assertIn("vacuum.pause", [c[0] for c in self.tick()])
+
+    def test_stair_tracker_room_pauses_even_before_floor_placement_changes(self):
+        self.run_until_start()
+        self.S("vacuum.up", "cleaning")
+        self.H[OCC]["attributes"]["rooms"]["stairs"] = {"state": "uncertain", "since": self.now[0]}
+        self.assertIn("vacuum.pause", [c[0] for c in self.tick()])
+        signal = next(p for p in reversed(self.posts) if p[0] == "binary_sensor.upstairs_vacuum_presence_pause")
+        self.assertEqual((signal[1], signal[2]["reason_code"], signal[2]["sensor"]),
+                         ("on", "approach_room", OCC))
 
     def test_person_in_active_segment_stays_paused_until_robot_docks(self):
         self.run_until_start()
@@ -229,9 +243,10 @@ class Upstairs(unittest.TestCase):
         self.S("input_boolean.up_autopilot", "off")
         self.tick()
         self.tick(301)
-        self.assertEqual(len(self.posts), 2)
-        self.assertNotEqual(self.posts[0][2]["heartbeat"], self.posts[1][2]["heartbeat"])
-        self.assertEqual(self.posts[1][2]["why"], "switched off")
+        autopilot = [post for post in self.posts if post[0] == "sensor.up_autopilot"]
+        self.assertEqual(len(autopilot), 2)
+        self.assertNotEqual(autopilot[0][2]["heartbeat"], autopilot[1][2]["heartbeat"])
+        self.assertEqual(autopilot[1][2]["why"], "switched off")
 
     def test_a_pressed_clean_when_vacant_runs_with_the_switch_off(self):
         # "clean when vacant runs at next vacancy regardless of switch"; the switch only governs the autopilot's own runs

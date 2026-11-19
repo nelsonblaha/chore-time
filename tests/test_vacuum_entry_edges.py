@@ -45,7 +45,7 @@ class VacuumEntries(unittest.TestCase):
         self.S(self.va.VAC, "cleaning")
         self.tick()
         self.assertEqual(self.p.D["phase"], "paused")
-        self.assertEqual(self.p.D["pauses"][-1]["who"], "binary_sensor.door")
+        self.assertEqual(self.p.D["pauses"][-1]["who"], "entry door opened (binary_sensor.door)")
         self.assertIsNone(self.p.person_entered(self.now[0] + 1))
 
     def test_entry_resets_quiet_clock_even_with_no_room_motion(self):

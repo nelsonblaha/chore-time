@@ -253,6 +253,15 @@
       "binary_sensor.stairs_motion",
       "binary_sensor.entry_motion"
     ],
+    "approach_sensors": [
+      "binary_sensor.stairs_motion",
+      "binary_sensor.upstairs_landing_motion"
+    ],
+    "approach_rooms": [
+      "stairs",
+      "stairs_down"
+    ],
+    "presence_pause_publish": "binary_sensor.downstairs_vacuum_presence_pause",
     "entry_doors": [
       "binary_sensor.front_door",
       "binary_sensor.back_door"
