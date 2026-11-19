@@ -154,6 +154,12 @@ class StaticUiRegressions(unittest.TestCase):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Close the downstairs toilet door", html)
 
+    def test_school_dressing_is_framed_by_finish_time_not_a_start_button(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("Get dressed by the clock", html)
+        self.assertIn("Your finish time counts", html)
+        self.assertNotIn("The clock starts when you press Start", html)
+
 
 class Case(unittest.TestCase):
     config = None
@@ -1772,6 +1778,17 @@ class SchoolMornings(Case):
         self.assertTrue(any(a["title"] == "Morning Rocket!" for a in awards["ava"]), awards["ava"])
         self.assertTrue(any(a["title"] == "School Ready!" for a in awards["max"]), awards["max"])
         self.assertFalse(any(a["id"].startswith("school-dressed:") for a in awards["zoe"]), awards["zoe"])
+
+    def test_active_laundry_adds_the_favorite_clothes_hint(self):
+        old = {k: self.s.DRESS.get(k) for k in ("laundry_chore", "laundry_message")}
+        self.s.DRESS.update(laundry_chore="laundry", laundry_message="Favorite clothes are in the laundry pile!")
+        self.addCleanup(lambda: [self.s.DRESS.pop(k, None) if v is None else self.s.DRESS.__setitem__(k, v) for k, v in old.items()])
+        self.s.SCHOOL["awards"] = [{"by": "06:30", "title": "Morning Rocket!"}]
+        self.app.event(type="reopen", chore="laundry", by="jordan")
+        self.app.event(type="dress", on=True, kids=["ava"], by="auto", school=True)
+        dress = self.app.state()["dress"]
+        self.assertEqual(dress["targets"], [{"by": "06:30", "icon": None, "title": "Morning Rocket!", "sub": None}])
+        self.assertEqual(dress["laundry_hint"], "Favorite clothes are in the laundry pile!")
 
     def test_next_school_morning_skips_the_weekend_and_holidays(self):
         sat = (self.MON + timedelta(days=5)).replace(hour=9)

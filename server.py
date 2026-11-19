@@ -727,8 +727,8 @@ DRESS = HOUSE.get("dress") or {}
 
 
 def dress_state(evs, reports, awake=None):
-    """school mornings switch it on before anyone is up: the screens wait until the kids are ("go": the house's
-    "awake" sensor, or the end of bedtime), and each kid starts their own race clock with Start"""
+    """School mornings switch it on before anyone is up. Their result is judged by
+    the wall-clock finish time; manually enabled dressing keeps the elapsed race."""
     last = next((e for e in reversed(evs) if e["type"] == "dress"), None)
     if not last or not last.get("on"):
         return {"on": False, "off_ts": last["ts"] if last else None, "off_by": last.get("by") if last else None,
@@ -744,7 +744,8 @@ def dress_state(evs, reports, awake=None):
         go = max(last["ts"], _dt.fromtimestamp(last["ts"]).replace(hour=BED_END_H, minute=0, second=0, microsecond=0).timestamp())
         if awake and go < awake <= time.time():
             go = awake
-        res.update(school=True, go=go, until=SCHOOL.get("until") or "08:00")
+        targets = [{k: x.get(k) for k in ("by", "icon", "title", "sub")} for x in SCHOOL.get("awards") or [] if x.get("by")]
+        res.update(school=True, go=go, until=SCHOOL.get("until") or "08:00", targets=targets)
     return res
 
 
@@ -1798,6 +1799,11 @@ def derive():
     for gate_ in must_first.values():
         if gate_.get("rewards") and gate_.get("chore") in board:
             board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
+    dress = dict(dress_state(evs, reports, GUARD.get("awake_ts")),
+                 started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"})
+    laundry_chore = DRESS.get("laundry_chore")
+    if dress.get("on") and laundry_chore and (board.get(laundry_chore) or {}).get("opened"):
+        dress["laundry_hint"] = DRESS.get("laundry_message") or "A lot of your favorite clothes are in the laundry pile."
     return {"version": ver, "ver_tv": ver_tv, "sound_effects": HOUSE.get("sound_effects") is not False,
             "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
@@ -1810,8 +1816,7 @@ def derive():
             "history": history[:200], "now": time.time(),
             "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
-            "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
-                          started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first,
+            "dress": dress, "chores_first": chores_first,
             "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
             "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
             "shower": shower, "evening_routine": evening_routine,
@@ -3009,8 +3014,8 @@ class H(BaseHTTPRequestHandler):
                     if act.get("split"):
                         extra["split"] = act["split"]
             if b["chore"] == "get_dressed" and (st.get("dress") or {}).get("on") and not st["dress"].get("school"):
-                # the race clock starts when the grown-up flips the switch (always timed); on a school morning the kid
-                # presses Start (the active job's start, above)
+                # A manually enabled dress race is elapsed time. School mornings are judged by the report's absolute
+                # finish time, so they deliberately do not manufacture a race start.
                 extra["started"] = st["dress"]["since"]
             if ch_.get("together") and not set(ch_.get("only") or []) <= set(extra.get("team") or [b["kid"]]):
                 return self.send(409, {"error": "do it together: team up first"})
