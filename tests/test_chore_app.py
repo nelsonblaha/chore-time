@@ -2028,6 +2028,29 @@ class GrownUpStartsVR(Case):
         self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "stove"})[0], 409)
         a.close()
 
+    def test_vr_does_not_buzz_a_grown_up_when_the_purchase_is_blocked_and_timeout_is_honest(self):
+        c = base_config()
+        next(r for r in c["rewards"] if r["id"] == "vr")["needs_ok"] = True
+        a = App(c)
+        a.event(type="adjust", kid="ava", points=2, reason="test")
+        a.event(type="chores_first", kid="ava", on=True, items=["Pick up"], by="jordan")
+        code, blocked = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 409)
+        self.assertIn("Chores first", blocked["error"])
+        a.event(type="chores_first", kid="ava", on=False, items=[], by="jordan")
+        code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200)
+        a.s.ADULT_REQ[ask["nonce"]]["ts"] -= 121
+        changed = []
+        a.s.after_change = lambda: changed.append(True)
+        code, status = a.post("/api/adult_status", {"nonce": ask["nonce"]})
+        self.assertEqual((code, status["status"]), (200, "timeout"))
+        self.assertTrue(changed)
+        self.assertEqual(status["state"]["adult_busy_until"], 0)
+        self.assertEqual(status["state"]["assist_requests"], [])
+        self.assertIn("No grown-up answered yet", (REPO / "static" / "kids.html").read_text())
+        a.close()
+
     def test_vr_consent_then_payment_starts_the_timer_or_can_be_refunded(self):
         c = base_config()
         for r in c["rewards"]:
@@ -2057,7 +2080,10 @@ class GrownUpStartsVR(Case):
         finally:
             a.s.urllib.request.urlopen = old_urlopen
         self.assertIn(ask["nonce"], {q["nonce"] for q in sent[-1]["attributes"]["assist_requests"]})
+        self.assertIn("room_choices", sent[-1]["attributes"])
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
+        # A reload/retry returns the unused yes instead of buzzing the grown-up again.
+        self.assertEqual(a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})[1]["nonce"], ask["nonce"])
         self.assertEqual(a.post("/api/adult_status", {"nonce": ask["nonce"]})[1]["status"], "ok")  # polling does not consume it
         code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr", "consent": ask["nonce"]})
         self.assertEqual(code, 200, r)
@@ -2096,12 +2122,24 @@ class GrownUpStartsVR(Case):
         c["chores"].insert(0, {"id": "stove", "name": "Clean stove", "icon": "1f9fd", "points": 6,
                                "cooldown_h": 0, "adult_first": True, "shared": True})
         a = App(c)
+        a.event(type="adjust", kid="ava", points=2, reason="test")
         code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
         self.assertEqual(code, 200)
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": False})[0], 200)
         self.assertGreater(a.state()["adult_busy_until"], time.time())
         self.assertEqual(a.post("/api/assist_request", {"kid": "ava", "chore": "stove"})[0], 409)
         self.assertTrue(next(ch for ch in a.state()["config"]["chores"] if ch["id"] == "stove")["hidden"])
+        a.close()
+
+    def test_busy_later_from_the_phone_uses_the_same_shared_pause(self):
+        c = base_config()
+        next(r for r in c["rewards"] if r["id"] == "vr")["needs_ok"] = True
+        a = App(c)
+        a.event(type="adjust", kid="ava", points=2, reason="test")
+        code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.s.resolve_phone_adult_request(ask["nonce"], False)["status"], "no")
+        self.assertGreater(a.state()["adult_busy_until"], time.time())
         a.close()
 
     def test_kid_can_refund_own_reward_for_exactly_two_minutes(self):
@@ -2170,6 +2208,11 @@ class WindDown(Case):
 
     def test_off_without_a_cutoff(self):
         self.assertFalse(App(base_config()).state()["wind_down"]["on"])
+
+    def test_reward_cutoff_can_start_on_a_future_date(self):
+        r = {"name": "VR", "before": "00:00", "before_from": "2026-11-19"}
+        self.assertFalse(self.s.reward_closed(r, datetime(2026, 11, 18, 23, 59)))
+        self.assertTrue(self.s.reward_closed(r, datetime(2026, 11, 19, 0, 0)))
 
 
 class NoRecordForSomethingElse(Case):

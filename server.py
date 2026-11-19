@@ -978,10 +978,16 @@ def reward_cost(r, watching=1):
 
 def reward_closed(r, now=None):
     """A reward may have its own evening cutoff; other rewards remain available."""
-    from datetime import datetime
+    from datetime import date, datetime
     now = now or datetime.now()
     if not r or not r.get("before"):
         return False
+    if r.get("before_from"):
+        try:
+            if now.date() < date.fromisoformat(str(r["before_from"])):
+                return False
+        except ValueError:
+            pass
     h, m = (int(x) for x in str(r["before"]).split(":"))
     return now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
 
@@ -1731,7 +1737,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block",
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "room_choices",
              "adult_first", "assist_requests", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
@@ -1796,7 +1802,7 @@ def push_state_sensor(state=None, last_result=None):
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
              "assist_requests": state.get("assist_requests"), "envelope": state.get("envelope"),
-             "next_step": state.get("next_step")}
+             "next_step": state.get("next_step"), "room_choices": state.get("room_choices")}
     try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
         import room_eye
         if room_eye.EYE and room_eye.EYE.S.get("photos"):
@@ -1840,6 +1846,7 @@ GLOBAL_LAST = {}
 
 ADULTS = HOUSE.get("adults") or {}   # grown-up id -> {presence, home_state, notify: [HA notify services]}
 ADULT_NOTIFY = {k: v.get("notify") or [] for k, v in ADULTS.items() if v.get("notify")}
+ADULT_BUZZ_NOTIFY = {k: v.get("buzz_notify") or [] for k, v in ADULTS.items() if v.get("buzz_notify")}
 LEAD_ADULT = next(iter(ADULT_NOTIFY), next(iter(ADULTS), None))   # gets the phone/watch pings (first adult with notify)
 PARENT_NOTIFY = ADULT_NOTIFY.get(LEAD_ADULT, [])
 
@@ -1952,8 +1959,14 @@ def send_adult_request(nonce, who, where):
                          "data": {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
                                   "actions": actions}}, tok):
             accepted.append(svc)
+    buzzed = []
+    for svc in ADULT_BUZZ_NOTIFY.get(who, []):
+        if ha_call(svc, {"title": title, "message": message + " Open the phone or parent Chores dashboard to answer.",
+                         "data": {"tag": "chore-adult-" + nonce + "-buzz", "priority": "high", "ttl": 0,
+                                  "channel": "Chore approvals", "importance": "high"}}, tok):
+            buzzed.append(svc)
     ilog({"src": "notify", "action": "adult_request_accepted_by_ha" if accepted else "adult_request_failed",
-          "nonce": nonce, "purpose": req.get("purpose"), "to": accepted})
+          "nonce": nonce, "purpose": req.get("purpose"), "to": accepted, "buzz": buzzed})
 
 
 def parent_quiet():
@@ -2117,6 +2130,8 @@ def clear_adult_request(nonce, who):
         return
     for svc in ADULT_NOTIFY.get(who, []):
         ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-adult-" + nonce}}, tok)
+    for svc in ADULT_BUZZ_NOTIFY.get(who, []):
+        ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-adult-" + nonce + "-buzz"}}, tok)
 
 
 def resolve_assist_request(nonce, ok, by):
@@ -2136,6 +2151,20 @@ def resolve_assist_request(nonce, ok, by):
     threading.Thread(target=clear_adult_request, args=(nonce, r["who"]), daemon=True).start()
     ilog({"src": "adult", "action": r["status"], "purpose": r["purpose"], "kid": r["kid"],
           "chore": r.get("chore"), "reward": r.get("reward"), "by": by})
+    return r
+
+
+def resolve_phone_adult_request(nonce, ok):
+    """Apply a phone/watch notification answer with the same rules as the dashboard."""
+    r = ADULT_REQ.get(nonce)
+    if not r or r.get("status") != "pending":
+        return None
+    if r.get("purpose") in ("assist", "reward"):
+        return resolve_assist_request(nonce, ok, r["who"])
+    r["status"] = "ok" if ok else "no"
+    save_adult_requests()
+    ilog({"src": "adult", "action": r["status"], "who": r["who"], "ip": r["ip"]})
+    print("grown-up request", nonce, r["status"], flush=True)
     return r
 
 
@@ -2225,7 +2254,7 @@ def watch_ha_events():
                             except Exception as ex:  # noqa: BLE001
                                 print("watch fix failed", ex, flush=True)
                             ilog({"src": "watch", "action": "not_yet_fix", "ref": ref, "reply": data_.get("reply_text")})
-                        if act.split("_")[1] in ("PASS", "NOTYET", "ADD1", "ADD2", "PTS", "ZERO") and act.startswith("CHORE_"):
+                        if act.startswith("CHORE_") and act.split("_")[1] in ("PASS", "NOTYET", "ADD1", "ADD2", "PTS", "ZERO"):
                             kind, ref = act.split("_", 2)[1], act.split("_", 2)[2]
                             rep = next((r for r in derive()["history"] if r.get("id") == ref), None)
                             ok, pts_ = True, None
@@ -2254,15 +2283,7 @@ def watch_ha_events():
                                       "reply": data_.get("reply_text")})
                         if act.startswith("CHORE_OK_") or act.startswith("CHORE_NO_"):
                             nonce = act[9:]
-                            r = ADULT_REQ.get(nonce)
-                            if r and r["status"] == "pending":
-                                if r.get("purpose") == "assist":
-                                    resolve_assist_request(nonce, act.startswith("CHORE_OK_"), r["who"])
-                                else:
-                                    r["status"] = "ok" if act.startswith("CHORE_OK_") else "no"
-                                    save_adult_requests()
-                                    ilog({"src": "adult", "action": r["status"], "who": r["who"], "ip": r["ip"]})
-                                    print("grown-up request", nonce, r["status"], flush=True)
+                            resolve_phone_adult_request(nonce, act.startswith("CHORE_OK_"))
             except Exception as ex:  # noqa: BLE001
                 entry_edges.online = False
                 print("HA event socket error", ex, flush=True)
@@ -2581,10 +2602,35 @@ class H(BaseHTTPRequestHandler):
             rw_ = rewards.get(rid_) or {}
             if kid_ not in kids or not rw_.get("needs_ok"):
                 return self.send(400, {"error": "unknown adult-required reward"})
+            if not is_here(rw_, c, kid_):
+                return self.send(409, {"error": "that reward is at the other house"})
+            if st["bedtime"]["on"]:
+                return self.send(409, {"error": "bedtime"})
+            if (st.get("dress") or {}).get("on") and (st["dress"]["kids"].get(kid_) or "ready") != "ready":
+                return self.send(409, {"error": "Put on your clothes first!"})
+            if reward_closed(rw_):
+                return self.send(409, {"error": "%s is not available after %s." % (rw_["name"], rw_["before"])})
+            gate_ = (st.get("must_do_first") or {}).get(kid_) or {}
+            if gate_.get("rewards"):
+                return self.send(409, {"error": (gate_.get("name") or "Priority chore") + " first! Rewards come back when it's done."})
+            if ((st.get("chores_first") or {}).get(kid_) or {}).get("on"):
+                return self.send(409, {"error": "Chores first! Tidy up, then rewards come back."})
+            if st["balance"].get(kid_, 0) < reward_cost(rw_):
+                return self.send(409, {"error": "not enough points"})
+            ready_ = (st.get("reward_ready", {}).get(kid_) or {}).get(rid_, 0)
+            if ready_ > time.time():
+                return self.send(409, {"error": "needs a break first", "ready_at": ready_})
             busy_until_ = st.get("adult_busy_until", 0)
             if busy_until_ > time.time():
                 return self.send(409, {"error": "A grown-up is busy. This will come back in an hour.",
                                        "until": busy_until_})
+            # A page reload must not throw away a recent yes. Return the same
+            # unused approval so the child can finish the purchase.
+            approved_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "reward"
+                              and r.get("status") == "ok" and not r.get("used") and r.get("kid") == kid_
+                              and r.get("reward") == rid_ and time.time() - r["ts"] < 300), None)
+            if approved_:
+                return self.send(200, {"ok": True, "nonce": approved_})
             old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "reward"
                          and r.get("status") == "pending" and r.get("kid") == kid_
                          and r.get("reward") == rid_ and time.time() - r["ts"] < 120), None)
@@ -2628,15 +2674,20 @@ class H(BaseHTTPRequestHandler):
             r = ADULT_REQ.get(b.get("nonce"))
             if not r:
                 return self.send(404, {"error": "unknown request"})
+            timed_out_ = False
             if r["status"] == "pending" and time.time() - r["ts"] > 120:
                 r["status"] = "timeout"
+                timed_out_ = True
             if r["status"] == "ok" and r.get("purpose") in ("login", "lock"):
                 r["used"] = True
             save_adult_requests()
+            if timed_out_:
+                after_change()
             if r["status"] != "pending":
                 threading.Thread(target=clear_adult_request, args=(b["nonce"], r["who"]), daemon=True).start()
             return self.send(200, {"ok": True, "status": r["status"],
-                                   **({"state": derive(), "until": r.get("until")} if r.get("purpose") == "assist" else {})})
+                                   **({"state": derive(), "until": r.get("until")}
+                                      if r.get("purpose") in ("assist", "reward") else {})})
         if p == "/api/news_seen":
             try:
                 seen = json.loads(NEWS_SEEN.read_text())

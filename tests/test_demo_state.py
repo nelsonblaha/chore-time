@@ -16,6 +16,7 @@ class DemoState(Case):
                  "calendar": [{"title": "Private appointment", "start": "2026-11-20", "all_day": True}],
                  "packing_game": {"title": "Private trip", "items": ["Secret destination"]},
                  "music_block": {"effective": True, "blockers": [{"kid": "ava", "items": ["Private cleanup"]}]},
+                 "room_choices": {"Upstairs": ["Private bedroom"]},
                  "kid_notes": {"ava": "x"}, "requests": [1], "last_result": {"n": 1},
                  "history": [{"id": "1", "kid": "ava", "note": "secret", "feedback": "f", "points": 3}],
                  "board": {"dishes": {"price": 3, "note": "on the counter", "rest_note": "r"}},
