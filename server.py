@@ -2665,7 +2665,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"ok": True, "job": job})
         if p == "/api/envelope_delivered":   # the letter is in its envelope and handed over: the grown-up can inspect
             r_ = next((r for r in st["history"] if r.get("type") == "report" and r.get("status") == "pending"
-                       and r.get("chore") == b.get("chore") and b.get("kid") in (r.get("team") or [r["kid"]])), None)
+                       and not r.get("delivered") and r.get("chore") == b.get("chore")
+                       and b.get("kid") in (r.get("team") or [r["kid"]])), None)
             if not r_:
                 return self.send(409, {"error": "nothing waiting"})
             ev = append({"type": "delivered", "ref": r_["id"], "kid": b["kid"]})
@@ -4838,6 +4839,7 @@ def watch_bright_rooms():
 # toy_swap, toy_out) and bundles stay local. Passed jobs / "it's clean" -> Grocy execution; "it's dirty" -> reschedule now;
 # undo -> undo the execution; a chore ticked done in Grocy itself -> "marked clean" here.
 GROCY_SYNC = DATA / "grocy_sync.json"
+ENVELOPE_GROCY_SYNC = DATA / "envelope_grocy_sync.json"
 SYSTEM_CHORES = {"other", "toy_swap", "toy_out", "get_dressed"}
 GROCY = HOUSE.get("grocy") or {}   # optional: Grocy is the master chore list (kids' chores tagged with userfields)
 GROCY_START = float(GROCY.get("ledger_seeded_before", 0))   # ledger events before this were imported, never pushed
@@ -4850,6 +4852,42 @@ def gcall(method, path, body=None):
     with urllib.request.urlopen(req, timeout=20) as r:
         t = r.read()
         return json.loads(t) if t else None
+
+
+def grocy_push_envelope_inventory(call=None, events=None, sync_file=None):
+    """Consume one configured envelope and stamp per handed-over letter, retrying each item independently."""
+    products = envelopes.CFG.get("grocy_products") or {}
+    if not products:
+        return 0
+    call = call or gcall
+    events = read_events() if events is None else events
+    sync_file = Path(sync_file or ENVELOPE_GROCY_SYNC)
+    try:
+        done = set(json.loads(sync_file.read_text()).get("done", []))
+    except (OSError, ValueError):
+        done = set()
+    envelope_chores = set(envelopes.CFG.get("chores") or [])
+    reports = {e["id"]: e for e in events if e.get("type") == "report" and e.get("chore") in envelope_chores}
+    ready = {rid: float(r["delivered"]) for rid, r in reports.items() if r.get("delivered")}
+    for e in events:
+        if e.get("type") == "delivered" and e.get("ref") in reports:
+            ready[e["ref"]] = min(float(e.get("ts") or 0), ready.get(e["ref"], float("inf")))
+    cutoff = float(envelopes.CFG.get("grocy_track_after") or 0)
+    ready = {ref: completed for ref, completed in ready.items() if completed >= cutoff}
+    changed = 0
+    for ref in sorted(ready, key=ready.get):
+        for label, product_id in products.items():
+            token = "%s:%s" % (ref, product_id)
+            if token in done:
+                continue
+            call("POST", "/stock/products/%d/consume" % int(product_id),
+                 {"amount": 1, "transaction_type": "consume", "spoiled": False})
+            done.add(token)
+            changed += 1
+            sync_file.write_text(json.dumps({"done": sorted(done)[-3000:]}))
+            ilog({"src": "grocy", "action": "envelope_supply_used", "ref": ref,
+                  "supply": str(label)[:80], "product_id": int(product_id)})
+    return changed
 
 
 def _strip_html(t):
@@ -5022,6 +5060,7 @@ def watch_grocy_chores():
             if n % 2 == 0 and grocy_chores_pull():
                 after_change()
             grocy_push_events()
+            grocy_push_envelope_inventory()
             grocy_pull_executions()
         except Exception as ex:  # noqa: BLE001
             print("grocy chore sync error", ex, flush=True)
@@ -5273,6 +5312,12 @@ def start_modules():
     def go(name, fn, *args):
         threading.Thread(target=fn, args=args, daemon=True, name=name).start()
         on.append(name)
+    if (HOUSE.get("envelopes") or {}).get("desktop_summary_after"):
+        def watch_envelope_summary():
+            while True:
+                envelopes.desktop_summary()
+                time.sleep(60)
+        go("envelope-summary", watch_envelope_summary)
     if (HOUSE.get("kid_calendar") or {}).get("ics_url"):
         go("kid-calendar", schedule.watch)        # which weekends the kids are here (church-style slot chores)
     if HA_URL:

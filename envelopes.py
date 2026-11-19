@@ -2,6 +2,10 @@
 
 house.json "envelopes" (all optional except the addresses):
   printer        CUPS queue name
+  lp_user        optional CUPS job owner (keeps automated envelope jobs out of the desktop user's print notifications)
+  desktop_summary_after local time for one quiet next-day desktop summary (for example "08:00")
+  grocy_products {label: product id}; one of each is consumed when a letter is handed over
+  grocy_track_after epoch timestamp for the physical-count baseline (older handoffs are not deducted retroactively)
   lp_options     {"PageSize": "Env10", "InputSlot": "Manual", ...} passed to lp as -o key=value
   size_pt        [width, height] of the envelope in points, landscape (US #10 = [684, 297])
   chores         chore ids whose "I'm done" goes through the envelope steps
@@ -25,6 +29,8 @@ CFG = {}
 LAST = {"ts": 0.0}
 JOBS = set()     # print jobs this app sent (only these can be checked or cancelled)
 PRINTED = {}     # kid -> when an envelope was last printed for them (so coming back skips straight to "deliver it")
+PRINTS = []      # successful automated prints, retained briefly for the next-day desktop summary
+SUMMARY = {}     # {date: YYYY-MM-DD}; prevents duplicate summaries after service restarts
 MIN_GAP_S = 20   # a double tap must not print two envelopes
 
 
@@ -37,15 +43,30 @@ def configure(cfg, state_file=None):
     STATE["file"] = state_file
     PRINTED.clear()
     LASTPRINT.clear()
+    PRINTS.clear()
+    SUMMARY.clear()
     try:
         saved = json.loads(open(state_file).read()) if state_file else {}
     except (OSError, ValueError):
         saved = {}
     LASTPRINT.update(saved.pop("_last", None) or {})
+    PRINTS.extend(x for x in (saved.pop("_prints", None) or []) if isinstance(x, dict) and isinstance(x.get("ts"), (int, float)))
+    summary_date = saved.pop("_summary_date", None)
+    if summary_date:
+        SUMMARY["date"] = summary_date
     PRINTED.update({k: v for k, v in saved.items() if isinstance(v, (int, float))})
 
 
 LASTPRINT = {}   # the newest envelope: {"ts", "from", "to", "job"} (for the grown-ups' checklist)
+
+
+def _save():
+    if STATE["file"]:
+        try:
+            with open(STATE["file"], "w") as f:
+                json.dump(dict(PRINTED, _last=LASTPRINT, _prints=PRINTS[-100:], _summary_date=SUMMARY.get("date")), f)
+        except OSError:
+            pass
 
 
 def mark_printed(kids_, info=None):
@@ -54,12 +75,42 @@ def mark_printed(kids_, info=None):
     if info:
         LASTPRINT.clear()
         LASTPRINT.update(info, ts=time.time())
-    if STATE["file"]:
-        try:
-            with open(STATE["file"], "w") as f:
-                json.dump(dict(PRINTED, _last=LASTPRINT), f)
-        except OSError:
-            pass
+        PRINTS.append(dict(info, ts=LASTPRINT["ts"]))
+        PRINTS[:] = [x for x in PRINTS if time.time() - x["ts"] < 14 * 86400]
+    _save()
+
+
+def desktop_summary(now=None, run=subprocess.run):
+    """Send at most one low-priority summary for yesterday's prints; return its text, or None."""
+    after = CFG.get("desktop_summary_after")
+    if not after:
+        return None
+    from datetime import datetime, timedelta, time as dtime
+    now = time.time() if now is None else now
+    dt = datetime.fromtimestamp(now)
+    try:
+        hh, mm = map(int, str(after).split(":", 1))
+        threshold = dtime(hh, mm)
+    except (TypeError, ValueError):
+        return None
+    today = dt.date()
+    if SUMMARY.get("date") == today.isoformat() or dt.time() < threshold:
+        return None
+    prior = today - timedelta(days=1)
+    lo = datetime.combine(prior, dtime.min).timestamp()
+    hi = datetime.combine(today, dtime.min).timestamp()
+    count = sum(lo <= x["ts"] < hi for x in PRINTS)
+    SUMMARY["date"] = today.isoformat()
+    _save()
+    if not count:
+        return None
+    text = "Kids printed %d envelope%s yesterday." % (count, "" if count == 1 else "s")
+    try:
+        run(["notify-send", "-a", "Chore Time", "-u", "low", "Kids’ envelopes", text],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return text
 
 
 def enabled():
@@ -138,7 +189,10 @@ def print_envelope(sender, recipient, run=subprocess.run):
     with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
         f.write(data)
         f.flush()
-        cmd = ["lp", "-d", CFG["printer"], "-t", title]
+        cmd = ["lp"]
+        if CFG.get("lp_user"):
+            cmd += ["-U", CFG["lp_user"]]
+        cmd += ["-d", CFG["printer"], "-t", title]
         for k, v in (CFG.get("lp_options") or {}).items():
             cmd += ["-o", "%s=%s" % (k, v)]
         r = run(cmd + [f.name], capture_output=True, text=True, timeout=30)

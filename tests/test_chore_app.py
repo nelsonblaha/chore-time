@@ -1559,6 +1559,40 @@ class Envelopes(Case):
         self.assertTrue(self.pdf.startswith(b"%PDF") and b"(Max Example) Tj" in self.pdf and b"(2 Elm St) Tj" in self.pdf)
         self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "gran"})[0], 409)   # double tap
 
+    def test_print_can_use_a_non_desktop_cups_owner(self):
+        """GNOME only announces jobs owned by the logged-in user; automated envelopes can use their own identity."""
+        self.e.CFG["lp_user"] = "chore-envelope"
+        code, r = self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "gran"})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(self.cmds[0][:5], ["lp", "-U", "chore-envelope", "-d", "Office"])
+
+    def test_prints_are_condensed_into_one_next_day_desktop_summary(self):
+        now = datetime(2026, 11, 19, 9, 0).timestamp()
+        self.e.CFG["desktop_summary_after"] = "08:00"
+        self.e.PRINTS[:] = [{"ts": datetime(2026, 11, 18, 10, 0).timestamp()},
+                           {"ts": datetime(2026, 11, 18, 16, 0).timestamp()}]
+        calls = []
+        run = lambda cmd, **kw: calls.append(cmd)
+        self.assertEqual(self.e.desktop_summary(now, run), "Kids printed 2 envelopes yesterday.")
+        self.assertIn("Kids printed 2 envelopes yesterday.", calls[0])
+        self.assertIsNone(self.e.desktop_summary(now + 60, run))
+        self.assertEqual(len(calls), 1)
+
+    def test_handed_over_letters_consume_one_envelope_and_stamp_once(self):
+        self.e.CFG.update(chores=["letter"], grocy_products={"Envelope": 91, "Stamp": 92}, grocy_track_after=1)
+        events = [{"id": "old", "type": "report", "chore": "letter", "ts": 0, "delivered": .5},
+                  {"id": "r1", "type": "report", "chore": "letter", "ts": 1, "delivered": 2},
+                  {"id": "r2", "type": "report", "chore": "letter", "ts": 3},
+                  {"id": "d2", "type": "delivered", "ref": "r2", "ts": 4},
+                  {"id": "r3", "type": "report", "chore": "other", "ts": 5, "delivered": 6}]
+        calls = []
+        sync = self.app.dir / "envelope-inventory.json"
+        call = lambda method, path, body: calls.append((method, path, body))
+        self.assertEqual(self.s.grocy_push_envelope_inventory(call, events, sync), 4)
+        self.assertEqual([x[1] for x in calls], ["/stock/products/91/consume", "/stock/products/92/consume"] * 2)
+        self.assertEqual(self.s.grocy_push_envelope_inventory(call, events, sync), 0)
+        self.assertEqual(len(calls), 4)
+
     def test_unknown_sender_or_recipient_is_refused(self):
         self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "ava", "to": "gran"})[0], 409)
         self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "nobody"})[0], 409)
@@ -1592,6 +1626,7 @@ class Envelopes(Case):
         self.assertEqual(code, 200, d)
         rep = next(h for h in d["state"]["history"] if h.get("id") == r["event"]["id"])
         self.assertTrue(rep["delivered"])
+        self.assertEqual(self.app.post("/api/envelope_delivered", {"kid": "max", "chore": "letter"})[0], 409)
         code, r2 = self.app.post("/api/report", {"kid": "ava", "chore": "letter", "feeling": "ok", "delivered": True})
         self.assertTrue(r2["event"]["delivered"])                    # handed over before reporting
         self.assertIn("handoff_done", self.app.state()["envelope"])
