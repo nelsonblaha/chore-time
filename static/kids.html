@@ -1022,7 +1022,9 @@ function WEAR(){return '<div style="display:flex;justify-content:center;flex-wra
 function pbLine(k){var P=((S.personal_records||{}).get_dressed||{})[k];return P?'<div class="q" style="font-size:24px">'+E("1f3c5")+' Your best: '+fmtS(P.sec)+'</div>':''}
 function dressOf(k){var D=S.dress||{};return D.on?(D.kids||{})[k]:null}
 function dressScreen(k){var st=dressOf(k);if(!st||st==="ready")return false;L("dress_screen",{st:st});
-  if(st==="waiting"){modal('<div class="big">'+E("1f455")+E("1f50d")+'</div><div class="q">A grown-up is coming to check you!</div><div class="q" style="font-size:24px;opacity:.8">Clothes, socks and shoes on? Wait right here.</div>');addOk();return true}
+  function exit(){goHome("dressing not finished")}
+  function locked(){if($("mx"))$("mx").style.display="none";if($("drnot"))$("drnot").onclick=exit}
+  if(st==="waiting"){modal('<div class="big">'+E("1f455")+E("1f50d")+'</div><div class="q">A grown-up is coming to check you!</div><div class="q" style="font-size:24px;opacity:.8">Clothes, socks and shoes on? Wait right here.</div><div class="faces"><div class="btn no" id="drnot">Back to kids</div></div>');locked();return true}
   function done(){if(busy)return;busy=true;L("dress_done",{});api("/api/report",{kid:k,chore:"get_dressed",feeling:"ok"}).then(function(r){busy=false;if(r.ok)S=r.state;
     modal('<div class="big">'+E("1f50d")+'</div><div class="q">'+(r.ok?'Go show a grown-up!':'Hmm: '+(r.error||'try again'))+'</div>');chime([523,659]);addOk(function(){render()})}).catch(function(){busy=false})}
   var R=(S.records||{}).get_dressed,RK=R&&S.config.kids.find(function(x){return x.id===R.kid});
@@ -1030,16 +1032,16 @@ function dressScreen(k){var st=dressOf(k);if(!st||st==="ready")return false;L("d
   if(SC){var goals=(S.dress.targets||[]).map(function(t){return '<div style="font-size:28px;font-weight:900">'+E(t.icon||"2b50")+' Finish by '+hm12(t.by)+' — '+safeText(t.title||"School ready")+'</div>'}).join("");
     modal('<div class="big">'+E("1f3eb")+E("1f455")+'</div><div class="q" style="font-size:44px;color:#1565c0">School day! Get dressed by the clock.</div>'+
       '<div class="q" style="font-size:34px">It is '+new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+'.</div>'+goals+lh+WEAR()+
-      '<div class="q" style="font-size:22px;opacity:.75">Your finish time counts when you tap below. Then show a grown-up.</div><div class="faces"><div class="btn yes" id="drdone" style="font-size:38px;font-weight:900;padding:14px 34px">'+E("2705")+' I\'m dressed!</div></div>');
-    $("drdone").onclick=done;
+      '<div class="q" style="font-size:22px;opacity:.75">Your finish time counts when you tap below. Then show a grown-up.</div><div class="faces"><div class="btn yes" id="drdone" style="font-size:38px;font-weight:900;padding:14px 34px">'+E("2705")+' I\'m dressed!</div><div class="btn no" id="drnot" style="font-size:28px">Not finished yet</div></div>');
+    locked();$("drdone").onclick=done;
     return true}
   modal('<div class="big" style="animation:pulse 1s infinite">'+E("1f455")+'</div><div class="q" style="font-size:44px;color:#c62828">Put on your clothes NOW!</div>'+
     '<div class="q" style="font-size:64px;font-weight:900">'+E("23f1")+' <span class="cdu" data-since="'+ST+'"></span></div>'+
     (R?'<div class="q" style="font-size:24px">'+E("1f947")+' Fastest: '+(RK?RK.name:R.kid)+' '+fmtS(R.sec)+'. Beat it!</div>':'<div class="q" style="font-size:24px">'+E("1f3c3")+' Fastest dresser gets a record!</div>')+pbLine(k)+
     lh+WEAR()+
     '<div class="q" style="font-size:22px;opacity:.75">Nothing else until a grown-up says you\'re ready to go.</div>'+
-    '<div class="faces"><div class="btn yes" id="drdone" style="font-size:38px;font-weight:900;padding:14px 34px">'+E("2705")+' I\'m dressed!</div></div>');
-  $("drdone").onclick=done;
+    '<div class="faces"><div class="btn yes" id="drdone" style="font-size:38px;font-weight:900;padding:14px 34px">'+E("2705")+' I\'m dressed!</div><div class="btn no" id="drnot" style="font-size:28px">Not finished yet</div></div>');
+  locked();$("drdone").onclick=done;
   return true}
 var dressBeepT=0;setInterval(function(){try{dressBeep()}catch(e){}},5000);
 function dressBeep(){var D=S&&S.dress;if(!D||!D.on||D.school)return;   // school mornings stay quietvar todo=Object.keys(D.kids||{}).filter(function(k){return D.kids[k]==="todo"});if(!todo.length)return;

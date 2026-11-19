@@ -158,6 +158,8 @@ class StaticUiRegressions(unittest.TestCase):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Get dressed by the clock", html)
         self.assertIn("Your finish time counts", html)
+        self.assertIn("Not finished yet", html)
+        self.assertIn('$("mx").style.display="none"', html)
         self.assertNotIn("The clock starts when you press Start", html)
 
 
