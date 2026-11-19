@@ -111,6 +111,22 @@ def affine(samples):
     return {"x": ax, "y": ay, "samples": len(samples), "rms": round(math.sqrt(error / len(samples)), 1)}
 
 
+def calibrated(samples):
+    """A numerically solvable fit is not a floorplan calibration until independent sensors span two dimensions."""
+    if len(samples) < 6 or len({row.get("sensor") for row in samples}) < 2:
+        return False
+    points = [(float(row["plan_x"]), float(row["plan_y"])) for row in samples]
+    if max(x for x, _ in points) - min(x for x, _ in points) < 25 \
+            or max(y for _, y in points) - min(y for _, y in points) < 25:
+        return False
+    # Reject observations that all lie along one beam/line (normalized covariance determinant, O(n)).
+    mx, my = sum(x for x, _ in points) / len(points), sum(y for _, y in points) / len(points)
+    xx = sum((x - mx) ** 2 for x, _ in points)
+    yy = sum((y - my) ** 2 for _, y in points)
+    xy = sum((x - mx) * (y - my) for x, y in points)
+    return xx > 0 and yy > 0 and (xx * yy - xy * xy) / (xx * yy) >= 0.05
+
+
 def robot_position(g, token, vac, timeout=25):
     """Live x/y from the robot, or None. (HA REST: call the service and return its response.)"""
     req = urllib.request.Request(
@@ -547,7 +563,8 @@ class Locator:
         if direct and now - direct["at"] <= PLAN_TTL and direct["room"] == room:
             return direct["x"], direct["y"], direct["source"], direct["at"], None
         xy = self.xy.get(vac)
-        model = affine((self.M.get("_plan_samples") or {}).get(vac) or [])
+        samples = (self.M.get("_plan_samples") or {}).get(vac) or []
+        model = affine(samples) if calibrated(samples) else None
         if not xy or now - xy[1] > POS_TTL or not model:
             return None
         vector = [float(xy[0][0]), float(xy[0][1]), 1.0]

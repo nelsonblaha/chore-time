@@ -1200,15 +1200,25 @@ class RobotLocatorFreshness(unittest.TestCase):
 
     def test_learned_affine_transform_converts_robot_map_to_plan(self):
         samples = [
-            {"map_x": 0, "map_y": 0, "plan_x": 5, "plan_y": 7},
-            {"map_x": 10, "map_y": 0, "plan_x": 25, "plan_y": 7},
-            {"map_x": 0, "map_y": 10, "plan_x": 5, "plan_y": 37},
-            {"map_x": 10, "map_y": 10, "plan_x": 25, "plan_y": 37},
+            {"map_x": 0, "map_y": 0, "plan_x": 5, "plan_y": 7, "sensor": "a"},
+            {"map_x": 10, "map_y": 0, "plan_x": 45, "plan_y": 7, "sensor": "a"},
+            {"map_x": 0, "map_y": 10, "plan_x": 5, "plan_y": 47, "sensor": "b"},
+            {"map_x": 10, "map_y": 10, "plan_x": 45, "plan_y": 47, "sensor": "b"},
         ]
         model = self.loc.affine(samples)
         self.assertEqual(model["samples"], 4)
-        self.assertAlmostEqual(sum(model["x"][i] * [4, 6, 1][i] for i in range(3)), 13)
-        self.assertAlmostEqual(sum(model["y"][i] * [4, 6, 1][i] for i in range(3)), 25)
+        self.assertAlmostEqual(sum(model["x"][i] * [4, 6, 1][i] for i in range(3)), 21)
+        self.assertAlmostEqual(sum(model["y"][i] * [4, 6, 1][i] for i in range(3)), 31)
+        self.assertFalse(self.loc.calibrated(samples))
+        enough = samples + [dict(samples[0], map_x=2, map_y=2), dict(samples[-1], map_x=8, map_y=8)]
+        self.assertTrue(self.loc.calibrated(enough))
+
+    def test_one_radar_never_creates_a_global_plan_transform(self):
+        self.L.xy[self.V] = ((4, 6), self.now)
+        self.L.M["_plan_samples"] = {self.V: [
+            {"map_x": i, "map_y": i * i, "plan_x": 100, "plan_y": 100 + i * 30, "sensor": "one"}
+            for i in range(6)]}
+        self.assertIsNone(self.L.plan_position(self.V, "Family Room", self.now))
 
 class HouseTasks(unittest.TestCase):
     """The grown-ups' side: Grocy chores/tasks/batteries with Home Assistant context, faked."""
