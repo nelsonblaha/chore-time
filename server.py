@@ -859,6 +859,8 @@ def chores_first_state(evs, kids, reports=None):
             else:
                 out[e["kid"]] = {"on": bool(e.get("on")), "since": e["ts"], "_at": pos[e["id"]], "by": e.get("by"),
                                  "items": list(e.get("items") or [])}
+                if not e.get("on") and e.get("done"):
+                    out[e["kid"]]["lifted"] = {"by": e.get("by"), "ts": e["ts"], "manual": True}
     return {k: {x: y for x, y in lift(k, v).items() if x != "_at"} for k, v in out.items()}
 
 
@@ -3592,7 +3594,8 @@ class H(BaseHTTPRequestHandler):
             if b.get("by") not in insp or b.get("kid") not in kids:
                 return self.send(400, {"error": "grown-ups only, for one kid"})
             items = [str(x).strip()[:120] for x in (b.get("items") or []) if str(x).strip()][:20]
-            ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "items": items, "by": b["by"]})
+            ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "items": items, "by": b["by"],
+                         **({"done": True} if not b.get("on") and b.get("done") else {})})
         elif p == "/api/music_block":   # HA enforces this only while required-work gates are outstanding
             if b.get("by") not in insp:
                 return self.send(400, {"error": "grown-ups only"})

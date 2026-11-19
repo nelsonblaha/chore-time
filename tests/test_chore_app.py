@@ -162,6 +162,11 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('$("mx").style.display="none"', html)
         self.assertNotIn("The clock starts when you press Start", html)
 
+    def test_parent_dashboard_has_an_explicit_mandatory_chore_done_action(self):
+        html = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("Finished — mark done", html)
+        self.assertIn("done:true,items:F.items", html)
+
 
 class Case(unittest.TestCase):
     config = None
@@ -2038,6 +2043,16 @@ class ChoresFirst(Case):
         # blocking again later starts fresh (the old pass doesn't count)
         a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Dishes"]})
         self.assertTrue(a.state()["chores_first"]["ava"]["on"])
+
+    def test_parent_can_record_already_finished_mandatory_work(self):
+        self.app.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Blanket away"]})
+        code, r = self.app.post("/api/chores_first", {"kid": "ava", "on": False, "done": True,
+                                                       "items": ["Blanket away"], "by": "jordan"})
+        self.assertEqual(code, 200)
+        gate = r["state"]["chores_first"]["ava"]
+        self.assertFalse(gate["on"])
+        self.assertEqual(gate["items"], ["Blanket away"])
+        self.assertEqual(gate["lifted"], {"by": "jordan", "ts": gate["since"], "manual": True})
 
     def test_spotify_switch_is_armed_then_effective_only_while_required_work_remains(self):
         a = App(base_config())
