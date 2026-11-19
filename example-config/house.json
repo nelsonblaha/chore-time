@@ -306,7 +306,33 @@
       "vacuum.downstairs_robot": {
         "name": "Downstairs robot",
         "room_sensor": "sensor.downstairs_robot_current_room",
-        "publish": "sensor.downstairs_robot_room_live"
+        "publish": "sensor.downstairs_robot_room_live",
+        "occupancy": {
+          "sensor": "sensor.retained_room_occupancy",
+          "floor": "lower"
+        },
+        "room_ids": {
+          "Lounge": "lounge"
+        },
+        "motion": {
+          "binary_sensor.lounge_motion": "Lounge"
+        },
+        "radars": {
+          "binary_sensor.lounge_presence": {
+            "room": "Lounge",
+            "x": 800,
+            "y": 600,
+            "direction": 180,
+            "px_per_inch": 2.4
+          }
+        },
+        "audio": {
+          "sensor.lounge_sound_level": {
+            "room": "Lounge",
+            "min": 35,
+            "delta": 5
+          }
+        }
       }
     }
   },

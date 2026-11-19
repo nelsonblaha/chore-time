@@ -1122,6 +1122,87 @@ class RobotLocatorFreshness(unittest.TestCase):
         self.tick(1000 + self.loc.HOLD_S + 1)                    # blank too long: unknown after all
         self.assertEqual(self.out[-1]["state"], "unknown")
 
+    def test_radar_explains_motion_and_publishes_plan_coordinates(self):
+        rc = self.g["HOUSE"]["robot_locator"]["robots"][self.V]
+        rc.update(
+            occupancy={"sensor": "sensor.occ", "floor": "down"},
+            room_ids={"Family Room": "family"},
+            radars={"binary_sensor.den_presence": {
+                "room": "Family Room", "x": 100, "y": 200, "direction": 0, "px_per_inch": 2,
+                "moving": "binary_sensor.den_moving", "still": "binary_sensor.den_still",
+                "moving_distance": "sensor.den_moving_distance", "distance": "sensor.den_distance"}},
+        )
+        self.ha.update({
+            "sensor.occ": lambda: {"state": "ok", "attributes": {"valid_until": self.now + 60,
+                "rooms": {"family": {"state": "clear", "valid_until": self.now + 60}},
+                "floors": {"down": {"state": "vacant"}}}},
+            "binary_sensor.den_presence": lambda: {"state": "on"},
+            "binary_sensor.den_moving": lambda: {"state": "on"},
+            "binary_sensor.den_still": lambda: {"state": "off"},
+            "sensor.den_moving_distance": lambda: {"state": "50.8", "attributes": {"unit_of_measurement": "cm"}},
+            "sensor.den_distance": lambda: {"state": "20", "attributes": {"unit_of_measurement": "in"}},
+        })
+        self.pos = (10000, 10000)
+        self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+        s = self.tick(1000)
+        self.assertEqual((s["plan_x"], s["plan_y"], s["plan_source"]), (140.0, 200.0, "binary_sensor.den_presence"))
+        self.assertEqual(s["explains"]["binary_sensor.den_presence"]["kind"], "radar")
+        rows = (self.tmp / "robot-location-training.jsonl").read_text().splitlines()
+        self.assertEqual(json.loads(rows[-1])["plan_x"], 140.0)
+        self.assertTrue((self.tmp / "robot_map.json").exists())
+
+    def test_room_occupied_suppresses_robot_attribution(self):
+        rc = self.g["HOUSE"]["robot_locator"]["robots"][self.V]
+        rc.update(
+            occupancy={"sensor": "sensor.occ", "floor": "down"},
+            room_ids={"Family Room": "family"},
+            radars={"binary_sensor.den_presence": {
+                "room": "Family Room", "x": 100, "y": 200, "direction": 0,
+                "moving": "binary_sensor.den_moving", "still": "binary_sensor.den_still",
+                "moving_distance": "sensor.den_distance", "distance": "sensor.den_distance"}},
+        )
+        self.ha.update({
+            "sensor.occ": lambda: {"state": "ok", "attributes": {"valid_until": self.now + 60,
+                "rooms": {"family": {"state": "occupied", "valid_until": self.now + 60}},
+                "floors": {"down": {"state": "vacant"}}}},
+            "binary_sensor.den_presence": lambda: {"state": "on"},
+            "binary_sensor.den_moving": lambda: {"state": "on"},
+            "binary_sensor.den_still": lambda: {"state": "off"},
+            "sensor.den_distance": lambda: {"state": "20", "attributes": {"unit_of_measurement": "in"}},
+        })
+        self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+        s = self.tick(1000)
+        self.assertEqual(s["explains"], {})
+        self.assertIsNone(s["plan_x"])
+
+    def test_audio_change_is_attributed_only_in_the_empty_robot_room(self):
+        rc = self.g["HOUSE"]["robot_locator"]["robots"][self.V]
+        rc.update(occupancy={"sensor": "sensor.occ", "floor": "down"},
+                  room_ids={"Family Room": "family"},
+                  audio={"sensor.den_sound": {"room": "Family Room", "min": 30, "delta": 5}})
+        sound = {"state": "20"}
+        self.ha["sensor.den_sound"] = lambda: sound
+        self.ha["sensor.occ"] = lambda: {"state": "ok", "attributes": {"valid_until": self.now + 60,
+            "rooms": {"family": {"state": "clear", "valid_until": self.now + 60}},
+            "floors": {"down": {"state": "vacant"}}}}
+        self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+        self.tick(1000)
+        sound["state"] = "42"
+        s = self.tick(1005)
+        self.assertEqual(s["explains"]["sensor.den_sound"]["kind"], "audio")
+
+    def test_learned_affine_transform_converts_robot_map_to_plan(self):
+        samples = [
+            {"map_x": 0, "map_y": 0, "plan_x": 5, "plan_y": 7},
+            {"map_x": 10, "map_y": 0, "plan_x": 25, "plan_y": 7},
+            {"map_x": 0, "map_y": 10, "plan_x": 5, "plan_y": 37},
+            {"map_x": 10, "map_y": 10, "plan_x": 25, "plan_y": 37},
+        ]
+        model = self.loc.affine(samples)
+        self.assertEqual(model["samples"], 4)
+        self.assertAlmostEqual(sum(model["x"][i] * [4, 6, 1][i] for i in range(3)), 13)
+        self.assertAlmostEqual(sum(model["y"][i] * [4, 6, 1][i] for i in range(3)), 25)
+
 class HouseTasks(unittest.TestCase):
     """The grown-ups' side: Grocy chores/tasks/batteries with Home Assistant context, faked."""
 

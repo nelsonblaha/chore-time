@@ -25,8 +25,14 @@ sensor is re-sent at least every 30 s, so a consumer can expire it on its own cl
 Optional per robot: "dock_room", the room reported while docked or charging (otherwise unknown). "motion"
 ({motion sensor: robot room name}) and "motion_when" (the autopilot's status sensor): during an autopilot run a
 motion sensor turning on is the robot passing, and teaches its outline that room (confirmed a minute later).
+"radars" can add drawing geometry and distance entities; "audio" can add numeric sound-level changes. These and
+camera/PIR events are attributed to the robot only when the robot estimate is in that room and retained occupancy
+says the room is clear. The published `explains` map lets other automations suppress a false person hypothesis;
+`plan_x`, `plan_y`, `plan_source`, and `plan_at` place the robot on the drawing. Sensor/map pairs are written to the
+private data directory and radar pairs train a bounded affine robot-map-to-drawing transform.
 """
 import json
+import math
 import time
 import urllib.parse
 import urllib.request
@@ -48,8 +54,12 @@ STAMPS = ("observed_at", "expires_at", "published_at", "held_since", "evidence")
 WINDOW_S = 60       # evidence older than this is ignored (the same minute a position fix is trusted)
 HALF_S = 30         # evidence counts half as much every 30 s
 TRUTH_SLACK_S = 30  # evidence this close to a known-answer moment is graded against it
-PRIOR = {"map": (8, 10), "position": (6, 10), "motion": (6, 10), "camera": (7, 10)}   # (hits, tries) before any data
+PRIOR = {"map": (8, 10), "position": (6, 10), "motion": (6, 10), "camera": (7, 10),
+         "radar": (7, 10), "audio": (3, 10)}   # (hits, tries) before any data
 LEARN_CONF = 0.7    # a fused estimate this sure teaches the room outlines
+PLAN_TTL = 15       # a direct plan-coordinate fix is intentionally short lived
+TRAIN_XY_TTL = 20   # pair sensor evidence only with a near-simultaneous robot-map position
+PLAN_SAMPLES = 500  # bounded durable calibration history per robot
 
 
 def epoch(s):
@@ -57,6 +67,48 @@ def epoch(s):
         return datetime.fromisoformat(s["last_changed"]).timestamp()
     except Exception:  # noqa: BLE001
         return 0
+
+
+def solve3(matrix, vector):
+    """Solve a 3x3 system with pivoting, or return None when the calibration geometry is singular."""
+    a = [list(map(float, row)) + [float(vector[i])] for i, row in enumerate(matrix)]
+    for col in range(3):
+        pivot = max(range(col, 3), key=lambda row: abs(a[row][col]))
+        if abs(a[pivot][col]) < 1e-9:
+            return None
+        a[col], a[pivot] = a[pivot], a[col]
+        scale = a[col][col]
+        a[col] = [value / scale for value in a[col]]
+        for row in range(3):
+            if row == col:
+                continue
+            scale = a[row][col]
+            a[row] = [a[row][i] - scale * a[col][i] for i in range(4)]
+    return [a[i][3] for i in range(3)]
+
+
+def affine(samples):
+    """Least-squares robot-map -> drawing transform from direct position pairs."""
+    if len(samples) < 3:
+        return None
+    normal = [[0.0] * 3 for _ in range(3)]
+    bx, by = [0.0] * 3, [0.0] * 3
+    for row in samples:
+        v = [float(row["map_x"]), float(row["map_y"]), 1.0]
+        for i in range(3):
+            bx[i] += v[i] * float(row["plan_x"])
+            by[i] += v[i] * float(row["plan_y"])
+            for j in range(3):
+                normal[i][j] += v[i] * v[j]
+    ax, ay = solve3(normal, bx), solve3(normal, by)
+    if not ax or not ay:
+        return None
+    error = 0.0
+    for row in samples:
+        v = [float(row["map_x"]), float(row["map_y"]), 1.0]
+        px, py = sum(ax[i] * v[i] for i in range(3)), sum(ay[i] * v[i] for i in range(3))
+        error += (px - float(row["plan_x"])) ** 2 + (py - float(row["plan_y"])) ** 2
+    return {"x": ax, "y": ay, "samples": len(samples), "rms": round(math.sqrt(error / len(samples)), 1)}
 
 
 def robot_position(g, token, vac, timeout=25):
@@ -92,10 +144,14 @@ class Locator:
         self.ev = {}            # vacuum -> [{"src", "kind", "room", "at"}]: recent evidence
         self.xy = {}            # vacuum -> ((x, y), at): the newest live position
         self.camprev = {}       # camera event entity -> last state
+        self.sensorprev = {}    # radar/audio entity -> last normalized reading
+        self.plan = {}          # vacuum -> newest direct drawing-coordinate fix
         self.learned = {}       # vacuum -> when the fused estimate last taught the outlines
         self.plast = {}         # vacuum -> last position call while cleaning
         self.pub = {}           # vacuum -> last published signature
         self.pub_at = {}        # vacuum -> when it was last sent
+        self.dirty = False      # calibration changed outside the ordinary outline-learning path
+        self.training_path = g["DATA"] / "robot-location-training.jsonl"
 
     def position(self, vac):
         return robot_position(self.g, self.tok, vac)
@@ -243,8 +299,52 @@ class Locator:
                 return True
         return False
 
-    def add(self, vac, src, kind, room, at):
-        self.ev.setdefault(vac, []).append({"src": src, "kind": kind, "room": room, "at": at})
+    def room_empty(self, rc, room, now, occupancy_room=None):
+        """A fresh room verdict is preferred; old installs without room ids retain the floor-vacant fallback."""
+        occ = rc.get("occupancy") or {}
+        if occ.get("sensor"):
+            a = self.g["ha_get"](occ["sensor"], self.tok).get("attributes") or {}
+            rid = occupancy_room or (rc.get("room_ids") or {}).get(room)
+            rooms = a.get("rooms") or {}
+            verdict = rooms.get(rid) if rid and isinstance(rooms, dict) else None
+            if verdict is not None:
+                valid = verdict.get("valid_until", a.get("valid_until"))
+                return verdict.get("state") in ("clear", "vacant") and float(valid or 0) > now
+        return self.floor_empty(rc, now)
+
+    def train(self, vac, src, kind, room, at, reading=None, plan=None, map_xy=None):
+        """Private append-only sensor/map pairs for reliability and drawing-transform calibration."""
+        xy = map_xy
+        if xy is None:
+            current = self.xy.get(vac)
+            if current and abs(current[1] - at) <= TRAIN_XY_TTL:
+                xy = current[0]
+        if xy is None:
+            return
+        row = {"t": round(at, 3), "robot": vac, "map_x": xy[0], "map_y": xy[1],
+               "room": room, "sensor": src, "kind": kind, "reading": reading}
+        if plan:
+            row.update(plan_x=round(plan[0], 2), plan_y=round(plan[1], 2))
+            samples = self.M.setdefault("_plan_samples", {}).setdefault(vac, [])
+            samples.append({k: row[k] for k in ("t", "map_x", "map_y", "plan_x", "plan_y", "sensor", "room")})
+            del samples[:-PLAN_SAMPLES]
+            self.dirty = True
+        try:
+            with self.training_path.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(row, separators=(",", ":"), default=str) + "\n")
+        except OSError as ex:
+            print("locator training write failed", ex, flush=True)
+
+    def add(self, vac, src, kind, room, at, reading=None, plan=None, map_xy=None):
+        event = {"src": src, "kind": kind, "room": room, "at": at}
+        if reading is not None:
+            event["reading"] = reading
+        if plan:
+            event["plan"] = [round(plan[0], 2), round(plan[1], 2)]
+            self.plan[vac] = {"x": plan[0], "y": plan[1], "room": room, "source": src, "at": at}
+        self.ev.setdefault(vac, []).append(event)
+        if kind not in ("map", "position", "person"):
+            self.train(vac, src, kind, room, at, reading, plan, map_xy)
 
     def rel(self, vac, src, kind):
         h, n = ((self.M.get("_rel") or {}).get(vac) or {}).get(src) or PRIOR.get(kind, (1, 2))
@@ -260,7 +360,96 @@ class Locator:
             h, n = R.get(e["src"]) or PRIOR.get(e["kind"], (1, 2))
             R[e["src"]] = [h + (1 if e["room"] == room else 0), n + 1]
 
-    def gather(self, vac, rc, st, room_now, now, since=0):
+    def radar_parts(self, entity, cfg):
+        base = entity.removeprefix("binary_sensor.").removesuffix("_presence")
+        return {"moving": cfg.get("moving", "binary_sensor." + base + "_moving_target"),
+                "still": cfg.get("still", "binary_sensor." + base + "_still_target"),
+                "moving_distance": cfg.get("moving_distance", "sensor." + base + "_moving_distance"),
+                "still_distance": cfg.get("still_distance", "sensor." + base + "_still_distance"),
+                "distance": cfg.get("distance", "sensor." + base + "_detection_distance")}
+
+    def inches(self, entity):
+        state = self.g["ha_get"](entity, self.tok)
+        try:
+            value = float(state.get("state"))
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        unit = str((state.get("attributes") or {}).get("unit_of_measurement") or "in")
+        return value / 2.54 if unit == "cm" else value / 25.4 if unit == "mm" else \
+            value * 39.37 if unit == "m" else value * 12 if unit == "ft" else value
+
+    def radar(self, vac, rc, loc, now):
+        for entity, spec in (rc.get("radars") or {}).items():
+            cfg = {"room": spec} if isinstance(spec, str) else spec
+            if not isinstance(cfg, dict) or not all(key in cfg for key in ("room", "x", "y", "direction")):
+                continue
+            parts = self.radar_parts(entity, cfg)
+            moving = self.g["ha_get"](parts["moving"], self.tok).get("state") == "on"
+            still = self.g["ha_get"](parts["still"], self.tok).get("state") == "on"
+            present = self.g["ha_get"](entity, self.tok).get("state") == "on"
+            distance = self.inches(parts["moving_distance"] if moving else parts["still_distance"] if still else parts["distance"])
+            if distance is None:
+                distance = self.inches(parts["distance"])
+            snap = (present, moving, still, round(distance, 1) if distance else None)
+            changed = snap != self.sensorprev.get("radar:" + entity)
+            self.sensorprev["radar:" + entity] = snap
+            if not changed or not present or distance is None:
+                continue
+            room = loc.get("room")
+            allowed = cfg.get("rooms") or [cfg.get("room")]
+            if room not in allowed or not self.room_empty(rc, room, now, cfg.get("occupancy_room")):
+                continue
+            bearing = None
+            for candidate in sorted(cfg.get("bearings") or cfg.get("radar_bearings") or [],
+                                    key=lambda value: value.get("from_in", 0), reverse=True):
+                if distance < float(candidate.get("from_in", 0)):
+                    continue
+                when = candidate.get("when_on") or []
+                if when and not any(self.g["ha_get"](item, self.tok).get("state") == "on" for item in when):
+                    continue
+                bearing = candidate
+                break
+            direction = float((bearing or {}).get("direction", cfg.get("direction", 0)))
+            measured = distance
+            if bearing and bearing.get("max_in") is not None:
+                distance = min(distance, float(bearing["max_in"]))
+            ppi = float(cfg.get("px_per_inch", rc.get("px_per_inch", 2.41)))
+            angle = math.radians(direction)
+            plan = (float(cfg["x"]) + distance * ppi * math.cos(angle),
+                    float(cfg["y"]) + distance * ppi * math.sin(angle))
+            reading = {"distance_in": round(measured, 1), "direction": direction,
+                       "moving": moving, "still": still}
+            self.add(vac, entity, "radar", room, now, reading=reading, plan=plan)
+
+    def audio(self, vac, rc, loc, now):
+        for entity, spec in (rc.get("audio") or {}).items():
+            cfg = {"room": spec} if isinstance(spec, str) else spec
+            state = self.g["ha_get"](entity, self.tok)
+            raw = state.get("state")
+            if raw in (None, "unknown", "unavailable"):
+                self.sensorprev["audio:" + entity] = raw
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = raw
+            previous = self.sensorprev.get("audio:" + entity)
+            self.sensorprev["audio:" + entity] = value
+            if previous is None or value == previous:
+                continue
+            if isinstance(value, float) and cfg.get("min") is not None and value < float(cfg["min"]):
+                continue
+            if isinstance(value, float) and isinstance(previous, (int, float)) \
+                    and abs(value - previous) < float(cfg.get("delta", 0)):
+                continue
+            room = cfg.get("room")
+            if loc.get("room") != room or not self.room_empty(rc, room, now, cfg.get("occupancy_room")):
+                continue
+            self.add(vac, entity, "audio", room, now, reading=value)
+
+    def gather(self, vac, rc, st, room_now, now, since=0, loc=None):
         """this tick's evidence from the robot, its map, the room sensors and the cameras"""
         out = st in ("cleaning",) + AWAY_STATES
         if not out:
@@ -281,20 +470,24 @@ class Locator:
                 found, votes = self.classify(vac, *xy)
                 if found:
                     self.add(vac, "position", "position", found, now)
-        empty = self.floor_empty(rc, now)
         for ent, room in (rc.get("motion") or {}).items():
+            if ent in (rc.get("radars") or {}):
+                continue
             s_ = self.g["ha_get"](ent, self.tok).get("state")
             rising = s_ == "on" and self.mprev.get("f:" + ent) == "off"
             self.mprev["f:" + ent] = s_
-            if rising and empty:
-                self.add(vac, ent, "motion", room, now)
+            if rising and self.room_empty(rc, room, now):
+                self.add(vac, ent, "motion", room, now, reading="on")
         for ent, room in (rc.get("cameras") or {}).items():
             s_ = self.g["ha_get"](ent, self.tok)
             v = s_.get("state")
             new = v not in (None, "unknown", "unavailable") and self.camprev.get(ent) not in (None, v)
             self.camprev[ent] = v
-            if new and empty and (s_.get("attributes") or {}).get("event_type") in ("camera_motion", "camera_sound"):
-                self.add(vac, ent, "camera", room, now)
+            event_type = (s_.get("attributes") or {}).get("event_type")
+            if new and self.room_empty(rc, room, now) and event_type in ("camera_motion", "camera_sound"):
+                self.add(vac, ent, "camera", room, now, reading=event_type)
+        self.radar(vac, rc, loc or {}, now)
+        self.audio(vac, rc, loc or {}, now)
         self.ev[vac] = [e for e in self.ev.get(vac) or [] if now - e["at"] <= WINDOW_S and e["at"] >= since]
         # a known-answer moment: the robot's map room and its learned position agree right now
         m = [e for e in self.ev[vac] if e["src"] == "map" and e["at"] == now]
@@ -315,6 +508,32 @@ class Locator:
         room, best = score.most_common(1)[0]
         ev = [{"src": e["src"], "room": e["room"], "age": int(now - e["at"])} for e in (self.ev.get(vac) or [])][-12:]
         return room, round(best / sum(score.values()), 2), top[room][1], ev
+
+    def explains(self, vac, room, now):
+        out = {}
+        for event in self.ev.get(vac) or []:
+            if event["kind"] in ("map", "position", "person") or event["room"] != room:
+                continue
+            confidence = self.rel(vac, event["src"], event["kind"]) * 0.5 ** ((now - event["at"]) / HALF_S)
+            current = out.get(event["src"])
+            if current is None or event["at"] >= current["at"]:
+                out[event["src"]] = {"robot": vac, "at": int(event["at"]),
+                                     "confidence": round(confidence, 2), "room": room,
+                                     "kind": event["kind"]}
+        return out
+
+    def plan_position(self, vac, room, now):
+        direct = self.plan.get(vac)
+        if direct and now - direct["at"] <= PLAN_TTL and direct["room"] == room:
+            return direct["x"], direct["y"], direct["source"], direct["at"], None
+        xy = self.xy.get(vac)
+        model = affine((self.M.get("_plan_samples") or {}).get(vac) or [])
+        if not xy or now - xy[1] > POS_TTL or not model:
+            return None
+        vector = [float(xy[0][0]), float(xy[0][1]), 1.0]
+        px = sum(model["x"][i] * vector[i] for i in range(3))
+        py = sum(model["y"][i] * vector[i] for i in range(3))
+        return px, py, "learned_transform", xy[1], {"samples": model["samples"], "rms": model["rms"]}
 
     def corrections(self, now):
         """a person said where the robot really is (POST /api/robot_seen): the best answer there is"""
@@ -346,6 +565,8 @@ class Locator:
                 continue
             running = self.g["ha_get"](when, self.tok).get("state") == "running"
             for ent, room in sensors.items():
+                if ent in (rc.get("radars") or {}):
+                    continue
                 st = self.g["ha_get"](ent, self.tok).get("state")
                 rising = st == "on" and self.mprev.get(ent) == "off"
                 self.mprev[ent] = st
@@ -381,7 +602,7 @@ class Locator:
                     self.learn(vac, *xy, room_now)
                     changed = True
             loc = self.locate(vac, rc, st, since, room_now, now)
-            self.gather(vac, rc, st, room_now, now, since)
+            self.gather(vac, rc, st, room_now, now, since, loc)
             room, conf, src, ev = self.fuse(vac, now)
             if room and st not in DOCK_STATES:
                 loc.update(fused_from=src, confidence=conf, evidence=ev)
@@ -394,11 +615,20 @@ class Locator:
                     self.learned[vac] = now
                     self.learn(vac, *xy[0], room)
                     changed = True
+            if self.xy.get(vac) and now - self.xy[vac][1] <= POS_TTL:
+                loc["xy"] = self.xy[vac][0]
+            final_room = loc["room"]
+            loc["explains"] = self.explains(vac, final_room, now) if final_room != "unknown" else {}
+            plan = self.plan_position(vac, final_room, now) if final_room != "unknown" else None
+            if plan:
+                loc.update(plan_x=round(plan[0], 2), plan_y=round(plan[1], 2), plan_source=plan[2],
+                           plan_at=plan[3], plan_model=plan[4])
             self.publish(vac, rc, loc, st, since, now)
-        if changed:
+        if changed or self.dirty:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.M))
             tmp.replace(self.path)
+            self.dirty = False
 
     def publish(self, vac, rc, loc, st, since, now=None):
         ent = rc.get("publish")
@@ -414,6 +644,9 @@ class Locator:
                  "x": xy[0] if xy else None, "y": xy[1] if xy else None, "votes": loc["votes"],
                  "held_since": int(loc["held_since"]) if loc.get("held_since") else None,
                  "fused_from": loc.get("fused_from"), "confidence": loc.get("confidence"), "evidence": loc.get("evidence"),
+                 "explains": loc.get("explains") or {}, "plan_x": loc.get("plan_x"), "plan_y": loc.get("plan_y"),
+                 "plan_source": loc.get("plan_source"), "plan_at": int(loc["plan_at"]) if loc.get("plan_at") else None,
+                 "plan_model": loc.get("plan_model"),
                  "reliability": {k: round((v[0] + 1) / (v[1] + 2), 2) for k, v in ((self.M.get("_rel") or {}).get(vac) or {}).items()},
                  "learned_cells": len(cells), "learned_points": sum(sum(c.values()) for c in cells.values())}
         sig = json.dumps([loc["room"], {k: v for k, v in attrs.items() if k not in STAMPS}], sort_keys=True, default=str)
