@@ -61,6 +61,9 @@ img.e{width:1em;height:1em;vertical-align:-0.12em;display:inline-block}
 .caldow{text-align:center;text-transform:uppercase;font-size:17px;font-weight:900;letter-spacing:.5px;color:#52616b}.calnum{text-align:center;font-size:30px;font-weight:900;line-height:1.05;margin:2px 0 7px}.calday.today .calnum::after{content:" TODAY";display:block;font-size:12px;color:#9a5800;letter-spacing:.5px}.calevent{border-radius:12px;background:#607d8b;color:#fff;padding:5px 7px;margin:5px 0;font-size:15px;font-weight:900;line-height:1.15;overflow-wrap:anywhere;border-left:7px solid rgba(0,0,0,.2)}.calevent.kids{background:#1565c0}.calevent.family{background:#ad1457}.caltime{display:block;font-size:12px;font-weight:800;opacity:.9;margin-bottom:2px}.calempty{text-align:center;color:#90a4ae;font-size:13px;font-weight:800;margin-top:14px}
 /* ---------- full-screen menu details ---------- */
 #detail{padding:12px;background:linear-gradient(160deg,#f8fbff,#fff7ea);z-index:41}.dethead{display:flex;align-items:center;gap:14px}.detback{background:#fff;border-radius:22px;box-shadow:0 5px 0 rgba(0,0,0,.12);font-size:30px;font-weight:900;padding:7px 16px}.dettitle{font-size:42px;font-weight:900}.detbody{flex:1;overflow-y:auto;overscroll-behavior:contain;margin-top:12px;padding:2px 8px 18px}.detsum{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.detcard{background:#fff;border-radius:24px;padding:14px 18px;box-shadow:0 5px 0 rgba(0,0,0,.1);font-size:20px;font-weight:800}.detcard .dn{font-size:48px;font-weight:900;color:var(--kid)}.detlist{max-width:900px;margin:14px auto}.detrow{display:flex;align-items:center;gap:12px;background:#fff;border-radius:18px;padding:10px 14px;margin:8px 0;font-size:20px;font-weight:800;box-shadow:0 3px 0 rgba(0,0,0,.08)}.detrow .di{font-size:38px}.detrow .dr{margin-left:auto;font-weight:900;color:var(--kid);white-space:nowrap}.detrewards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;max-width:1000px;margin:16px auto}.detreward{background:#fff;border:4px solid transparent;border-radius:24px;padding:14px;text-align:center;font-size:20px;font-weight:900;box-shadow:0 4px 0 rgba(0,0,0,.1)}.detreward.on{border-color:var(--kid)}.detreward .ri{font-size:62px}.detreward:active{transform:scale(.96)}
+/* ---------- packing quest (private HA test persona) ---------- */
+#packing{padding:12px;background:linear-gradient(145deg,#c8efff,#fff5c4 55%,#ffd8e8);z-index:43}.packtop{display:flex;align-items:center;gap:12px}.packback,.packreset{background:#fff;border-radius:20px;box-shadow:0 5px 0 rgba(0,0,0,.13);padding:7px 15px;font-size:25px;font-weight:900}.packtitle{flex:1;text-align:center;font-size:38px;font-weight:900}.packscore{background:#38265f;color:#fff;border-radius:22px;padding:6px 16px;font-size:28px;font-weight:900}.packbody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 8px 24px}.packhero{text-align:center;background:#fff9;border-radius:26px;padding:10px 16px;margin:6px auto 12px;max-width:900px}.packhero .ph{font-size:65px;line-height:1}.packhero h2{margin:0;font-size:30px}.packbar{height:22px;background:#fff;border-radius:14px;overflow:hidden;max-width:700px;margin:8px auto;box-shadow:inset 0 2px 5px #0003}.packbar div{height:100%;background:linear-gradient(90deg,#ffb300,#43a047);transition:width .4s}.bagopts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:1000px;margin:12px auto}.bagopt{background:#fff;border:5px solid transparent;border-radius:24px;text-align:center;padding:12px;box-shadow:0 5px 0 #0002;font-size:18px;font-weight:800}.bagopt .bi{font-size:68px}.bagopt.good{border-color:#43a047;background:#e8f5e9}.bagopt.bad{animation:shake .35s;border-color:#d32f2f}.bagcap{height:12px;background:#ddd;border-radius:8px;overflow:hidden;margin:7px}.bagcap div{height:100%;background:#5c6bc0}.packmissions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:1100px;margin:auto}.packmission{background:#fff;border-radius:24px;padding:12px 14px;box-shadow:0 5px 0 #0002;border:4px solid transparent}.packmission.done{border-color:#43a047;background:#eefbef}.packmission.locked{opacity:.48;filter:grayscale(.7)}.packmission h3{font-size:25px;margin:0 0 3px}.packitems{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px}.packitem{display:flex;align-items:center;gap:7px;background:#f1f3f5;border:3px solid transparent;border-radius:15px;padding:7px;font-size:16px;font-weight:850;min-height:48px}.packitem.on{background:#dff5df;border-color:#43a047}.packitem .pi{font-size:27px}.packnote{font-size:14px;font-weight:750;opacity:.72}.packfinish{max-width:850px;margin:16px auto;background:#fff;border:6px solid #43a047;border-radius:28px;padding:16px;text-align:center;font-size:24px;font-weight:900}.packfinish .pf{font-size:70px}@keyframes shake{25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+@media(max-width:800px){.packtop{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"back title reset" "score score score";align-items:center}.packback{grid-area:back}.packtitle{grid-area:title;font-size:23px;line-height:1.1}.packreset{grid-area:reset;font-size:20px}.packscore{grid-area:score;justify-self:center;margin-top:5px;padding:4px 18px;font-size:23px}.bagopts{grid-template-columns:1fr}.packmissions{grid-template-columns:1fr}.packitems{grid-template-columns:1fr}}
 /* progress bar */
 .goalrow{display:flex;align-items:center;gap:12px;margin:14px 6px 4px 10px}
 .barwrap{position:relative;flex:1;height:46px}
@@ -290,6 +293,11 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
   <div class="detbody" id="detbody"></div>
 </section>
 
+<section id="packing" class="screen">
+  <div class="packtop"><div class="packback" id="packback">&#9664; Kids</div><div class="packtitle" id="packtitle"></div><div class="packscore" id="packscore"></div><div class="packreset" id="packreset">Reset</div></div>
+  <div class="packbody" id="packbody"></div>
+</section>
+
 <section id="news" class="screen" style="align-items:center;justify-content:center;text-align:center;background:linear-gradient(160deg,#fff3c4,#ffd6f0,#d6ecff);z-index:40">
   <div style="font-size:80px;font-weight:900" id="newsh"></div>
   <div id="newsl" style="display:flex;flex-wrap:wrap;gap:20px;justify-content:center;margin-top:10px;max-width:1100px"></div>
@@ -356,13 +364,15 @@ function api(path,body){return fetch(path,{method:body?"POST":"GET",headers:{"Co
 /* Inside Home Assistant (served from /local/, e.g. a child's own tab at their other home): state comes from
    sensor.chore_state and actions go through the input_text relay, signed by the viewer's HA login; the server only
    lets that login act for the children it is allowed (home_assistant.user_kids). ?kid=<id> locks the screen to one child. */
-var HA_MODE=location.pathname.indexOf("/local/")===0,LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search),
+var HA_MODE=location.pathname.indexOf("/local/")===0,PACK_TEST=HA_MODE&&/[?&]packing_test=1(?:&|$)/.test(location.search),
+    LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search),
     LOCK_KID=LOCKED?(location.search.match(/[?&]kid=([a-z]+)/)||[])[1]:null;
+function packingTestState(a){if(!PACK_TEST||!a.packing_game)return a;var id="packing_test";a.config.kids=a.config.kids||[];if(!a.config.kids.some(function(k){return k.id===id}))a.config.kids.push({id:id,name:"X Æ A-12",icon:"1f680",color:"#5e35b1"});a.balance=a.balance||{};a.balance[id]=0;a.earned=a.earned||{};a.earned[id]=0;a.pending_points=a.pending_points||{};a.pending_points[id]=0;return a}
 if(HA_MODE){
   var hass=function(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}};
   var haState=function(){var h=hass(),st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));
     a.whatsnew=null;a.whatsnew_all=[];a.news_unseen=false;a.announce=[];a.announce_all=[];a.kid_open=a.kid_open||{};a.news_seen_kids={};a.ann_seen_kids={};
-    return a};
+    return packingTestState(a)};
   api=function(path,body){
     if(!body)return new Promise(function(res,rej){var t=0;(function w(){var st=haState();if(st)return res(st);if(++t>40)return rej("no sensor.chore_state");setTimeout(w,250)})()});
     var n=Math.random().toString(36).slice(2,9),v=JSON.stringify(Object.assign({a:path.replace("/api/",""),n:n},body));
@@ -462,25 +472,24 @@ function actLines(who){var out=[],now=Date.now()/1000,CH=function(id){return S.c
   var A=(S.active||{})[who];if(A){var c=CH(A.chore);out.push(E(c.icon)+' '+jobName(A,c)+(A.notimer?'':' '+E("23f1")+'<span class="cdu" data-since="'+A.ts+'"></span>'))}
   var P=(S.paused||{})[who];if(P&&!A){var c2=CH(P.chore);out.push(E("23f8")+' '+E(c2.icon)+' '+jobName(P,c2))}
   return out}
-/* bedtime: at bedtime or when a grown-up presses Bedtime, the screen sends them to bed instead of
-   offering chores and rewards. Only Brush teeth (if not done today) and the grown-up login stay. */
+/* bedtime: at bedtime or when a grown-up presses Bedtime, ordinary chores and rewards stop. The
+   bedtime_ok routine remains: teeth nightly, plus shower when its per-kid two-day window is due. */
 function drawBed(){var B=S.bedtime||{},el=$("bed");if(!B.on){if(el.style.display!=="none"){el.style.display="none";L("bed_off")}return}
   if(el.style.display==="none"){L("bed_on");if(kid)goHome("bedtime");else closeModal()}
-  var bt=S.config.chores.find(function(c){return c.bedtime_ok}),done=bt?((S.board[bt.id]||{}).done_today||[]):[],pend=bt?((S.board[bt.id]||{}).pending_by||[]):[];
+  var bts=S.config.chores.filter(function(c){return c.bedtime_ok}),due=function(k,c){return ((S.board[c.id]||{}).done_today||[]).indexOf(k)<0},waiting=function(k,c){return ((S.board[c.id]||{}).pending_by||[]).indexOf(k)>=0};
   var h='<div style="font-size:22vh;line-height:1">'+E("1f319")+'</div><div style="font-size:7vh;font-weight:900">Bedtime!</div><div style="font-size:4vh;opacity:.85">Time to go to bed. Good night '+E("1f634")+'</div>';
-  if(bt){h+='<div style="display:flex;gap:2vw;margin-top:2vh">'+S.config.kids.filter(function(k){return !LOCKED||k.id===LOCK_KID}).map(function(k){var d=done.indexOf(k.id)>=0;
-      var w=pend.indexOf(k.id)>=0;   // reported, waiting for a grown-up to check; passed -> off to bed
+  if(bts.length){h+='<div style="display:flex;gap:2vw;margin-top:2vh">'+S.config.kids.filter(function(k){return !LOCKED||k.id===LOCK_KID}).map(function(k){var need=bts.filter(function(c){return due(k.id,c)});
       return '<div class="bedk" data-bk="'+k.id+'" style="background:'+k.color+';border-radius:3vh;padding:1.5vh 2vw;font-size:3.4vh;font-weight:900">'+E(k.icon)+' '+k.name+'<br>'+
-        (w?E("1f50d")+' waiting for a grown-up':d?E("1f6cf")+' Go to bed!':E(bt.icon)+' '+bt.name)+'</div>'}).join("")+'</div>'}
+        (!need.length?E("1f6cf")+' Go to bed!':need.map(function(c){return waiting(k.id,c)?E("1f50d")+' '+c.name+' · waiting':E(c.icon)+' '+c.name}).join('<br>'))+'</div>'}).join("")+'</div>'}
   h+='<div id="bedadult" style="position:absolute;top:2vh;right:2vw;font-size:3vh;font-weight:900;background:rgba(255,255,255,.15);border-radius:2vh;padding:1vh 1.5vw">'+E("1f9d1")+' Grown-up</div>';
   el.innerHTML=h;el.style.display="flex";
   $("bedadult").onclick=function(){el.style.display="none";adultRequest()};
-  document.querySelectorAll("[data-bk]").forEach(function(n){n.onclick=function(){var k=n.dataset.bk;if(!bt||done.indexOf(k)>=0)return;L("bed_teeth",{kid:k});
+  document.querySelectorAll("[data-bk]").forEach(function(n){n.onclick=function(){var k=n.dataset.bk,bt=bts.find(function(c){return due(k,c)&&!waiting(k,c)});if(!bt)return;L("bed_routine",{kid:k,chore:bt.id});
     var bm=document.createElement("div");bm.style.cssText="position:fixed;inset:0;z-index:61;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
-    bm.innerHTML='<div style="background:#fff;color:#222;border-radius:4vh;padding:4vh 5vw;text-align:center"><div style="font-size:12vh">'+E(bt.icon)+'</div><div style="font-size:5vh;font-weight:900">'+(((bt.desc_for||{})[k])||bt.desc||"Did you brush your teeth?")+'</div>'+
+    bm.innerHTML='<div style="background:#fff;color:#222;border-radius:4vh;padding:4vh 5vw;text-align:center"><div style="font-size:12vh">'+E(bt.icon)+'</div><div style="font-size:5vh;font-weight:900">'+(((bt.desc_for||{})[k])||bt.desc||("Did you finish "+bt.name.toLowerCase()+"?"))+'</div>'+
       '<div style="display:flex;gap:3vw;justify-content:center;margin-top:3vh"><div id="bty" style="font-size:5vh;font-weight:900;background:#c8e6c9;border-radius:3vh;padding:1vh 3vw">'+E("2705")+' Yes</div><div id="btn_" style="font-size:5vh;font-weight:900;background:#ffcdd2;border-radius:3vh;padding:1vh 3vw">'+E("274c")+' Not yet</div></div></div>';
     document.body.appendChild(bm);bm.querySelector("#btn_").onclick=function(){bm.remove()};
-    bm.querySelector("#bty").onclick=function(){api("/api/report",{kid:k,chore:bt.id,feeling:"ok"}).then(function(r){L("bed_teeth_done",{kid:k,ok:r.ok});if(r.ok)S=r.state;bm.remove();drawBed()})}}})}
+    bm.querySelector("#bty").onclick=function(){api("/api/report",{kid:k,chore:bt.id,feeling:"ok"}).then(function(r){L("bed_routine_done",{kid:k,chore:bt.id,ok:r.ok});if(r.ok)S=r.state;bm.remove();drawBed()})}}})}
 function render(){
   if(!S)return;
   drawBed();
@@ -736,7 +745,26 @@ function getSeen(k){try{return parseFloat(localStorage.getItem(seenKey(k))||"0")
 function setSeen(k,t){seen[k]=t;try{localStorage.setItem(seenKey(k),String(t))}catch(e){}}
 function newInspections(k){var t=Math.max(getSeen(k),seen[k]||0);return reports(k).filter(function(r){return r.inspected_ts&&r.inspected_ts>t}).reverse()}
 
-function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+var PACK=null;
+function packCfg(){return S&&S.packing_game}
+function packLoad(){var c=packCfg(),raw=null;try{raw=JSON.parse(localStorage.getItem("packing_game_test")||"null")}catch(e){}PACK=raw&&raw.version===c.version?raw:{version:c.version,bag:null,checked:{},wrong:null};return PACK}
+function packSave(){try{localStorage.setItem("packing_game_test",JSON.stringify(PACK))}catch(e){}}
+function packMissionDone(m){return (m.items||[]).length>0&&(m.items||[]).every(function(x){return PACK.checked[x.id]})}
+function packEarned(c){var n=PACK.bag===c.correct_bag?(+c.bag_points||0):0;(c.missions||[]).forEach(function(m){if(packMissionDone(m))n+=+m.points||0});return n}
+function packOpen(){var c=packCfg();if(!c)return;packLoad();$("pick").classList.remove("on");$("kid").classList.remove("on");$("packing").classList.add("on");$("packtitle").textContent=c.title||"Packing quest";packRender();poke()}
+function packClose(){L("packing_close");$("packing").classList.remove("on");kid=null;$("pick").classList.add("on");render()}
+function packRender(){var c=packCfg();if(!c||!PACK)return;var earned=packEarned(c),total=+c.total_points||15,bagOK=PACK.bag===c.correct_bag;
+  $("packscore").innerHTML=earned+" / "+total+" "+E("2b50");
+  var h='<div class="packhero"><div class="ph">'+E(c.icon||"1f682")+E("1f9f3")+'</div><h2>'+safeText(c.subtitle||"Pack everything for the journey!")+'</h2><div class="packnote">Tap an item only after you physically put it in the right bag. This test never changes real points.</div><div class="packbar"><div style="width:'+Math.min(100,earned/Math.max(1,total)*100)+'%"></div></div></div>'+
+    '<h2 style="text-align:center">1. Choose luggage you can carry that fits everything <span class="tag">'+(+c.bag_points||0)+' ⭐</span></h2><div class="bagopts">'+(c.bags||[]).map(function(b){var picked=PACK.bag===b.id,bad=PACK.wrong===b.id;return '<div class="bagopt '+(picked?'good ':'')+(bad?'bad':'')+'" data-pbag="'+safeText(b.id)+'"><div class="bi">'+E(b.icon)+'</div><b>'+safeText(b.name)+'</b><div class="packnote">'+safeText(b.detail)+'</div><div class="bagcap"><div style="width:'+Math.min(100,(+b.capacity||0)/(+c.required_capacity||1)*100)+'%"></div></div><div>'+b.capacity+' spaces</div>'+(bad?'<div style="color:#b71c1c;margin-top:5px">'+safeText(b.reason||"That will not work for this trip.")+'</div>':picked?'<div style="color:#2e7d32;margin-top:5px">'+E("2705")+' Good fit—and you can carry it!</div>':'')+'</div>'}).join("")+'</div>';
+  h+='<div class="packmissions">'+(c.missions||[]).map(function(m){var done=bagOK&&packMissionDone(m),used=(m.items||[]).filter(function(x){return PACK.checked[x.id]}).reduce(function(n,x){return n+(+x.size||1)},0);return '<div class="packmission '+(done?'done ':'')+(!bagOK?'locked':'')+'"><h3>'+E(m.icon)+' '+safeText(m.title)+' <span class="tag">'+m.points+' ⭐</span></h3><div class="packnote">Put these in the <b>'+safeText(m.bag_name||m.bag)+'</b> · '+used+'/'+m.capacity+' spaces used</div><div class="bagcap"><div style="width:'+Math.min(100,used/Math.max(1,+m.capacity||1)*100)+'%;background:'+(used>m.capacity?'#d32f2f':'#43a047')+'"></div></div><div class="packitems">'+(m.items||[]).map(function(x){var on=!!PACK.checked[x.id];return '<div class="packitem '+(on?'on':'')+'" data-pitem="'+safeText(x.id)+'"><span class="pi">'+E(on?"2705":x.icon)+'</span><span>'+safeText(x.name)+(x.note?'<span class="packnote" style="display:block">'+safeText(x.note)+'</span>':'')+'</span></div>'}).join("")+'</div>'+(done?'<div style="text-align:center;color:#2e7d32;font-weight:900;margin-top:7px">'+E("2705")+' Mission packed · +'+m.points+' stars at inspection</div>':'')+'</div>'}).join("")+'</div>';
+  if(earned===total)h+='<div class="packfinish"><div class="pf">'+E("1f389")+E("1f682")+E("1f389")+'</div>Everything fits! Zip both bags and bring them to a grown-up.<div class="packnote" style="font-size:17px;margin-top:6px">In the real game, a grown-up checks the bags before the '+total+' stars are awarded. This fake test user earns no real stars.</div></div>';
+  $("packbody").innerHTML=h;
+  document.querySelectorAll("[data-pbag]").forEach(function(n){n.onclick=function(){var id=n.dataset.pbag,b=(c.bags||[]).find(function(x){return x.id===id});if(id===c.correct_bag){PACK.bag=id;PACK.wrong=null;L("packing_bag",{ok:true,id:id})}else{PACK.wrong=id;L("packing_bag",{ok:false,id:id,why:b&&b.reason})}packSave();packRender()}});
+  document.querySelectorAll("[data-pitem]").forEach(function(n){n.onclick=function(){if(!bagOK)return;PACK.checked[n.dataset.pitem]=!PACK.checked[n.dataset.pitem];L("packing_item",{id:n.dataset.pitem,on:PACK.checked[n.dataset.pitem]});packSave();packRender()}})
+}
+
+function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;if(k==="packing_test"){packOpen();return}page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(((S.chores_first||{})[k]||{}).on){cleanupModal();return}if(remindJob(k,lastUse))return;
@@ -1424,10 +1452,12 @@ function addOk(after){ // every message waits for a tap: kids read slowly
 function modal(h){$("mbox").innerHTML='<div class="mx" id="mx" aria-label="Close">&times;</div>'+h;$("mx").onclick=function(e){e.stopPropagation();closeModal()};$("m").classList.add("on");poke()}
 function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.chores:[]).forEach(function(c){delete c._note});$("m").classList.remove("on")}
 function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
-  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;DETAIL=null;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");$("detail").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
+  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;DETAIL=null;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");$("detail").classList.remove("on");$("packing").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
 $("menubtn").onclick=function(e){e.stopPropagation();MENU=!MENU;L("menu",{open:MENU});renderKidMenu()};
 $("detback").onclick=closeDetail;
+$("packback").onclick=packClose;
+$("packreset").onclick=function(){if(!confirm("Reset the fake packing test and unpack everything?"))return;try{localStorage.removeItem("packing_game_test")}catch(e){}packLoad();packRender()};
 $("calback").onclick=closeCalendar;
 $("calprev").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()-7);L("calendar_week",{move:-1,week:calKey(CALWEEK)});renderCalendar()};
 $("calnext").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()+7);L("calendar_week",{move:1,week:calKey(CALWEEK)});renderCalendar()};

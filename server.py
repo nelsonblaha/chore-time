@@ -735,6 +735,30 @@ def chores_first_state(evs, kids, reports=None):
     return {k: {x: y for x, y in lift(k, v).items() if x != "_at"} for k, v in out.items()}
 
 
+def music_block_state(evs, chores_first, must_first):
+    """Parent preference and the required-work gates that currently make it effective.
+
+    Home Assistant owns media enforcement.  Keeping the reasons here lets that side
+    stop Spotify and show a useful, silent explanation without reimplementing chore
+    rules or guessing which child is blocked.
+    """
+    enabled, by, since = False, None, None
+    for e in evs:
+        if e["type"] == "music_block":
+            enabled, by, since = bool(e.get("on")), e.get("by"), e.get("ts")
+    blockers = []
+    for kid, gate in chores_first.items():
+        if gate.get("on"):
+            blockers.append({"kid": kid, "kind": "cleanup", "name": "Mandatory chores",
+                             "items": list(gate.get("items") or [])})
+    for kid, gate in must_first.items():
+        if gate.get("rewards"):
+            blockers.append({"kid": kid, "kind": "must_do_first", "name": gate.get("name") or "Required chore",
+                             "chore": gate.get("chore")})
+    return {"enabled": enabled, "effective": bool(enabled and blockers), "by": by, "since": since,
+            "blockers": blockers}
+
+
 def kid_notes(evs):
     """grown-ups' one-time messages to a kid ("we gave your stars back"): unseen ones, shown when they open their screen"""
     seen = {e["ref"] for e in evs if e["type"] == "kid_note_seen"}
@@ -954,7 +978,7 @@ BED_END_H = int((HOUSE.get("hours") or {}).get("bed_end", 6))   # bedtime holds 
 def bedtime_hold(st):
     """At bedtime every job in progress goes on hold, resumable from 6 AM. One per call; teams pause together."""
     chs = {x["id"]: x for x in st["config"]["chores"]}
-    hold = [(k, a) for k, a in st["active"].items() if not (chs.get(a["chore"]) or {}).get("bedtime_ok")]   # brushing teeth goes on
+    hold = [(k, a) for k, a in st["active"].items() if not (chs.get(a["chore"]) or {}).get("bedtime_ok")]   # the evening routine goes on
     if not (st.get("bedtime") or {}).get("on") or not hold:
         return False
     from datetime import datetime as _d, timedelta as _td
@@ -1478,6 +1502,7 @@ def derive():
     except (OSError, ValueError):
         kid_open = {}
     must_first = must_do_first_state(c, board)
+    chores_first = chores_first_state(evs, [k["id"] for k in c["kids"]], reports)
     for gate_ in must_first.values():
         if gate_.get("rewards") and gate_.get("chore") in board:
             board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
@@ -1494,8 +1519,9 @@ def derive():
             "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
-                          started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first_state(evs, [k["id"] for k in c["kids"]], reports),
-            "must_do_first": must_first, "calendar": schedule.agenda(),
+                          started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first,
+            "must_do_first": must_first, "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
+            "music_block": music_block_state(evs, chores_first, must_first),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -1560,7 +1586,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "last_result", "inspect_photos", "inspect_media")
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
 
@@ -1620,7 +1646,8 @@ def push_state_sensor(state=None, last_result=None):
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "wind_down": state.get("wind_down"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
-             "calendar": state.get("calendar"),
+             "music_block": state.get("music_block"),
+             "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
     try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
         import room_eye
@@ -2054,6 +2081,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, (HERE / "static/kids.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/tv":
             return self.send(200, (HERE / "static/tvlock.html").read_bytes(), "text/html; charset=utf-8")
+        if p == "/music-block":   # silent Cast/Nest explanation when required chores pause Spotify
+            return self.send(200, (HERE / "static/music-block.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/now":   # grown-up "right now" board (e.g. a kitchen Hub Max)
             return self.send(200, (HERE / "static/now.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/inspect":
@@ -2215,7 +2244,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \
                 and not (chores.get(b.get("chore") or (st["paused"].get(b.get("kid")) or {}).get("chore")) or {}).get("bedtime_ok"):
-            # after bedtime only tooth-brushing; jobs and rewards wait for the morning (6 AM)
+            # after bedtime only the configured evening routine; jobs and rewards wait for morning (6 AM)
             return self.send(409, {"error": "bedtime"})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and b.get("chore") != "get_dressed" \
                 and (st.get("dress") or {}).get("on") and (st["dress"]["kids"].get(b.get("kid")) or "ready") != "ready":
@@ -2984,6 +3013,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "grown-ups only, for one kid"})
             items = [str(x).strip()[:120] for x in (b.get("items") or []) if str(x).strip()][:20]
             ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "items": items, "by": b["by"]})
+        elif p == "/api/music_block":   # HA enforces this only while required-work gates are outstanding
+            if b.get("by") not in insp:
+                return self.send(400, {"error": "grown-ups only"})
+            ev = append({"type": "music_block", "on": bool(b.get("on")), "by": b["by"]})
         elif p == "/api/space_tidy":
             space = next((x for x in HOUSE.get("tidy_spaces", []) if x["id"] == b.get("space")), None)
             if b.get("by") not in insp or space is None or type(b.get("tidy")) is not bool:

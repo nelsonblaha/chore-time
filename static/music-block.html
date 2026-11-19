@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mandatory chores before music</title>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{font-family:system-ui,-apple-system,sans-serif;color:#17203b;background:linear-gradient(145deg,#c8efff,#fff5c4 55%,#ffd8e8);display:flex;align-items:center;justify-content:center;padding:22px}
+main{width:min(950px,100%);text-align:center}.music{font-size:60px;line-height:1;margin-bottom:8px}h1{font-size:clamp(28px,4vw,48px);line-height:1.08;margin:0 auto 18px;max-width:900px}.kids{display:flex;flex-wrap:wrap;gap:16px;justify-content:center}.kid{background:#fff;border:5px solid var(--kid);border-radius:28px;box-shadow:0 7px 0 #0002;padding:15px 18px;width:min(265px,100%);min-height:180px}.icon{font-size:65px;line-height:1}.name{font-size:29px;font-weight:900;margin:5px 0}.need{font-size:18px;font-weight:800;margin:6px 0;background:#f2f5f7;border-radius:14px;padding:7px}.foot{font-size:20px;font-weight:800;margin:22px auto 0;max-width:780px}.clear{background:#fff;border:5px solid #43a047;border-radius:28px;padding:22px;font-size:32px;font-weight:900;box-shadow:0 7px 0 #0002}
+@media(max-width:550px){body{padding:12px;align-items:flex-start}.music{font-size:45px}h1{font-size:29px}.kid{min-height:0;width:100%;padding:10px}.icon{font-size:48px}.name{font-size:25px}.need{font-size:16px}.foot{font-size:17px;margin-top:16px}}
+</style></head><body><main><div class="music">🎵⏸️</div><h1 id="heading">These kids need to finish mandatory chores before music:</h1><div class="kids" id="kids"></div><div class="foot" id="foot"></div></main>
+<script>
+var $=function(id){return document.getElementById(id)},esc=function(s){return String(s==null?'':s)},emoji=function(hex){try{return String.fromCodePoint(parseInt(hex,16))}catch(e){return '⭐'}};
+function render(s){var b=(s.music_block||{}).blockers||[],by={};b.forEach(function(x){var a=by[x.kid]||(by[x.kid]=[]);if(x.kind==='cleanup'&&(x.items||[]).length)(x.items||[]).forEach(function(i){a.push(i)});else a.push(x.name||'Required chore')});
+  var ids=Object.keys(by),kids=(s.config||{}).kids||[];$('kids').textContent='';
+  if(!ids.length){$('heading').textContent='Mandatory chores are finished.';var d=document.createElement('div');d.className='clear';d.textContent='✅ Music can play now';$('kids').appendChild(d);$('foot').textContent='';return}
+  $('heading').textContent='These kids need to finish mandatory chores before music:';
+  ids.forEach(function(id){var k=kids.find(function(x){return x.id===id})||{name:'A kid',icon:'2b50',color:'#5e35b1'},card=document.createElement('div');card.className='kid';card.style.setProperty('--kid',k.color||'#5e35b1');var ic=document.createElement('div');ic.className='icon';ic.textContent=emoji(k.icon);card.appendChild(ic);var nm=document.createElement('div');nm.className='name';nm.textContent=esc(k.name);card.appendChild(nm);by[id].forEach(function(t){var n=document.createElement('div');n.className='need';n.textContent='✓ '+esc(t);card.appendChild(n)});$('kids').appendChild(card)});
+  $('foot').textContent='Spotify can play after a grown-up checks the mandatory chores.'}
+function load(){fetch('/api/state',{cache:'no-store'}).then(function(r){return r.json()}).then(render).catch(function(){})}load();setInterval(load,3000);
+</script></body></html>

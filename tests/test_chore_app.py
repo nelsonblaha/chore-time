@@ -54,7 +54,7 @@ def base_config():
             {"id": "brush_teeth", "name": "Brush teeth", "icon": "1faa5", "points": 1, "cooldown_h": 0, "shared": True,
              "each_daily": True, "after": "00:00", "bedtime_ok": True, "desc_for": {"ava": "Brush your teeth and clean your earring holes."}},
             {"id": "shower", "name": "Shower", "icon": "1f6bf", "points": 2, "cooldown_h": 0, "shared": True,
-             "each_daily": True, "each_days": 2, "after": "00:00", "before": "23:59"},
+             "each_daily": True, "each_days": 2, "after": "00:00", "before": "23:59", "bedtime_ok": True},
             {"id": "laundry", "name": "Put away laundry", "icon": "1f455", "points": 3, "room": True, "cooldown_h": 72, "on_demand": True},
             {"id": "piano", "name": "Practice piano", "icon": "1f4d6", "points": 3, "cooldown_h": 0,
              "slot": {"dow": 6, "time": "11:00"}, "price_dates": {}},
@@ -257,9 +257,9 @@ class Bedtime(Case):
         self.assertEqual(a.post("/api/report", {"kid": "max", "chore": "shower"})[0], 409)
         self.assertEqual(a.post("/api/report", {"kid": "zoe", "chore": "shower"})[0], 200)
 
-    def test_shower_not_at_bedtime(self):
+    def test_due_shower_is_part_of_bedtime_routine(self):
         self.bed()
-        self.assertEqual(self.app.post("/api/report", {"kid": "zoe", "chore": "shower"})[1].get("error"), "bedtime")
+        self.assertEqual(self.app.post("/api/report", {"kid": "zoe", "chore": "shower"})[0], 200)
 
     def test_brush_teeth_not_before_its_time(self):
         cfg = json.loads((self.app.dir / "chores.json").read_text())
@@ -268,7 +268,7 @@ class Bedtime(Case):
         if datetime.now().strftime("%H:%M") < "23:59":
             self.assertEqual(self.app.post("/api/report", {"kid": "zoe", "chore": "brush_teeth"})[0], 409)
 
-    def test_bedtime_allows_only_tooth_brushing(self):
+    def test_bedtime_allows_only_the_teeth_and_due_shower_routine(self):
         a = self.app
         a.event(type="adjust", kid="max", points=50, by="jordan", reason="test")
         self.bed()
@@ -276,6 +276,7 @@ class Bedtime(Case):
         self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "kitchen"})[1].get("error"), "bedtime")
         self.assertEqual(a.post("/api/spend", {"kid": "max", "reward": "show", "tv": "livingroom"})[1].get("error"), "bedtime")
         self.assertEqual(a.post("/api/report", {"kid": "max", "chore": "brush_teeth"})[0], 200)
+        self.assertEqual(a.post("/api/report", {"kid": "max", "chore": "shower"})[0], 200)
         self.bed(False)
         self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "kitchen"})[0], 200)
 
@@ -1709,6 +1710,12 @@ class GrownUpFromHA(unittest.TestCase):
         self.assertNotIn('location.href="/inspect?', kids)
         self.assertIn('BK==="kids"&&HA_MODE?"/local/chore-kids.html"', (REPO / "static" / "inspect.html").read_text())
 
+    def test_parent_controls_use_music_policy_switch_and_regular_laundry_card(self):
+        inspect = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("Spotify waits for mandatory chores", inspect)
+        self.assertIn('data-a="od"', inspect)
+        self.assertNotIn('data-od="', inspect)
+
 
 class PausedTeamJobs(Case):
     """A sent-back team job put off for later, and a teammate's other paused job."""
@@ -1881,6 +1888,31 @@ class ChoresFirst(Case):
         # blocking again later starts fresh (the old pass doesn't count)
         a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Dishes"]})
         self.assertTrue(a.state()["chores_first"]["ava"]["on"])
+
+    def test_spotify_switch_is_armed_then_effective_only_while_required_work_remains(self):
+        a = App(base_config())
+        self.assertEqual(a.state()["music_block"], {"enabled": False, "effective": False, "by": None,
+                                                    "since": None, "blockers": []})
+        self.assertEqual(a.post("/api/music_block", {"on": True, "by": "ava"})[0], 400)
+        self.assertEqual(a.post("/api/music_block", {"on": True, "by": "jordan"})[0], 200)
+        self.assertTrue(a.state()["music_block"]["enabled"])
+        self.assertFalse(a.state()["music_block"]["effective"])
+        a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Dishes"]})
+        block = a.state()["music_block"]
+        self.assertTrue(block["effective"])
+        self.assertEqual(block["blockers"], [{"kid": "ava", "kind": "cleanup", "name": "Mandatory chores",
+                                               "items": ["Dishes"]}])
+        self.assertEqual(a.post("/api/music_block", {"on": False, "by": "jordan"})[0], 200)
+        self.assertFalse(a.state()["music_block"]["effective"])
+
+    def test_spotify_block_includes_scheduled_mandatory_jobs(self):
+        state = self.s.music_block_state(
+            [{"id": "1", "type": "music_block", "on": True, "by": "jordan", "ts": 10}],
+            {"ava": {"on": False}},
+            {"ava": {"rewards": True, "name": "Homework", "chore": "homework"}},
+        )
+        self.assertTrue(state["effective"])
+        self.assertEqual(state["blockers"][0]["name"], "Homework")
 
 
 class GrownUpStartsVR(Case):

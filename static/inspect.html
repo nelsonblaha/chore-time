@@ -681,20 +681,18 @@ function render(){
     (choreOn?tvRows.join(""):'')+
     (grants.length?'<div class="tvg" style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null;return '<div style="opacity:.9;font-size:14px">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</div>'}).join("")+'</div>':'')+
     (choreOn&&open?'<div class="row" style="margin-top:8px"><button data-ta="*:five">⏱️ 5-min countdown</button><button data-ta="*:minus">−10</button><button data-ta="*:plus">+10</button><button class="no" style="background:#fff" data-ta="*:lock">🔒 Lock now</button></div>':'')+'</div>';
-  // on-demand jobs (e.g. laundry after running the machines): a grown-up opens them; hidden from kids otherwise
-  var OD=S.config.chores.filter(function(c){return c.on_demand&&c.id.indexOf('help_')!==0});   // robot hero jobs open by themselves: no toggle
-  // toggles: on-demand jobs (laundry) and "Put on clothes!" -- a switch shows plainly whether it's on
-  var DR=S.dress||{},tg=function(id,on,icon,label,sub,attr){return '<label class="tgl'+(on?' on':'')+'" '+attr+'><span class="sw"><span></span></span><span>'+icon+' <b>'+label+'</b>'+(sub?'<br><span class="mute">'+sub+'</span>':'')+'</span></label>'};
-  tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">'+OD.map(function(c){var b=S.board[c.id]||{},open=!!b.opened,busy=(b.pending_by||[]).length;
-      return tg(c.id,open||busy,E(c.icon),esc(c.name)+' open for the kids',busy?'a kid is waiting for inspection':open?'on: the kids can do it now':'off',(busy?'data-odbusy="1" ':'')+'data-od="'+c.id+'" data-on="'+(open?1:0)+'"')}).join("")+
+  // Policy switches. On-demand chores such as laundry stay with the ordinary chore cards below.
+  var DR=S.dress||{},MB=S.music_block||{},tg=function(id,on,icon,label,sub,attr){return '<label class="tgl'+(on?' on':'')+'" '+attr+'><span class="sw"><span></span></span><span>'+icon+' <b>'+label+'</b>'+(sub?'<br><span class="mute">'+sub+'</span>':'')+'</span></label>'};
+  var mbKids=(MB.blockers||[]).map(function(x){return kidOf(x.kid).name}).filter(function(x,i,a){return a.indexOf(x)===i});
+  tb+='<div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">'+
+    tg("music",MB.enabled,"🎵","Spotify waits for mandatory chores",MB.effective?'blocking now · '+esc(mbKids.join(' + '))+' still '+(mbKids.length===1?'has':'have')+' required work':MB.enabled?'armed · Spotify will pause when mandatory work is assigned':'off · Spotify plays normally','id="musictgl"')+
     tg("dress",DR.on,"👕","Put on clothes!",DR.on?(DR.school?'🏫 school morning (quiet: no speakers) · ':'')+Object.keys(DR.kids||{}).map(function(k){var v=DR.kids[k];return esc(kidOf(k).name)+' '+(v==="ready"?"✅":v==="waiting"?"🔍 check them":"⏳")}).join(" · ")+' · turns off when all are ✅'+(DR.school?' or at '+hmA(DR.until):''):'off · kids must dress (shirt, pants, underwear, socks, shoes) before anything else'+(DR.next?'<br>🏫 on by itself next school morning: '+DR.next.day+' '+new Date(DR.next.ts*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):''),'id="dresstgl"')+
     S.config.kids.map(function(k){var F=(S.chores_first||{})[k.id]||{},its=F.items||[];return tg("cf"+k.id,F.on,E(k.icon),esc(k.name)+': mandatory chores first',F.on?'no rewards until “Tidy up first!” passes inspection · since '+fmtT(F.since)+(its.length?'<br>📝 '+its.map(esc).join(' · '):'')+' <a href="#" data-cfe="'+k.id+'">✏️ edit list</a>':(F.lifted?'lifted '+fmtT(F.lifted.ts)+' (passed inspection) · ':'off · ')+'turn on to block '+esc(k.name)+'\'s rewards until a mess is tidied up','data-cf="'+k.id+'"')}).join("")+'</div>';
   var BT=S.bedtime||{};
   tb+='<div class="row" style="margin-top:8px"><button class="'+(BT.on?'':'no')+'" id="bedbtn" style="font-size:18px">'+(BT.on?'☀️ End bedtime (kids can use the screens again)':'🌙 Bedtime now')+'</button><span class="mute">'+(BT.on?'Bedtime screen is up'+(BT.by?' ('+esc(inspOf(BT.by).name)+')':''):'Starts by itself at '+(BT.at||"20:30"))+'</span></div>';
   tb+='<div class="mute" style="margin-top:6px">Only enforced while Chore time is on. The speaker warns 5 minutes before a TV locks. A TV that reports the episode\'s end lets a show finish (never past an hour into one title; a new episode, pause or app switch locks it). Others lock on the timer.</div>';
   $("tvbox").innerHTML=tb;
-  document.querySelectorAll("[data-od]").forEach(function(b){b.onclick=function(e){e.preventDefault();if(b.dataset.odbusy){toast("A kid is waiting: inspect it below");return}
-    if(b.dataset.on==="1")post("/api/close_od",{chore:b.dataset.od},"Closed");else post("/api/reopen",{chore:b.dataset.od},"Open: the kids can do it now")}});
+  if($("musictgl"))$("musictgl").onclick=function(e){e.preventDefault();var on=!(S.music_block||{}).enabled;post("/api/music_block",{on:on},on?"Spotify will wait for mandatory chores":"Spotify block is off")};
   if($("dresstgl"))$("dresstgl").onclick=function(e){e.preventDefault();var on=!(S.dress||{}).on;post("/api/dress",{on:on},on?"Put on clothes! is ON":"Put on clothes! is off")};
   document.querySelectorAll("[data-cf]").forEach(function(n){n.onclick=function(e){e.preventDefault();var k=n.dataset.cf;
     if(e.target.closest("[data-cfe]")||!((S.chores_first||{})[k]||{}).on){CFK=k;openPM("cfedit");return}   // turning on: list what to clean first
@@ -746,14 +744,15 @@ function render(){
   document.querySelectorAll("[data-pzp]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzp,z=PZ[k],v=prompt("Partial points for "+kidOf(k).name+" ("+choreOf(z.chore).name+")?","1");if(!v)return;
     post("/api/adjust",{kid:k,points:+v,reason:"partly did "+choreOf(z.chore).name},"+"+v+" for "+kidOf(k).name)}});
   // chart
-  var ch="";S.config.chores.forEach(function(c){if(c.hidden)return;var bd=S.board[c.id]||{};var tags=c.bundle?'<span class="tag">'+(c.only?c.only.join(", ")+' only · ':'')+'now '+(bd.price||0)+' pts = '+((bd.covers||[]).map(function(x){var cc=S.config.chores.find(function(y){return y.id===x})||{name:x};return esc(cc.name)+' '+((S.board[x]||{}).price||0)}).join(' + ')||'all tidy')+(bd.boost_pct?' +'+bd.boost_pct+'% big-job bonus ('+bd.boost_from+'→'+bd.price+')':'')+'</span> ':"";
+  var ch="";S.config.chores.forEach(function(c){if(c.hidden)return;var bd=S.board[c.id]||{},odBusy=(bd.pending_by||[]).length||Object.values(S.active||{}).concat(Object.values(S.paused||{})).some(function(a){return a.chore===c.id});var tags=c.bundle?'<span class="tag">'+(c.only?c.only.join(", ")+' only · ':'')+'now '+(bd.price||0)+' pts = '+((bd.covers||[]).map(function(x){var cc=S.config.chores.find(function(y){return y.id===x})||{name:x};return esc(cc.name)+' '+((S.board[x]||{}).price||0)}).join(' + ')||'all tidy')+(bd.boost_pct?' +'+bd.boost_pct+'% big-job bonus ('+bd.boost_from+'→'+bd.price+')':'')+'</span> ':"";
     if(bd.bonus)tags+='<span class="tag bonus">next time: '+(bd.price==null?"?":bd.price)+'</span> ';
     if(bd.note)tags+='<span class="tag">📝 '+esc(bd.note).replace(/\n/g," · ")+'</span> ';
     if(bd.clean_until)tags+='<span class="tag clean">tidy until '+new Date(bd.clean_until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</span> ';
     if(bd.pending_by&&bd.pending_by.length)tags+='<span class="tag pend">waiting</span> ';
+    if(c.on_demand)tags+='<span class="tag '+(bd.opened||odBusy?'clean':'')+'">'+(odBusy?'active · kid working or waiting':bd.opened?'active for kids':'inactive · parent marks active when laundry is ready')+'</span> ';
     var T=(S.typical||{})[c.id];if(T)tags+='<span class="tag">⏱ ~'+Math.round(T.minutes)+' min ('+T.n+')</span> ';
     ch+='<div class="card chore" data-c="'+c.id+'"><span class="big">'+E(c.icon)+'</span><span class="nm">'+esc(c.name)+' <span class="mute">'+(c.points==null?"adult sets":c.points+" pts")+(c.room?" · room":"")+'</span><br>'+tags+'</span>'+
-      '<button data-a="price">Price once</button>'+(c.room&&!c.bundle?'<button data-a="tidy" title="Record tidy now; no points; vacuum history stays separate">✨ Mark tidy</button>':'')+(bd.clean_until?'<button data-a="reopen">Reopen</button>':'')+'<button data-a="edit">Edit</button></div>'});
+      '<button data-a="price">Price once</button>'+(c.on_demand&&!odBusy?'<button data-a="od" data-on="'+(bd.opened?1:0)+'">'+(bd.opened?'Mark inactive':'Mark active')+'</button>':'')+(c.room&&!c.bundle?'<button data-a="tidy" title="Record tidy now; no points; vacuum history stays separate">✨ Mark tidy</button>':'')+(bd.clean_until?'<button data-a="reopen">Reopen</button>':'')+'<button data-a="edit">Edit</button></div>'});
   // group into collapsible floors (open/closed state remembered while the page is open)
   var groups={Downstairs:[],Upstairs:[],Other:[]};
   ch.split('<div class="card chore" data-c="').slice(1).forEach(function(part){var id=part.slice(0,part.indexOf('"')),c=choreOf(id);
@@ -772,6 +771,7 @@ function render(){
     n.querySelector('[data-a="price"]').onclick=function(){NOTEFORM={chore:c.id,mode:"price"};openPM("noteform")};
     var tidy=n.querySelector('[data-a="tidy"]');if(tidy){var busy=Object.values(S.active||{}).concat(Object.values(S.paused||{})).some(function(a){return a.chore===c.id})||((S.board[c.id]||{}).pending_by||[]).length;tidy.disabled=!!busy;if(busy)tidy.title="Finish or inspect the existing job first";tidy.onclick=function(){tidy.disabled=true;post("/api/mark_clean",{chore:c.id},c.name+" marked tidy · no points").finally(function(){tidy.disabled=false})};}
     var ro=n.querySelector('[data-a="reopen"]');if(ro)ro.onclick=function(){NOTEFORM={chore:c.id,mode:"reopen"};openPM("noteform")};
+    var od=n.querySelector('[data-a="od"]');if(od)od.onclick=function(){if(od.dataset.on==="1")post("/api/close_od",{chore:c.id},c.name+" marked inactive");else post("/api/reopen",{chore:c.id},c.name+" marked active for the kids")};
     n.querySelector('[data-a="edit"]').onclick=function(){CHFORM={id:c.id};openPM("chform")}});
   $("nadd").onclick=function(){CHFORM={id:null};openPM("chform")};
   // recent
