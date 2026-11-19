@@ -21,7 +21,7 @@ for(const f of ['static/kids.html','static/inspect.html','static/tvlock.html','s
       'S.active=S.active||{};S.active["'+k2+'"]={chore:"'+r1+'",ts:S.now-3600,team:["'+k2+'"]};remindJob("'+k2+'",0);'+
       'var _al='+JSON.stringify(rooms.slice(0,7))+'.map(function(c,i){return {id:"t"+i,chore:c,price:9,base:3}});showAnnounce(_al,function(){});if(AWV.held[0])awardDetail(AWV.held[0],AWV.owner,true);if(AWV.my[0])awardDetail(AWV.my[0],AWV.owner,false);').join(''),c);
     const pack={version:'smoke',title:'Packing test',total_points:3,bag_points:1,required_capacity:1,correct_bag:'pair',bags:[{id:'pair',name:'Two bags',icon:'1f9f3',capacity:1}],missions:[{id:'m',title:'Pack',icon:'1f392',points:2,bag:'backpack',bag_name:'backpack',capacity:1,items:[{id:'i',name:'Item',icon:'1f455',size:1}]}]};
-    vm.runInContext('PACK_TEST=true;S.packing_game='+JSON.stringify(pack)+';packingTestState(S);render();openKid("packing_test");PACK.bag="pair";PACK.checked.i=true;packRender();packClose();',c);
+    vm.runInContext('PACK_TEST=true;S.packing_game='+JSON.stringify(pack)+';packingTestState(S);render();openKid("packing_test");packOpen();PACK.bag="pair";PACK.checked.i=true;packRender();packClose();',c);
     // also the "doing now" race bar path with a fake active chore + record
     const st2=JSON.parse(JSON.stringify(st));st2.active={[k1]:{chore:r0,ts:Date.now()/1000-120}};st2.records={[r0]:{kid:k0,sec:300,ts:0}};st2.typical={[r0]:{minutes:8,n:4}};
     st2.awards={[k1]:[{id:'x',icon:'1f947',title:'Fastest ever!',sub:'5:00',ts:Date.now()/1000}]};st2.bedtime={on:true,at:'20:30'};

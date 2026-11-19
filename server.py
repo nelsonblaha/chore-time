@@ -459,7 +459,7 @@ def certify_at(ch, slot):
 
 # Fields a grown-up can set on a chart chore from the parents' page (the full chore form). Only keys present in the
 # request change; an empty/false value removes the key so chores.json stays tidy.
-CHORE_FLAGS = ("once", "each_daily", "on_demand", "daylight")
+CHORE_FLAGS = ("once", "each_daily", "on_demand", "daylight", "adult_first")
 
 
 def chore_fields(ch, c):
@@ -522,7 +522,7 @@ def grocy_period(x, more):
     return {"period_type": "dynamic-regular", "period_days": max(1, days)} if float(x.get("cooldown_h") or 0) > 0 else {"period_type": "manually"}
 
 
-GROCY_EXTRA_KEYS = ("once", "each_daily", "on_demand", "daylight", "household", "from", "until", "after", "before", "est_minutes")
+GROCY_EXTRA_KEYS = ("once", "each_daily", "on_demand", "daylight", "adult_first", "household", "from", "until", "after", "before", "est_minutes")
 
 
 def grocy_chore_userfields(gid, x, more, new=False):
@@ -735,7 +735,81 @@ def chores_first_state(evs, kids, reports=None):
     return {k: {x: y for x, y in lift(k, v).items() if x != "_at"} for k, v in out.items()}
 
 
-def music_block_state(evs, chores_first, must_first):
+def adult_first_state(c, evs, reports, now=None):
+    """First-time teaching jobs: per-child training, a live approval, and a house-wide one-hour snooze."""
+    now = time.time() if now is None else now
+    out = {}
+    for ch in c.get("chores") or []:
+        if not ch.get("adult_first"):
+            continue
+        cid = ch["id"]
+        trained = {m for r in (reports or {}).values() if r.get("chore") == cid and r.get("status") == "inspected"
+                   and not r.get("partial") for m in (r.get("team") or [r.get("kid")])}
+        snoozes = [e for e in evs if e.get("type") in ("assist_snooze", "adult_busy")]
+        snoozed_until = max([float(e.get("until") or 0) for e in snoozes] or [0])
+        approved = {e.get("kid") for e in evs if e.get("type") == "assist_ok" and e.get("chore") == cid
+                    }
+        out[cid] = {"snoozed_until": snoozed_until if snoozed_until > now else 0,
+                    "kids": {k["id"]: {"trained": k["id"] in trained, "approved": k["id"] in approved}
+                             for k in c.get("kids") or []}}
+    return out
+
+
+def adult_busy_until(evs, now=None):
+    """One shared 'busy, later' pause for every action that needs a grown-up."""
+    now = time.time() if now is None else now
+    until = max([float(e.get("until") or 0) for e in evs if e.get("type") in ("assist_snooze", "adult_busy")] or [0])
+    return until if until > now else 0
+
+
+def shower_requirement_state(c, reports, now=None, home_days=None, current_houses=None):
+    """A shower is due on a child's second consecutive night at the same parent's house.
+
+    Changing houses supplies an implicit last-night shower credit. A pending or passed
+    shower report supplies real credit immediately, so the rest of the bedtime routine
+    can continue without waiting for inspection.
+    """
+    from datetime import datetime, timedelta
+    now = now or datetime.now()
+    today = now.date()
+    home_days = home_days if home_days is not None else (GUARD.get("home_days") or load_home_days())
+    current_houses = current_houses or {k["id"]: kid_where(c, k["id"]) for k in c.get("kids") or []}
+    primary = home_of(c)
+    households = [h["id"] for h in c.get("households") or []]
+
+    def house_on(kid, day):
+        if day == today:
+            return current_houses.get(kid) or primary
+        at_primary = day.isoformat() in set(home_days.get(kid) or [])
+        if at_primary or len(households) < 2:
+            return primary
+        return households[1]
+
+    out = {}
+    for k in c.get("kids") or []:
+        kid = k["id"]
+        house = current_houses.get(kid) or primary
+        start = today
+        for n in range(1, 31):
+            d = today - timedelta(days=n)
+            if house_on(kid, d) != house:
+                break
+            start = d
+        implicit = start - timedelta(days=1)   # return from the other parent = presumed showered last night
+        shower_dates = []
+        for r in (reports or {}).values():
+            if r.get("chore") == "shower" and r.get("status") in ("pending", "inspected") and not r.get("partial") \
+                    and kid in (r.get("team") or [r.get("kid")]):
+                shower_dates.append(datetime.fromtimestamp(r["ts"]).date())
+        credit = max([implicit] + shower_dates)
+        nights = max(0, (today - credit).days)
+        out[kid] = {"due": nights >= 2, "household": house, "stay_started": start.isoformat(),
+                    "last_credit": credit.isoformat(), "nights_without": nights,
+                    "presumed_on_return": credit == implicit and start == today}
+    return out
+
+
+def music_block_state(evs, chores_first, must_first, present=None, reports=None, arrivals=None, now=None):
     """Parent preference and the required-work gates that currently make it effective.
 
     Home Assistant owns media enforcement.  Keeping the reasons here lets that side
@@ -755,6 +829,28 @@ def music_block_state(evs, chores_first, must_first):
         if gate.get("rewards"):
             blockers.append({"kid": kid, "kind": "must_do_first", "name": gate.get("name") or "Required chore",
                              "chore": gate.get("chore")})
+    # With no explicit parent/priority gate, the switch still means one approved
+    # chore per child who is physically here, reset each day and on arrival.
+    if enabled and not blockers and present is not None:
+        from datetime import datetime
+        now_ = now or datetime.now()
+        midnight = now_.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        arrivals = arrivals or {}
+        for kid in present:
+            baseline = max(float(since or 0), midnight)
+            at = (arrivals.get(kid) or {}).get(now_.date().isoformat())
+            if at:
+                try:
+                    baseline = max(baseline, datetime.strptime(now_.date().isoformat() + " " + at,
+                                                               "%Y-%m-%d %H:%M").timestamp())
+                except (TypeError, ValueError):
+                    pass
+            done = any(r.get("status") == "inspected" and not r.get("partial")
+                       and float(r.get("inspected_ts") or 0) >= baseline
+                       and kid in (r.get("team") or [r.get("kid")]) for r in (reports or {}).values())
+            if not done:
+                blockers.append({"kid": kid, "kind": "one_chore", "name": "One approved chore",
+                                 "items": ["Finish one chore and have a grown-up approve it"]})
     return {"enabled": enabled, "effective": bool(enabled and blockers), "by": by, "since": since,
             "blockers": blockers}
 
@@ -924,10 +1020,12 @@ def cf_board(c, evs, reports, board):
     return board
 
 
-def live_cfg(c, board):
+def live_cfg(c, board, assisted=None):
     out = []
     for ch in c["chores"]:
-        why = None if ch.get("hidden") else chore_closed(ch, board)
+        ast = (assisted or {}).get(ch["id"]) or {}
+        why = None if ch.get("hidden") else ("snoozed" if ast.get("snoozed_until", 0) > time.time()
+                                               else chore_closed(ch, board))
         out.append(dict(ch, hidden=True, closed=why) if why else ch)
     return dict(c, chores=out)
 
@@ -1503,6 +1601,18 @@ def derive():
         kid_open = {}
     must_first = must_do_first_state(c, board)
     chores_first = chores_first_state(evs, [k["id"] for k in c["kids"]], reports)
+    assisted = adult_first_state(c, evs, reports)
+    shower = shower_requirement_state(c, reports)
+    if "shower" in board:
+        # `each_daily` normally means once per day. A shower is instead offered
+        # only when this child's two-night rule says it is due.
+        board["shower"]["done_today"] = sorted(k for k, v in shower.items() if not v.get("due"))
+    present = sorted(GUARD.get("home_now") or []) if "GUARD" in globals() else []
+    assist_requests = [{"nonce": n, "kid": r.get("kid"), "chore": r.get("chore"), "reward": r.get("reward"),
+                        "purpose": r.get("purpose"), "ts": r["ts"]}
+                       for n, r in ADULT_REQ.items() if r.get("purpose") in ("assist", "reward")
+                       and r.get("status") == "pending" and time.time() - r["ts"] <= 120] \
+        if "ADULT_REQ" in globals() else []
     for gate_ in must_first.values():
         if gate_.get("rewards") and gate_.get("chore") in board:
             board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
@@ -1511,7 +1621,7 @@ def derive():
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
             "wind_down": wind_down_state(c),
-            "config": live_cfg(c, cf_board(c, evs, reports, board)), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
+            "config": live_cfg(c, cf_board(c, evs, reports, board), assisted), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
@@ -1520,8 +1630,11 @@ def derive():
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
                           started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first,
-            "must_do_first": must_first, "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
-            "music_block": music_block_state(evs, chores_first, must_first),
+            "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
+            "adult_busy_until": adult_busy_until(evs), "shower": shower,
+            "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
+            "music_block": music_block_state(evs, chores_first, must_first, present, reports,
+                                               GUARD.get("home_arrivals") or load_home_arrivals()),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -1586,7 +1699,8 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "last_result", "inspect_photos", "inspect_media")
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block",
+             "adult_first", "assist_requests", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
 
@@ -1752,12 +1866,29 @@ def send_adult_request(nonce, who, where):
         tok = ha_token()
     except OSError:
         return
+    req = ADULT_REQ.get(nonce) or {}
+    if req.get("purpose") in ("assist", "reward"):
+        c = cfg()
+        kn = next((k["name"] for k in c["kids"] if k["id"] == req.get("kid")), req.get("kid", "A kid"))
+        if req.get("purpose") == "reward":
+            rw = next((x for x in c["rewards"] if x["id"] == req.get("reward")), {})
+            title, message = "Chores: VR permission", "%s wants to redeem %s for %s⭐. Are you available to help?" % (
+                kn, rw.get("name", "VR"), rw.get("cost", "?"))
+        else:
+            ch = next((x for x in c["chores"] if x["id"] == req.get("chore")), {})
+            title, message = "Chores: first-time help needed", "%s wants to do %s (%s⭐). Can you teach and help this first time?" % (
+                kn, ch.get("name", "this chore"), ch.get("points", "?"))
+        actions = [{"action": "CHORE_OK_" + nonce, "title": "Allow now" if req.get("purpose") == "reward" else "Help now"},
+                   {"action": "CHORE_NO_" + nonce, "title": "Busy, later (1 hour)"}]
+    else:
+        title = "Chores: is this you?"
+        message = f"Someone at the {where} wants grown-up mode as {who.title()}."
+        actions = [{"action": "CHORE_OK_" + nonce, "title": "It's me"},
+                   {"action": "CHORE_NO_" + nonce, "title": "Not me"}]
     for svc in ADULT_NOTIFY.get(who, []):
-        ha_call(svc, {"title": "Chores: is this you?",
-                      "message": f"Someone at the {where} wants grown-up mode as {who.title()}.",
+        ha_call(svc, {"title": title, "message": message,
                       "data": {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
-                               "actions": [{"action": "CHORE_OK_" + nonce, "title": "It's me"},
-                                           {"action": "CHORE_NO_" + nonce, "title": "Not me"}]}}, tok)
+                               "actions": actions}}, tok)
 
 
 def parent_quiet():
@@ -1923,6 +2054,25 @@ def clear_adult_request(nonce, who):
         ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-adult-" + nonce}}, tok)
 
 
+def resolve_assist_request(nonce, ok, by):
+    """Resolve one adult-required invitation exactly once."""
+    r = ADULT_REQ.get(nonce)
+    if not r or r.get("purpose") not in ("assist", "reward") or r.get("status") != "pending":
+        return None
+    r["status"] = "ok" if ok else "no"
+    if ok and r.get("purpose") == "assist":
+        append({"type": "assist_ok", "kid": r["kid"], "chore": r["chore"], "by": by})
+    elif not ok:
+        r["until"] = time.time() + 3600
+        append({"type": "adult_busy", "kid": r["kid"], "chore": r.get("chore"), "reward": r.get("reward"),
+                "by": by, "until": r["until"]})
+    after_change()
+    threading.Thread(target=clear_adult_request, args=(nonce, r["who"]), daemon=True).start()
+    ilog({"src": "adult", "action": r["status"], "purpose": r["purpose"], "kid": r["kid"],
+          "chore": r.get("chore"), "reward": r.get("reward"), "by": by})
+    return r
+
+
 def watch_ha_events():
     """Notification buttons and brief doorway edges used by the vacuum."""
     import asyncio
@@ -2040,9 +2190,12 @@ def watch_ha_events():
                             nonce = act[9:]
                             r = ADULT_REQ.get(nonce)
                             if r and r["status"] == "pending":
-                                r["status"] = "ok" if act.startswith("CHORE_OK_") else "no"
-                                ilog({"src": "adult", "action": r["status"], "who": r["who"], "ip": r["ip"]})
-                                print("grown-up request", nonce, r["status"], flush=True)
+                                if r.get("purpose") == "assist":
+                                    resolve_assist_request(nonce, act.startswith("CHORE_OK_"), r["who"])
+                                else:
+                                    r["status"] = "ok" if act.startswith("CHORE_OK_") else "no"
+                                    ilog({"src": "adult", "action": r["status"], "who": r["who"], "ip": r["ip"]})
+                                    print("grown-up request", nonce, r["status"], flush=True)
             except Exception as ex:  # noqa: BLE001
                 entry_edges.online = False
                 print("HA event socket error", ex, flush=True)
@@ -2232,6 +2385,14 @@ class H(BaseHTTPRequestHandler):
             envelopes.cancel(str(b.get("job") or ""))
             ilog({"src": "envelope", "kid": b.get("kid"), "cancel": b.get("job")})
             return self.send(200, {"ok": True})
+        if p == "/api/envelope_already":   # recover a letter workflow when the physical envelope already exists
+            if b.get("kid") not in kids or not envelopes.enabled():
+                return self.send(400, {"error": "no envelopes here"})
+            act_ = st["active"].get(b["kid"]) or {}
+            team_ = set(act_.get("team") or [b["kid"]]) & kids
+            envelopes.mark_printed(team_ or {b["kid"]})
+            ilog({"src": "envelope", "kid": b["kid"], "action": "already_printed"})
+            return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/envelope":   # a kid prints the envelope for their letter (not a ledger event)
             if b.get("kid") not in kids or not envelopes.enabled():
                 return self.send(400, {"error": "no envelopes here"})
@@ -2262,6 +2423,13 @@ class H(BaseHTTPRequestHandler):
             chore_ = b.get("chore") or (st.get("paused", {}).get(kid_) or {}).get("chore")
             if gate_.get("on") and chore_ != gate_.get("chore") and not (chores.get(chore_) or {}).get("bedtime_ok"):
                 return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
+            ast_ = ((st.get("adult_first") or {}).get(chore_) or {})
+            ak_ = (ast_.get("kids") or {}).get(kid_) or {}
+            if (chores.get(chore_) or {}).get("adult_first") and not ak_.get("trained"):
+                if ast_.get("snoozed_until", 0) > time.time():
+                    return self.send(409, {"error": "A grown-up is busy. This will come back in an hour."})
+                if not ak_.get("approved"):
+                    return self.send(409, {"error": "A grown-up needs to accept and help the first time."})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \
                 and not (chores.get(b.get("chore") or (st["paused"].get(b.get("kid")) or {}).get("chore")) or {}).get("bedtime_ok"):
             # after bedtime only the configured evening routine; jobs and rewards wait for morning (6 AM)
@@ -2306,6 +2474,55 @@ class H(BaseHTTPRequestHandler):
             NEWS_SEEN.write_text(json.dumps(seen))
             ilog({"src": "ui", "ip": self.client_address[0], "ev": "announce_dismissed", "ids": b.get("ids")})
             return self.send(200, {"ok": True})
+        if p == "/api/assist_request":
+            kid_, cid_ = b.get("kid"), b.get("chore")
+            ch_ = chores.get(cid_) or {}
+            ast_ = ((st.get("adult_first") or {}).get(cid_) or {})
+            ak_ = (ast_.get("kids") or {}).get(kid_) or {}
+            if kid_ not in kids or not ch_.get("adult_first"):
+                return self.send(400, {"error": "unknown first-time job"})
+            if ak_.get("trained") or ak_.get("approved"):
+                return self.send(200, {"ok": True, "approved": True, "state": st})
+            if ast_.get("snoozed_until", 0) > time.time():
+                return self.send(409, {"error": "A grown-up is busy. This will come back in an hour.",
+                                       "until": ast_["snoozed_until"]})
+            # Reuse the pending invitation from a double tap instead of buzzing twice.
+            old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "assist"
+                         and r.get("status") == "pending" and r.get("kid") == kid_
+                         and r.get("chore") == cid_ and time.time() - r["ts"] < 120), None)
+            nonce = old_ or uuid.uuid4().hex[:8]
+            if not old_:
+                ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
+                                    "status": "pending", "purpose": "assist", "kid": kid_, "chore": cid_}
+                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+                ilog({"src": "adult", "action": "assist_request", "kid": kid_, "chore": cid_})
+            return self.send(200, {"ok": True, "nonce": nonce})
+        if p == "/api/reward_consent_request":
+            kid_, rid_ = b.get("kid"), b.get("reward")
+            rw_ = rewards.get(rid_) or {}
+            if kid_ not in kids or not rw_.get("needs_ok"):
+                return self.send(400, {"error": "unknown adult-required reward"})
+            busy_until_ = st.get("adult_busy_until", 0)
+            if busy_until_ > time.time():
+                return self.send(409, {"error": "A grown-up is busy. This will come back in an hour.",
+                                       "until": busy_until_})
+            old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "reward"
+                         and r.get("status") == "pending" and r.get("kid") == kid_
+                         and r.get("reward") == rid_ and time.time() - r["ts"] < 120), None)
+            nonce = old_ or uuid.uuid4().hex[:8]
+            if not old_:
+                ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
+                                    "status": "pending", "purpose": "reward", "kid": kid_, "reward": rid_}
+                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+                ilog({"src": "adult", "action": "reward_request", "kid": kid_, "reward": rid_})
+            return self.send(200, {"ok": True, "nonce": nonce})
+        if p == "/api/assist_answer":
+            if b.get("by") not in insp:
+                return self.send(400, {"error": "unknown grown-up"})
+            r_ = resolve_assist_request(str(b.get("nonce") or ""), bool(b.get("ok")), b["by"])
+            if not r_:
+                return self.send(409, {"error": "that invitation is no longer waiting"})
+            return self.send(200, {"ok": True, "status": r_["status"], "until": r_.get("until"), "state": derive()})
         if p == "/api/adult_request":
             who = b.get("who") or LEAD_ADULT
             if who not in ADULT_NOTIFY:
@@ -2330,7 +2547,8 @@ class H(BaseHTTPRequestHandler):
                 r["used"] = True
             if r["status"] != "pending":
                 threading.Thread(target=clear_adult_request, args=(b["nonce"], r["who"]), daemon=True).start()
-            return self.send(200, {"ok": True, "status": r["status"]})
+            return self.send(200, {"ok": True, "status": r["status"],
+                                   **({"state": derive(), "until": r.get("until")} if r.get("purpose") == "assist" else {})})
         if p == "/api/news_seen":
             try:
                 seen = json.loads(NEWS_SEEN.read_text())
@@ -2495,6 +2713,11 @@ class H(BaseHTTPRequestHandler):
                 if ready > time.time():
                     return self.send(409, {"error": who_ + ("screen break" if b["reward"] in ("show", "movie", "games") and st["screen_break"].get(wk) else "needs a break first"), "ready_at": ready})
             if rewards[b["reward"]].get("needs_ok"):   # e.g. VR: paid now; a grown-up helps set it up, then starts the timer
+                consent_ = ADULT_REQ.get(str(b.get("consent") or ""))
+                if not consent_ or consent_.get("purpose") != "reward" or consent_.get("kid") != b["kid"] \
+                        or consent_.get("reward") != b["reward"] or consent_.get("status") != "ok" or consent_.get("used"):
+                    return self.send(409, {"error": "A grown-up needs to allow this first."})
+                consent_["used"] = True
                 if any(q["kid"] == b["kid"] and q["reward"] == b["reward"] for q in st["requests"]):
                     return self.send(409, {"error": "already bought: a grown-up will come start it"})
                 ev = append({"type": "spend", "kid": b["kid"], "reward": b["reward"], "cost": cost, "await_ok": True,
@@ -4005,8 +4228,10 @@ def watch_home_days():
     while True:
         try:
             changed = False
+            home_now = set()
             for k in cfg()["kids"]:
                 if k.get("home_entity") and ha_get(k["home_entity"], tok).get("state") == "on":
+                    home_now.add(k["id"])
                     t = date.today().isoformat()
                     if t not in hd.setdefault(k["id"], set()):
                         if (date.today() - timedelta(days=1)).isoformat() not in hd[k["id"]]:
@@ -4016,10 +4241,10 @@ def watch_home_days():
                         changed = True
             if changed:
                 save_home_days(hd)
-            GUARD["home_days"], GUARD["home_arrivals"] = hd, ar
+            GUARD["home_days"], GUARD["home_arrivals"], GUARD["home_now"] = hd, ar, home_now
         except Exception as ex:  # noqa: BLE001
             print("home-days error", ex, flush=True)
-        time.sleep(300)
+        time.sleep(30)
 
 
 _MIRROR = HOUSE.get("dashboard_mirror") or {}   # optional: keep a grown-up's own HA dashboard in step

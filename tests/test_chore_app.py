@@ -1963,8 +1963,61 @@ class ChoresFirst(Case):
         self.assertTrue(state["effective"])
         self.assertEqual(state["blockers"][0]["name"], "Homework")
 
+    def test_spotify_fallback_requires_one_approved_chore_from_each_kid_home(self):
+        now = datetime.now().replace(hour=18, minute=0, second=0, microsecond=0)
+        evs = [{"id": "1", "type": "music_block", "on": True, "by": "jordan", "ts": now.timestamp() - 60}]
+        state = self.s.music_block_state(evs, {"ava": {"on": False}, "max": {"on": False}}, {},
+                                         ["ava", "max"], {}, {}, now)
+        self.assertEqual([b["kid"] for b in state["blockers"]], ["ava", "max"])
+        reports = {"r": {"kid": "ava", "team": ["ava"], "status": "inspected", "partial": False,
+                           "inspected_ts": now.timestamp()}}
+        state = self.s.music_block_state(evs, {"ava": {"on": False}, "max": {"on": False}}, {},
+                                         ["ava", "max"], reports, {}, now)
+        self.assertEqual([b["kid"] for b in state["blockers"]], ["max"])
+
+
+class ShowerByHouse(Case):
+    def test_return_is_credit_and_second_consecutive_night_requires_shower(self):
+        c = base_config()
+        c["households"] = [{"id": "first", "name": "First"}, {"id": "second", "name": "Second"}]
+        today = date(2026, 11, 18)
+        first = self.s.shower_requirement_state(c, {}, datetime(2026, 11, 18, 19, 30),
+                                                 {"ava": set()}, {"ava": "first"})["ava"]
+        self.assertFalse(first["due"])
+        second = self.s.shower_requirement_state(c, {}, datetime(2026, 11, 18, 19, 30),
+                                                  {"ava": {(today - timedelta(days=1)).isoformat()}},
+                                                  {"ava": "first"})["ava"]
+        self.assertTrue(second["due"])
+        reports = {"s": {"kid": "ava", "team": ["ava"], "chore": "shower", "status": "pending",
+                           "partial": False, "ts": datetime(2026, 11, 18, 19, 31).timestamp()}}
+        done = self.s.shower_requirement_state(c, reports, datetime(2026, 11, 18, 19, 32),
+                                                {"ava": {(today - timedelta(days=1)).isoformat()}},
+                                                {"ava": "first"})["ava"]
+        self.assertFalse(done["due"])
+
 
 class GrownUpStartsVR(Case):
+    def test_first_stove_job_needs_help_but_later_ones_do_not(self):
+        c = base_config()
+        c["chores"].insert(0, {"id": "stove", "name": "Clean stove", "icon": "1f9fd", "points": 6,
+                               "cooldown_h": 0, "adult_first": True, "shared": True})
+        a = App(c)
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "stove"})[0], 409)
+        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "stove"})[0], 409)
+        code, ask = a.post("/api/assist_request", {"kid": "ava", "chore": "stove"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "stove"})[0], 200)
+        code, report = a.post("/api/report", {"kid": "ava", "chore": "stove", "feeling": "ok"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.post("/api/inspect", {"ref": report["event"]["id"], "by": "jordan", "ok": True,
+                                                  "points": 6})[0], 200)
+        trained = a.state()["adult_first"]["stove"]["kids"]["ava"]
+        self.assertTrue(trained["trained"])
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "stove"})[0], 200)
+        self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "stove"})[0], 409)
+        a.close()
+
     def test_vr_is_paid_then_a_grown_up_starts_the_timer_or_refunds(self):
         c = base_config()
         for r in c["rewards"]:
@@ -1972,7 +2025,11 @@ class GrownUpStartsVR(Case):
                 r["needs_ok"] = True
         a = App(c)
         a.event(type="adjust", kid="ava", points=10, reason="test")
-        code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)
+        code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr", "consent": ask["nonce"]})
         self.assertEqual(code, 200, r)
         self.assertTrue(r["event"]["await_ok"])
         st = a.state()
@@ -1987,7 +2044,9 @@ class GrownUpStartsVR(Case):
         self.assertEqual(a.state()["timers"], [])
         # another kid's, answered "not now": refunded, and a note waits on their screen
         a.event(type="adjust", kid="max", points=5, reason="test")
-        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr"})
+        code, ask2 = a.post("/api/reward_consent_request", {"kid": "max", "reward": "vr"})
+        self.assertEqual(a.post("/api/assist_answer", {"nonce": ask2["nonce"], "by": "jordan", "ok": True})[0], 200)
+        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr", "consent": ask2["nonce"]})
         self.assertEqual(a.state()["balance"]["max"], 3)
         self.assertEqual(a.post("/api/request_answer", {"ref": r2["event"]["id"], "by": "jordan", "ok": False})[0], 200)
         st = a.state()
@@ -1996,6 +2055,20 @@ class GrownUpStartsVR(Case):
         self.assertIn("Not right now", note["text"])
         self.assertEqual(a.post("/api/kid_note_seen", {"kid": "max", "ref": note["id"]})[0], 200)
         self.assertEqual(a.state()["kid_notes"].get("max"), None)
+
+    def test_busy_later_pauses_vr_and_first_time_help_together(self):
+        c = base_config()
+        next(r for r in c["rewards"] if r["id"] == "vr")["needs_ok"] = True
+        c["chores"].insert(0, {"id": "stove", "name": "Clean stove", "icon": "1f9fd", "points": 6,
+                               "cooldown_h": 0, "adult_first": True, "shared": True})
+        a = App(c)
+        code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": False})[0], 200)
+        self.assertGreater(a.state()["adult_busy_until"], time.time())
+        self.assertEqual(a.post("/api/assist_request", {"kid": "ava", "chore": "stove"})[0], 409)
+        self.assertTrue(next(ch for ch in a.state()["config"]["chores"] if ch["id"] == "stove")["hidden"])
+        a.close()
 
     def test_kid_can_refund_own_reward_for_exactly_two_minutes(self):
         a = App(base_config())

@@ -367,7 +367,16 @@ function api(path,body){return fetch(path,{method:body?"POST":"GET",headers:{"Co
 var HA_MODE=location.pathname.indexOf("/local/")===0,PACK_TEST=HA_MODE&&/[?&]packing_test=1(?:&|$)/.test(location.search),
     LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search),
     LOCK_KID=LOCKED?(location.search.match(/[?&]kid=([a-z]+)/)||[])[1]:null;
-function packingTestState(a){if(!PACK_TEST||!a.packing_game)return a;var id="packing_test";a.config.kids=a.config.kids||[];if(!a.config.kids.some(function(k){return k.id===id}))a.config.kids.push({id:id,name:"X Æ A-12",icon:"1f680",color:"#5e35b1"});a.balance=a.balance||{};a.balance[id]=0;a.earned=a.earned||{};a.earned[id]=0;a.pending_points=a.pending_points||{};a.pending_points[id]=0;return a}
+function packingTestState(a){if(!PACK_TEST||!a.packing_game)return a;var id="packing_test",now=Date.now()/1000;
+  a.config.kids=a.config.kids||[];if(!a.config.kids.some(function(k){return k.id===id}))a.config.kids.push({id:id,name:"X Æ A-12",icon:"1f680",color:"#5e35b1"});
+  a.balance=a.balance||{};a.balance[id]=18;a.earned=a.earned||{};a.earned[id]=67;a.pending_points=a.pending_points||{};a.pending_points[id]=4;
+  a.streak=a.streak||{};a.streak[id]={current:4,best:9,today:true};a.goals=a.goals||{};a.goals[id]=(a.config.rewards[1]||a.config.rewards[0]||{}).id;
+  var chores=(a.config.chores||[]).filter(function(c){return !c.hidden&&c.id!=="other"}),sample=function(n,fallback){return chores[n%Math.max(1,chores.length)]||{id:"demo_job",name:fallback,icon:"2728",points:3}};
+  a.history=(a.history||[]).filter(function(h){return h.kid!==id});[[0,2,"inspected",4],[1,4,"inspected",3],[2,6,"inspected",5],[3,8,"inspected",2]].forEach(function(x,i){var c=sample(x[0],"Demo chore");a.history.push({id:"demo_hist_"+i,type:"report",kid:id,team:[id],chore:c.id,chore_name:c.name,chore_icon:c.icon,points:x[3],awarded:x[3],status:x[2],ts:now-x[1]*86400,inspected_ts:now-x[1]*86400+600,inspected_by:(a.config.inspectors[0]||{}).id||"adult"})});
+  var pc=sample(4,"Pack for the trip");a.history.push({id:"demo_wait",type:"report",kid:id,team:[id],chore:pc.id,chore_name:pc.name,chore_icon:pc.icon,points:4,status:"pending",ts:now-900});
+  a.awards=a.awards||{};a.awards[id]=[{id:"jobs:5",title:"Five jobs!",sub:"A strong start",icon:"1f31f",ts:now-5*86400},{id:"days:3",title:"Three-day streak!",sub:"Kept it going",icon:"1f525",ts:now-3*86400},{id:"earned:50",title:"50 stars earned!",sub:"Hard worker",icon:"1f3c5",ts:now-86400}];
+  a.achievements=a.achievements||{};a.achievements[id]=[{id:"jobs",name:"Jobs finished",icon:"2728",tier:"gold",level:2,value:14,prev:10,next:25,unit:"jobs"},{id:"earned",name:"Stars earned",icon:"2b50",tier:"silver",level:2,value:67,prev:50,next:100,unit:"stars"}];
+  a.records=a.records||{};var rc=sample(0,"Demo chore");a.records[rc.id]={kid:id,sec:345,ts:now-2*86400};return a}
 if(HA_MODE){
   var hass=function(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}};
   var haState=function(){var h=hass(),st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));
@@ -375,6 +384,7 @@ if(HA_MODE){
     return packingTestState(a)};
   api=function(path,body){
     if(!body)return new Promise(function(res,rej){var t=0;(function w(){var st=haState();if(st)return res(st);if(++t>40)return rej("no sensor.chore_state");setTimeout(w,250)})()});
+    if(PACK_TEST&&body.kid==="packing_test")return Promise.resolve({ok:false,error:"Demo profile only — real chore data was not changed.",state:S});
     var n=Math.random().toString(36).slice(2,9),v=JSON.stringify(Object.assign({a:path.replace("/api/",""),n:n},body));
     function send1(val,nn){return hass().callService("input_text","set_value",{entity_id:"input_text.chore_action",value:val}).then(function(){
       return new Promise(function(res){var t=0;(function w(){var h=hass(),a=h&&h.states["sensor.chore_state"]&&h.states["sensor.chore_state"].attributes;
@@ -575,10 +585,12 @@ function renderKidMenu(){
     '<div class="kmcard" id="kmawards"><span class="kmi">'+E("1f3c5")+'</span> '+MY.length+' awards<span class="kms">Achievements and records</span></div>'+
     '<div class="kmcard" id="kmnews"><span class="kmi">'+E("1f4f0")+'</span> News<span class="kms">What is new for the kids</span></div>'+
     '<div class="kmcard" id="kmcalendar" style="grid-column:1/-1;background:#e3f2fd"><span class="kmi">'+E("1f4c5")+'</span> Calendar<span class="kms">Open the family week</span></div>'+
+    (PACK_TEST&&kid==="packing_test"?'<div class="kmcard" id="kmpacking" style="grid-column:1/-1;background:#fff3c4"><span class="kmi">'+E("1f9f3")+'</span> Packing quest<span class="kms">Practice packing for the train</span></div>':'')+
     '<div class="kmcard" id="kmgoal" style="grid-column:1/-1"><span class="kmi">'+E(G.r.icon)+'</span> Goal: '+safeText(G.r.name)+'<span class="kms">'+b+' of '+gc+' points'+(b>=gc?' · ready!':' · '+(gc-b)+' to go')+'</span></div></div>';
   $("kmenu").classList.toggle("on",MENU);
   $("kmpoints").onclick=function(){openDetail("points")};$("kmstreak").onclick=function(){streakInfo(SK)};$("kmawards").onclick=function(){MENU=false;$("kmenu").classList.remove("on");openAwards()};
   $("kmnews").onclick=function(){openDetail("news")};$("kmcalendar").onclick=openCalendar;$("kmgoal").onclick=function(){openDetail("goal")};
+  if($("kmpacking"))$("kmpacking").onclick=function(){MENU=false;$("kmenu").classList.remove("on");packOpen()};
 }
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
@@ -633,9 +645,11 @@ function renderKid(){
     if(c.each_daily&&(bd.done_today||[]).indexOf(kid)>=0&&(bd.pending_by||[]).indexOf(kid)<0)return false;   // done today (each kid once a day)
     return true});
   if(MF.on)vis=vis.filter(function(c){return c.id===MF.chore||c.bedtime_ok});
+  var WD=(S.wind_down||{}).on,SH=((S.shower||{})[kid]||{});
+  if(WD)vis=vis.filter(function(c){return c.bedtime_ok&&(!SH.due||c.id==="shower"||c.id==="brush_teeth")});
   var PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
-  var WD=(S.wind_down||{}).on,lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)||(MF.on&&c.id===MF.chore)};   // mandatory jobs and, from wind-down, Brush teeth lead
+  var lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)||(MF.on&&c.id===MF.chore)};   // mandatory jobs and, from wind-down, Brush teeth lead
   var hero=function(c){return c.id.indexOf("help_")===0||(MF.on&&c.id===MF.chore)};   // robot rescue or the after-school priority
   vis=vis.filter(hero).concat(vis.filter(function(c){return !hero(c)&&lead(c)}),vis.filter(function(c){return !hero(c)&&!lead(c)}));   // then "Tidy up first!"
   var ch="";vis.slice(page*PER,page*PER+PER).forEach(function(c){
@@ -694,7 +708,7 @@ function renderKid(){
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
   var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Tidy up first!</b> and get it checked. Then rewards come back.</div>':'';
   if(MF.rewards){CF=true;banner='<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f4da")+' '+safeText(MF.name)+' first! Rewards come back when it is done.</div>'}
-  if((S.wind_down||{}).on){banner='<div style="width:100%;background:#e8eaf6;border:4px solid #5c6bc0;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f319")+' Almost bedtime! No more rewards after '+hm12(S.wind_down.at)+'. '+E("1faa5")+' Brush your teeth!</div>';CF=true}
+  if((S.wind_down||{}).on){banner='<div style="width:100%;background:#e8eaf6;border:4px solid #5c6bc0;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f319")+' '+(SH.due?'Second night here: '+E("1f6bf")+' shower and ':'Almost bedtime! No more rewards after '+hm12(S.wind_down.at)+'. ')+E("1faa5")+' Brush your teeth!</div>';CF=true}
   if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
   var RWL=rw.split("\u0001").filter(Boolean),RPER=tvh?3:4,rpages=Math.max(1,Math.ceil(RWL.length/RPER));if(RWP>=rpages)RWP=rpages-1;
   var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
@@ -753,7 +767,7 @@ function packSave(){try{localStorage.setItem("packing_game_test",JSON.stringify(
 function packMissionDone(m){return (m.items||[]).length>0&&(m.items||[]).every(function(x){return PACK.checked[x.id]})}
 function packEarned(c){var n=PACK.bag===c.correct_bag?(+c.bag_points||0):0;(c.missions||[]).forEach(function(m){if(packMissionDone(m))n+=+m.points||0});return n}
 function packOpen(){var c=packCfg();if(!c)return;packLoad();$("pick").classList.remove("on");$("kid").classList.remove("on");$("packing").classList.add("on");$("packtitle").textContent=c.title||"Packing quest";packRender();poke()}
-function packClose(){L("packing_close");$("packing").classList.remove("on");kid=null;$("pick").classList.add("on");render()}
+function packClose(){L("packing_close");$("packing").classList.remove("on");if(PACK_TEST&&kid==="packing_test"){$("kid").classList.add("on");renderKid()}else{kid=null;$("pick").classList.add("on");render()}}
 function packRender(){var c=packCfg();if(!c||!PACK)return;var earned=packEarned(c),total=+c.total_points||15,bagOK=PACK.bag===c.correct_bag;
   $("packscore").innerHTML=earned+" / "+total+" "+E("2b50");
   var h='<div class="packhero"><div class="ph">'+E(c.icon||"1f682")+E("1f9f3")+'</div><h2>'+safeText(c.subtitle||"Pack everything for the journey!")+'</h2><div class="packnote">Tap an item only after you physically put it in the right bag. This test never changes real points.</div><div class="packbar"><div style="width:'+Math.min(100,earned/Math.max(1,total)*100)+'%"></div></div></div>'+
@@ -765,7 +779,7 @@ function packRender(){var c=packCfg();if(!c||!PACK)return;var earned=packEarned(
   document.querySelectorAll("[data-pitem]").forEach(function(n){n.onclick=function(){if(!bagOK)return;PACK.checked[n.dataset.pitem]=!PACK.checked[n.dataset.pitem];L("packing_item",{id:n.dataset.pitem,on:PACK.checked[n.dataset.pitem]});packSave();packRender()}})
 }
 
-function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;if(k==="packing_test"){packOpen();return}page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k){L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(((S.chores_first||{})[k]||{}).on){cleanupModal();return}if(remindJob(k,lastUse))return;
@@ -832,6 +846,15 @@ function slotBtns(c,bd){var me=bd.claimed_by===kid,BIG='font-size:36px;font-weig
   if(bd.certify_at)return '<div class="q" style="font-size:26px;opacity:.85">'+E("1f50d")+' When you\'re done, tap below. A grown-up checks it and gives your stars.</div>'+
     '<div class="faces"><div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I did it!</div></div>';
   return '<div class="faces"><div class="btn" id="fin" style="font-size:40px;font-weight:900;padding:12px 30px;background:#e8f5e9;border:5px solid #43a047">'+E("2611")+' I\'m done!</div></div>'}
+function needsAdultFirst(c){var a=((S.adult_first||{})[c.id]||{}),k=(a.kids||{})[kid]||{};return !!(c.adult_first&&!k.trained&&!k.approved)}
+function askAdultFirst(c){if(busy)return;busy=true;modal('<div class="big">'+E("1f9d1")+E(c.icon)+'</div><div class="q">A grown-up helps the first time</div><div class="q" style="font-size:26px">They will teach you how to do '+c.name.toLowerCase()+' safely. Sending an invitation…</div>');
+  api("/api/assist_request",{kid:kid,chore:c.id}).then(function(r){busy=false;if(!r.ok){modal('<div class="big">'+E("23f3")+'</div><div class="q">'+safeText(r.error||"Ask a grown-up")+'</div>');addOk();return}if(r.approved){S=r.state;askChore(c.id);return}
+    modal('<div class="big">'+E("1f64b")+E("1f9d1")+'</div><div class="q">Waiting for a grown-up</div><div class="q" style="font-size:25px">They can tap <b>Help now</b>, or this job will come back later.</div>');var stopped=false;$("mx").onclick=function(){stopped=true;closeModal()};
+    (function poll(){if(stopped)return;setTimeout(function(){api("/api/adult_status",{nonce:r.nonce}).then(function(x){if(stopped)return;if(x.status==="pending")return poll();if(x.state)S=x.state;if(x.status==="ok"){modal('<div class="big">'+E("2705")+E("1f9d1")+'</div><div class="q">Grown-up help is ready!</div><div class="faces"><div class="btn yes" id="assistgo">'+E("25b6")+' Start together</div></div>');$("assistgo").onclick=function(){startChore(c)}}else{modal('<div class="big">'+E("23f3")+'</div><div class="q">Busy right now</div><div class="q" style="font-size:25px">This job will come back in one hour.</div>');addOk()}})},1500)})()}).catch(function(){busy=false})}
+function startChore(c){if(needsAdultFirst(c)){askAdultFirst(c);return}L("chore_start",{chore:c.id});api("/api/start",{kid:kid,chore:c.id}).then(function(r){if(r.ok){S=r.state;renderKid()}
+  if(!r.ok){modal('<div class="big">'+E("274c")+'</div><div class="q">'+safeText(r.error||"That did not work")+'</div>');addOk();return}
+  if(c.ask_title){chime([523,659]);kbd("What are you "+c.name.toLowerCase()+"?","270f",function(t){api("/api/title",{kid:kid,title:t}).then(function(r2){if(r2.ok){S=r2.state;renderKid()}closeModal()})},c.name);return}
+  modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+E("25b6")+' Go! '+c.name+'</div><div class="q" style="font-size:24px;opacity:.75">Tap I\'m done! when you finish.</div>');chime([523,659]);addOk()})}
 function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))return;
   var c=S.config.chores.find(function(x){return x.id===cid}),bd=S.board[cid]||{price:c.points},A=(S.active||{})[kid],T=(S.typical||{})[cid]||(c.est_minutes?{minutes:c.est_minutes}:null);
   var other=cid==="other"||c.shared?null:Object.keys(S.active||{}).find(function(k){var a=S.active[k];return a.chore===cid&&(a.team||[k]).indexOf(kid)<0});
@@ -851,6 +874,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
         (bd.boost_pct?'<div style="font-size:24px;margin-top:4px;color:#e65100">'+E("1f680")+' Big job bonus +'+bd.boost_pct+'%! <b>'+bd.boost_from+' '+E("27a1")+' '+bd.price+'</b>'+E("2b50")+'</div>':(c.boost&&inc.length?'<div style="font-size:20px;opacity:.7;margin-top:4px">'+E("1f680")+' +'+c.boost.pct+'% bonus when '+c.boost.min+'+ rooms need tidying</div>':''))+
         (cl.length?'<div style="opacity:.6;font-size:20px;margin-top:4px">'+E("2728")+' already tidy: '+cl.map(function(x){return E(CC(x).icon)}).join(" ")+'</div>':'')+'</div>'})():'')+
     (c.together?'<div class="q" style="font-size:28px;background:#e3f2fd;border-radius:16px;padding:6px 12px">'+E("1f91d")+' Together only: '+(c.only||[]).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'')+
+    (needsAdultFirst(c)?'<div class="q" style="font-size:27px;background:#fff3c4;border-radius:16px;padding:8px 12px">'+E("1f9d1")+' Your first time needs a grown-up to accept, teach, and help.</div>':'')+
     (bd.note?'<div class="q" style="font-size:26px;background:#fff8e1;border-radius:16px;padding:6px 12px">'+E("1f4dd")+' '+(bd.note_by?E(insp(bd.note_by).icon)+' ':'')+notes(bd.note)+'</div>':'')+
     (c.weekly?'<div class="q" style="font-size:24px;color:#c62828">'+E("1f4c5")+' Due '+["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][c.weekly.due_dow||4]+'</div>':'')+
     (bd.is_rest?'<div class="q" style="font-size:24px;color:#4527a0">'+E("1f9e9")+' Still to do'+(bd.rest_note?': '+notes(bd.rest_note):'')+'</div>':
@@ -876,11 +900,9 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
   if($("envdel"))$("envdel").onclick=function(){L("env_delivered",{chore:cid});api("/api/envelope_delivered",{kid:kid,chore:cid}).then(function(r){if(r.ok){S=r.state;renderKid()}
     modal('<div class="big">'+E(r.ok?"1f4ec":"274c")+E(r.ok?"2728":"")+'</div><div class="q">'+(r.ok?"Delivered! A grown-up will look at it soon.":"Hmm, that didn't work.")+'</div>');if(r.ok){confetti(120);chime([659,784,988])}addOk()})};
   if($("together"))$("together").onclick=function(){L("together_open",{chore:cid});pickHelpers("Who is doing "+c.name+" with you?",function(ps){teamUp(cid,ps)})};
-  if($("go"))$("go").onclick=function(){L("chore_start",{chore:cid});api("/api/start",{kid:kid,chore:cid}).then(function(r){if(r.ok){S=r.state;renderKid()}
-    if(r.ok&&c.ask_title){chime([523,659]);kbd("What are you "+c.name.toLowerCase()+"?","270f",function(t){   // e.g. Organizing: "ROCKS"
-      api("/api/title",{kid:kid,title:t}).then(function(r2){if(r2.ok){S=r2.state;renderKid()}closeModal()})},c.name);return}
-    modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+E("25b6")+' Go! '+c.name+'</div><div class="q" style="font-size:24px;opacity:.75">Tap I\'m done! when you finish.</div>');chime([523,659]);addOk()})};
+  if($("go"))$("go").onclick=function(){startChore(c)};
   if($("fin"))$("fin").onclick=function(){L("finished_tap",{chore:cid});
+    if(needsAdultFirst(c)){askAdultFirst(c);return}
     var envJob=S.envelope&&S.envelope.chores.indexOf(cid)>=0;
     var printedT=envJob&&((S.envelope.printed||{})[kid]||0),A0=(S.active||{})[kid];
     if(envJob&&printedT&&(!A0||A0.chore!==cid||printedT>=A0.ts)){
@@ -893,7 +915,8 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
     }
     else if(envJob)modal('<div class="big">'+E(c.icon)+E("2728")+'</div><div class="q">You\'re almost there!</div>'+
       '<div class="q" style="font-size:28px">Next: print the envelope and put a stamp on it.<br><b>Keep your letter OUT of the envelope</b> so a grown-up can read it first.</div>'+
-      '<div class="faces"><div class="btn yes" id="ry" style="font-size:34px;font-weight:900;padding:12px 30px">'+E("1f5a8")+' Print the envelope</div><div class="btn no" id="rn" style="font-size:24px;padding:8px 20px">Not done writing</div></div>');
+      '<div class="faces" style="flex-wrap:wrap"><div class="btn yes" id="ry" style="font-size:34px;font-weight:900;padding:12px 30px">'+E("1f5a8")+' Print the envelope</div><div class="btn" id="envhave" style="font-size:25px;padding:8px 20px;background:#e3f2fd">'+E("2705")+' It is already printed</div><div class="btn no" id="rn" style="font-size:24px;padding:8px 20px">Not done writing</div></div>');
+    if($("envhave"))$("envhave").onclick=function(){envelopeAlready(c)};
     else modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+(c.confirm||'Did you really finish<br>'+c.name+'?')+'</div>'+
       '<div class="faces"><div class="btn yes" id="ry">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="rn">'+E("274c")+'<span class="lbl">No</span></div></div>');
     if($("rn"))$("rn").onclick=function(){L("really_no",{chore:cid});closeModal()};
@@ -916,6 +939,7 @@ function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))
   };
 }
 /* Letters: print the envelope before the job is done. From (a kid), to (a cousin...), put the envelope in, Print. */
+function envelopeAlready(c){if(busy)return;busy=true;api("/api/envelope_already",{kid:kid,chore:c.id}).then(function(r){busy=false;if(!r.ok){modal('<div class="q">'+safeText(r.error||"That did not work")+'</div>');addOk();return}S=r.state;renderKid();modal('<div class="big">'+E("2705")+E("2709")+'</div><div class="q">Envelope marked as printed</div><div class="q" style="font-size:27px">Add the stamp, then bring the loose letter and envelope to a grown-up. Keep the letter out so they can read it.</div>');addOk()}).catch(function(){busy=false})}
 function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){return ks.find(function(k){return k.id===id})||{name:id,icon:"1f642"}};
   var st={from:EV.senders.indexOf(kid)>=0?kid:EV.senders[0],to:null},big='font-size:30px;font-weight:800;padding:10px 22px;margin:6px';
   function from(){modal('<div class="big">'+E("2709")+'</div><div class="q">Who is the letter from?</div><div class="faces" style="flex-wrap:wrap">'+
@@ -930,8 +954,9 @@ function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){retu
   function load(){modal('<div class="q" style="font-size:30px">'+E("1f5a8")+' Put ONE envelope in the printer like this:</div>'+
       (EV.photo?'<img src="/api/envelope_photo" alt="" style="max-height:48vh;max-width:90%;border-radius:12px;margin:6px auto;display:block">':'')+
       '<div class="q" style="font-size:22px;opacity:.85">Into the slot on the front, the way the picture shows. Push it in gently until the printer grabs it.</div>'+
-      '<div class="faces"><div class="btn yes" id="envin" style="'+big+'">'+E("2705")+' It\'s in!</div><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
+      '<div class="faces" style="flex-wrap:wrap"><div class="btn yes" id="envin" style="'+big+'">'+E("2705")+' It\'s in!</div><div class="btn" id="envhave2" style="font-size:24px;padding:8px 20px;background:#e3f2fd">'+E("2705")+' Already printed</div><div class="btn" id="envback" style="font-size:22px;padding:6px 18px">'+E("2b05")+' back</div></div>');
     $("envback").onclick=function(e){e.stopPropagation();to()};
+    $("envhave2").onclick=function(){envelopeAlready(c)};
     $("envin").onclick=function(){L("env_loaded",{});go()}}
   function go(){var r=rec();modal('<div class="big">'+E("2709")+'</div><div class="q">From '+E(KK(st.from).icon)+' '+KK(st.from).name+'<br>To '+E(r.icon)+' '+r.label+'</div>'+
       '<div class="btn yes" id="envprint" style="display:block;font-size:52px;font-weight:900;padding:26px 20px;margin:10px auto 6px;width:80%;box-sizing:border-box">'+E("1f5a8")+' Print!</div>'+
@@ -1023,7 +1048,7 @@ function dressBeep(){var D=S&&S.dress;if(!D||!D.on||D.school)return;   // school
 function doReport(c,feel,node,note,ask,delivered){L("report",{chore:c.id,feeling:feel,note:note||null,ask:ask==null?null:ask});
   if(busy)return;busy=true;
   api("/api/report",{kid:kid,chore:c.id,feeling:feel,note:note||undefined,ask:ask==null?undefined:ask,delivered:delivered||undefined}).then(function(res){
-    busy=false;if(!res.ok){closeModal();return}
+    busy=false;if(!res.ok){modal('<div class="big">'+E("274c")+'</div><div class="q">'+safeText(res.error||"That did not work")+'</div>');addOk();return}
     S=res.state;
     var took=res.event.started?res.event.ts-res.event.started:null,rec=(S.records||{})[c.id],isRec=took&&took>=30&&(!rec||took<rec.sec);
     modal('<div class="celebrate"><div class="big">'+E("1f389")+'</div><div class="q">'+E(c.icon)+' '+E("1f50d")+(took?' &nbsp;'+E("23f1")+' '+fmtS(took):'')+'</div>'+(isRec?'<div class="q" style="color:#d4a017">'+E("1f947")+' Maybe a NEW RECORD! (if it passes inspection)</div>':'')+'<div class="plus">'+(res.event.ask!=null?E("1f64b")+" "+res.event.ask:res.event.points==null?E("2753"):res.event.points===0?E("1f44d"):"+"+res.event.points)+(res.event.points===0&&res.event.ask==null?'':' '+E("2b50"))+'</div>'+((res.event.team||[]).length>1?'<div class="q" style="font-size:26px">'+E("1f91d")+' '+teamIcons(res.event.team)+' share it</div>':'')+'<div class="q" style="font-size:24px;opacity:.7">waiting for inspection</div></div>');
@@ -1408,8 +1433,9 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
       (sb?'<div class="q" style="font-size:22px;opacity:.75">Good time for a chore '+E("1f9f9")+' or playing outside '+E("1f333")+'</div>':''));return}
   var tvR=["show","movie","games"].indexOf(r.id)>=0,lo=tvR?minCost(r):r.cost;
   if(b<lo){modal('<div class="big">'+E(r.icon)+E("1f512")+'</div><div class="q">Need '+(lo-b)+' more '+E("2b50")+(lo<r.cost?' to watch together':'')+'</div>');wobble();return}
-  if(r.needs_ok){modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+r.cost+' '+E("2b50")+'?</div><div class="q" style="font-size:26px;opacity:.85">'+E("1f64b")+' A grown-up helps you set it up, then starts your '+(r.minutes||"")+' minutes.</div><div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
-    $("sn").onclick=closeModal;$("sy").onclick=function(){buy(r,null)};return}
+  if(r.needs_ok){var until=S.adult_busy_until||0;if(until>S.now){modal('<div class="big">'+E("23f3")+'</div><div class="q">A grown-up is busy</div><div class="q" style="font-size:26px">Adult-help requests come back in '+Math.max(1,Math.ceil((until-S.now)/60))+' minutes.</div>');addOk();return}
+    modal('<div class="big">'+E(r.icon)+E("1f9d1")+'</div><div class="q">Ask to buy '+r.name+'?</div><div class="q" style="font-size:26px;opacity:.85">No stars are spent until a grown-up says yes. If they are busy, adult-help requests take a one-hour break.</div><div class="faces"><div class="btn yes" id="sy">'+E("1f64b")+'<span class="lbl">Ask</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">Cancel</span></div></div>');
+    $("sn").onclick=closeModal;$("sy").onclick=function(){requestRewardConsent(r)};return}
   modal('<div class="big">'+E(r.icon)+'</div><div class="q">Buy '+r.name+' for '+(b<r.cost?lo:r.cost)+' '+E("2b50")+'?</div>'+(lo<r.cost?'<div class="q" style="font-size:24px;opacity:.8">'+E("1f465")+' Cheaper together! '+togetherLine(r)+(b<r.cost?' (alone: '+r.cost+')':'')+'</div>':'')+'<div class="faces"><div class="btn yes" id="sy">'+E("2705")+'<span class="lbl">Yes</span></div><div class="btn no" id="sn">'+E("274c")+'<span class="lbl">No</span></div></div>');
   $("sn").onclick=closeModal;
   $("sy").onclick=function(){
@@ -1438,7 +1464,11 @@ function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
         if((!sel[k]&&bal<costFor(r,n+1))||(rr&&rr>S.now)||((S.chores_first||{})[k]||{}).on){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
       $("wgo").onclick=function(){var ks=Object.keys(sel),c_=costFor(r,1+ks.length);if(!ks.length||[kid].concat(ks).some(function(m){return (S.balance[m]||0)<c_})){wobble();return}buy(r,tv,ks)}}
     draw()}}
-function buy(r,tv,withKids){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[]}).then(function(res){busy=false;
+function requestRewardConsent(r){if(busy)return;busy=true;modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">Sending your request…</div>');api("/api/reward_consent_request",{kid:kid,reward:r.id}).then(function(res){busy=false;
+  if(!res.ok){modal('<div class="big">'+E("23f3")+'</div><div class="q">'+safeText(res.error||"Ask later")+'</div>');addOk();return}
+  modal('<div class="big">'+E(r.icon)+E("1f9d1")+'</div><div class="q">Waiting for a grown-up</div><div class="q" style="font-size:25px">Your stars have not been spent.</div>');var stopped=false;$("mx").onclick=function(){stopped=true;closeModal()};
+  (function poll(){if(stopped)return;setTimeout(function(){api("/api/adult_status",{nonce:res.nonce}).then(function(x){if(stopped)return;if(x.status==="pending")return poll();if(x.state)S=x.state;if(x.status==="ok"){modal('<div class="big">'+E("2705")+E(r.icon)+'</div><div class="q">A grown-up said yes!</div><div class="q" style="font-size:26px">Tap below to spend '+r.cost+' '+E("2b50")+'.</div><div class="faces"><div class="btn yes" id="vrbuy">Buy '+r.name+'</div></div>');$("vrbuy").onclick=function(){buy(r,null,[],res.nonce)}}else{modal('<div class="big">'+E("23f3")+'</div><div class="q">They are busy right now</div><div class="q" style="font-size:25px">All adult-help requests come back in one hour. Your stars are still yours.</div>');addOk()}})},1500)})()}).catch(function(){busy=false})}
+function buy(r,tv,withKids,consent){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[],consent:consent||undefined}).then(function(res){busy=false;
     if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(res.error||"Can't buy that")+'</div>');addOk();return}S=res.state;boughtHere[res.event.id]=1;
     if(res.event.await_ok){confetti(120);modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">'+r.name+' is yours! Go get a grown-up to help you set it up.</div><div class="q" style="font-size:26px;opacity:.85">'+E("23f1")+' Your '+(r.minutes||"")+' minutes start when they say go.</div>');offerRefund(res.event.id);addOk(function(){renderKid()});return}
     var tog=(withKids||[]).length?'<div class="q" style="font-size:28px">'+E("1f465")+' '+[kid].concat(withKids).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'';
