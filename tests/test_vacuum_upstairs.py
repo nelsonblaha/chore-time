@@ -246,6 +246,19 @@ class Upstairs(unittest.TestCase):
         calls = self.tick(2)
         self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
 
+    def test_acknowledged_long_dock_preparation_never_requeues(self):
+        self.button(rooms=["Bath"])
+        self.tick()
+        self.S("binary_sensor.up_cleaning", "on")
+        self.tick(180)
+        self.tick(180)
+        self.assertEqual(self.p.D["phase"], "running")
+        self.assertEqual(self.p.D["manual_queue"][0]["attempts"], 0)
+        self.S("binary_sensor.up_cleaning", "off")
+        self.tick(10)
+        self.assertEqual(self.p.D["manual_queue"], [])
+        self.assertEqual(self.p.D["phase"], "idle")
+
     def test_retry_of_explicit_room_does_not_require_floor_vacancy(self):
         self.button(rooms=["Bath"])
         self.tick()

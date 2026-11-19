@@ -757,14 +757,14 @@ class Pilot:
         gr = self.D["groups"][self.D["gi"]]
         if gr["mode"] == "whole_floor":
             self.call("vacuum.start", {"entity_id": VAC})
-            self.D.update(group_started=now, saw_clean=False, fan=None, docked_since=0)
+            self.D.update(group_started=now, saw_clean=False, device_task_acknowledged=False, fan=None, docked_since=0)
             self.log("launch", rooms=[], mode="whole_floor")
             return
         fan = "smart_mode" if gr["mode"] == "smart_mode" else self.tier()
         self.call("select.select_option", {"entity_id": MODE_SEL, "option": gr["mode"]})
         self.call("vacuum.set_fan_speed", {"entity_id": VAC, "fan_speed": fan})
         self.call(CLEAN_SCRIPT, {"vacuum": VAC, "map_flag": MAP_FLAG, "rooms": gr["rooms"]})
-        self.D.update(group_started=now, saw_clean=False, fan=fan, docked_since=0)
+        self.D.update(group_started=now, saw_clean=False, device_task_acknowledged=False, fan=fan, docked_since=0)
         self.log("launch", rooms=gr["rooms"], mode=gr["mode"], fan=fan)
 
     def explore_rooms(self, on, now):
@@ -876,7 +876,7 @@ class Pilot:
         item = next((x for x in queue if x.get("id") == request_id), None)
         if not item:
             return
-        if ok or D.get("saw_clean") or D.get("trouble"):
+        if ok or D.get("saw_clean") or D.get("device_task_acknowledged") or D.get("trouble"):
             D["manual_queue"] = [x for x in queue if x.get("id") != request_id]
             self.log("manual_done" if ok else "manual_interrupted", request_id=request_id,
                      rooms=item.get("rooms"), why=why)
@@ -1129,6 +1129,8 @@ class Pilot:
                         D["explore_day"] = datetime.fromtimestamp(now).date().isoformat()
                     self.start(rooms, now, explore=bool(pr))
         elif ph == "running":
+            if incl == "on":
+                D["device_task_acknowledged"] = True
             if vs in ("error", "idle", "paused"):   # stuck, or a grown-up stopped it: once it's home, the run is over
                 if not D.get("trouble"):
                     D["trouble"] = vs
@@ -1168,7 +1170,12 @@ class Pilot:
             else:
                 D["docked_since"] = 0
             if D["phase"] == "running" and not D.get("saw_clean") and now - D.get("group_started", now) > 300:
-                self.finish("never started cleaning (state %s)" % vs, now)
+                if incl == "on" and now - D.get("group_started", now) <= MAX_RUN_S:
+                    info["why"] = "robot accepted the task and is preparing to clean"
+                elif D.get("device_task_acknowledged"):
+                    self.finish("accepted robot task ended or timed out before floor cleaning was observed", now)
+                else:
+                    self.finish("never started cleaning (state %s)" % vs, now)
         elif ph == "cancelled":
             if vs in ("docked", "charging"):
                 self.finish("manual jobs cancelled", now)
