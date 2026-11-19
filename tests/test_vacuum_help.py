@@ -116,6 +116,47 @@ class RobotHeroJobs(Case):
         self.assertIn("battery ran out", st["board"]["help_rescue_down"]["note"])
         self.assertNotIn("Kitchen", st["board"]["help_rescue_down"]["note"])
 
+    def test_a_claimed_rescue_auto_passes_when_that_robot_reaches_its_dock(self):
+        self.app.set(ERR, "low_battery", ago=60)
+        self.app.set("vacuum.down", "error", ago=60)
+        self.tick()
+        before = self.app.state()["balance"]["max"]
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "help_rescue_down"})[0], 200)
+        code, report = self.app.post("/api/report", {"kid": "max", "chore": "help_rescue_down", "feeling": "ok"})
+        self.assertEqual(code, 200)
+        time.sleep(0.02)
+        self.app.set(ERR, "none")
+        self.app.set("vacuum.down", "docked")
+        self.tick()
+        st = self.app.state()
+        done = next(h for h in st["history"] if h.get("id") == report["event"]["id"])
+        self.assertEqual((done["status"], done["awarded"], done["inspected_by"]), ("inspected", 3, "vacuum"))
+        self.assertEqual(st["balance"]["max"], before + 3)
+
+    def test_docking_without_a_claimant_awards_nobody(self):
+        self.app.set(ERR, "robot_trapped", ago=60)
+        self.app.set("vacuum.down", "error", ago=60)
+        self.tick()
+        before = dict(self.app.state()["balance"])
+        time.sleep(0.02)
+        self.app.set(ERR, "none")
+        self.app.set("vacuum.down", "docked")
+        self.tick()
+        self.assertEqual(self.app.state()["balance"], before)
+
+    def test_claimed_water_job_auto_passes_when_tanks_are_healthy(self):
+        self.app.set(WATER, "on", ago=60)
+        self.tick()
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "help_water_down"})[0], 200)
+        before = self.app.state()["balance"]["ava"]
+        time.sleep(0.02)
+        self.app.set(WATER, "off")
+        self.tick()
+        st = self.app.state()
+        done = next(h for h in st["history"] if h.get("chore") == "help_water_down")
+        self.assertEqual((done["status"], done["awarded"]), ("inspected", 2))
+        self.assertEqual(st["balance"]["ava"], before + 2)
+
     def test_water_tanks_open_a_water_job(self):
         self.app.set(DOCK, "water_empty", ago=60)
         self.app.set(WATER, "on", ago=60)

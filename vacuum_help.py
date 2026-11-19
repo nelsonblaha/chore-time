@@ -10,7 +10,8 @@ Dirty sensors are a quick kid job. Worn parts, filters, the dust bag and other d
 
 Each job is a built-in on-demand chore per robot ("help_rescue_<id>", "help_water_<id>"). It opens with a one-time
 price, so it arrives as BIG NEWS (flashing, with a fanfare) on the kids' screens, and it goes through inspection like
-any job. Jobs never open during bedtime
+any job. A claimed rescue completes and pays automatically when that robot is subsequently seen docked; a claimed
+water job does the same when every configured tank signal is healthy. Jobs never open during bedtime
 (the room is still marked untidy at once). If the robot gets going again without a kid (a grown-up fixed it) and no
 kid has started or reported the job within CLOSE_AFTER_S, the job closes again; the room stays untidy.
 
@@ -172,6 +173,24 @@ def water_note(robot, n):
         ", just like you were shown."
 
 
+def water_resolved_at(robot, read):
+    """Timestamp when every configured water signal became positively healthy; unknown is never proof."""
+    rows = []
+    if robot.get("dock_error"):
+        dock = read(robot["dock_error"])
+        if dock.get("state") in (None, "unknown", "unavailable") or dock.get("state") in WATER_DOCK:
+            return 0
+        rows.append(dock)
+    for ent in robot.get("water") or []:
+        tank = read(ent)
+        if tank.get("state") != "off":
+            return 0
+        rows.append(tank)
+    if not rows:
+        return 0
+    return max(epoch(row.get("last_changed")) for row in rows)
+
+
 def untidy_events(spaces, board, space_rows, robot, room_name):
     """Mark the rooms where the robot got stuck untidy: reopen their jobs that are presumed clean; a room with no
     jobs gets a space_tidy false."""
@@ -236,6 +255,23 @@ class Helper:
         pts = self.cfg.get("points") or {}
         for robot in self.cfg.get("robots") or []:
             R = self.D.setdefault(robot["id"], {})
+            if robot.get("vacuum"):
+                vac = self.read(robot["vacuum"])
+                if vac.get("state") == "docked":
+                    refs = g["auto_verify_chore"](rescue_id(robot), epoch(vac.get("last_changed")), "vacuum",
+                                                   robot["name"] + " reached its dock")
+                    if refs:
+                        g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "rescue",
+                                   "action": "auto_verify", "refs": refs})
+                        changed, st = True, g["derive"]()
+            water_at = water_resolved_at(robot, self.read)
+            if water_at:
+                refs = g["auto_verify_chore"](water_id(robot), water_at, "vacuum",
+                                               robot["name"] + " water tanks are ready")
+                if refs:
+                    g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "water",
+                               "action": "auto_verify", "refs": refs})
+                    changed, st = True, g["derive"]()
             n = need(robot, self.read)
             for kind, cid in (("rescue", rescue_id(robot)), ("water", water_id(robot))):
                 K = R.setdefault(kind, {})

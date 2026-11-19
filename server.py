@@ -440,6 +440,58 @@ def shares(r, total):
     return {m: out.get(m, 0) for m in team}
 
 
+AUTO_VERIFY_LOCK = threading.Lock()
+
+
+def auto_verify_chore(cid, verified_at, by, reason):
+    """Finish a claimed job when a trustworthy physical signal proves the result.
+
+    A verification must be newer than the child's start/report. With no claimant, nothing is awarded. This is shared
+    by robot docking, resolved robot-water sensors, and devices coming back online after a plug-it-in job.
+    """
+    with AUTO_VERIFY_LOCK:
+        st = derive()
+        pending = sorted((r for r in st.get("history") or [] if r.get("type") == "report"
+                          and r.get("chore") == cid and r.get("status") == "pending"
+                          and float(r.get("ts") or 0) <= verified_at
+                          and float(r.get("started") or r.get("ts") or 0) <= verified_at),
+                         key=lambda r: r["ts"])
+        if pending:
+            report = pending[0]
+            points = report.get("points")
+        else:
+            jobs = []
+            seen = set()
+            for paused, rows in ((False, st.get("active") or {}), (True, st.get("paused") or {})):
+                for kid, job in rows.items():
+                    if job.get("chore") != cid:
+                        continue
+                    team = tuple(job.get("team") or [kid])
+                    if team in seen:
+                        continue
+                    seen.add(team)
+                    started = float(job.get("ts") or 0) - (float(job.get("elapsed") or 0) if paused else 0)
+                    if started <= verified_at:
+                        jobs.append((started, kid, team))
+            if not jobs:
+                return []
+            started, kid, team = min(jobs)
+            points = (st.get("board", {}).get(cid) or {}).get("price")
+            if points is None:
+                return []       # a grown-up must still assess variable-value work
+            report = append({"type": "report", "ts": verified_at, "kid": kid, "team": list(team), "chore": cid, "feeling": None,
+                             "points": int(points), "started": started, "auto_verified": reason})
+        if points is None:
+            return []
+        append({"type": "inspect", "ts": verified_at, "ref": report["id"], "by": by, "ok": True, "points": int(points),
+                "label": reason, "trusted": True, "auto_verified": True})
+        ilog({"src": "auto_verify", "chore": cid, "ref": report["id"], "by": by,
+              "reason": reason, "verified_at": verified_at})
+        if "clear_report_notice" in globals():
+            threading.Thread(target=clear_report_notice, args=(report["id"],), daemon=True).start()
+        return [report["id"]]
+
+
 PAUSE_DAYS = 7   # "finish later" keeps a job this many days (kids may be at the other house in between)
 
 
@@ -597,10 +649,12 @@ def next_step(ch, team, act):
 def watch_when_down():
     while True:
         try:
-            tok, changed = ha_token(), False
-            ents = {e for ch in cfg()["chores"] for e in ch.get("when_down") or []}
+            tok, changed, recovered = ha_token(), False, []
+            config = cfg()
+            ents = {e for ch in config["chores"] for e in ch.get("when_down") or []}
             for e in ents:
-                st_ = (ha_get(e, tok) or {}).get("state")
+                row_ = ha_get(e, tok) or {}
+                st_ = row_.get("state")
                 if st_ in (None, "unavailable", "unknown"):
                     if e not in DOWN:
                         DOWN[e] = time.time()
@@ -610,9 +664,21 @@ def watch_when_down():
                 elif e in DOWN:
                     DOWN.pop(e)
                     ilog({"src": "when_down", "entity": e, "state": "back"})
+                    try:
+                        from datetime import datetime as _dt
+                        back_at_ = _dt.fromisoformat(str(row_.get("last_changed")).replace("Z", "+00:00")).timestamp()
+                    except (TypeError, ValueError):
+                        back_at_ = time.time()
+                    recovered.append((e, back_at_))
                     changed = True
             for e in [x for x in DOWN if x not in ents]:
                 DOWN.pop(e)
+            done_ = set()
+            for e, back_at_ in recovered:
+                for ch in config["chores"]:
+                    if ch["id"] not in done_ and e in (ch.get("when_down") or []) and not device_down(ch):
+                        if auto_verify_chore(ch["id"], back_at_, "sensor", "Device came back online"):
+                            done_.add(ch["id"])
             if changed:
                 after_change()
         except Exception as ex:  # noqa: BLE001

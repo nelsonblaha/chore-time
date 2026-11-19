@@ -274,8 +274,7 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
     <div class="side">
       <div class="panel" id="presentsp" style="display:none;border:4px solid var(--kid)"><h2><span class="eh" data-c="1f504"></span> Toy swap</h2><div id="presents"></div></div>
       <div class="panel"><h2 class="fold" id="buyh"><span class="eh" data-c="1f6d2"></span> Buy<span class="sum" id="buysum"></span><span class="chev" id="buychev"></span></h2>
-        <div id="tvnow"></div><div id="buybody" style="display:none"><div id="rewards"></div><div id="rwpg"></div>
-        <div class="rw" id="toyout" style="justify-content:center;font-size:20px;font-weight:900;background:#fff3e0"></div></div></div>
+        <div id="tvnow"></div><div id="buybody" style="display:none"><div id="rewards"></div><div id="rwpg"></div></div></div>
       <div class="panel"><h2 class="fold" id="jobsh"><span class="eh" data-c="1f4cb"></span> My jobs<span class="sum" id="jobsum"></span><span class="chev" id="jobchev"></span></h2>
         <div class="hist" id="pzslot"></div><div id="jobbody" style="display:none"><div class="hist" id="hist"></div><div id="hpg"></div></div></div>
     </div>
@@ -677,6 +676,7 @@ function renderKid(){
   document.querySelectorAll(".tile").forEach(function(n){n.onclick=function(){
     var bd=S.board[n.dataset.c]||{pending_by:[]},c=S.config.chores.find(function(x){return x.id===n.dataset.c});
     if(c&&c.cleanup_for){cleanupModal();return}
+    if(c&&c.id==="toy_out"){toyGoodbye();return}
     if(bd.clean_until&&c.weekly){var dn=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
       modal('<div class="big">'+E(c.icon)+E("1f4c5")+'</div><div class="q">'+(bd.last_clean&&bd.last_clean>=bd.clean_until-7*86400?E("2705")+' Done for this week!':'No '+c.name.toLowerCase()+' today')+'</div><div class="q" style="font-size:26px;opacity:.8">'+E("1f4c5")+' Next '+c.name.toLowerCase()+' comes '+dn[c.weekly.open_dow||0]+'</div>');addOk();return}
     if(bd.clean_until&&c.daily){modal('<div class="big">'+E(c.icon)+E("2705")+'</div><div class="q">Done for today!</div><div class="q" style="font-size:26px;opacity:.8">'+E("1f305")+' Again tomorrow</div>');addOk();return}
@@ -721,7 +721,6 @@ function renderKid(){
   $("buybody").style.display=FOLD.buy?"":"none";$("buychev").innerHTML=FOLD.buy?"&#9650;":"&#9660;";
   $("buysum").innerHTML=FOLD.buy?"":CF?E("1f9f9")+" chores first":canN?E("2705")+" "+canN+" you can buy":"tap to see";
   $("buyh").onclick=function(){FOLD.buy=!FOLD.buy;if(FOLD.buy)FOLD.jobs=false;L("fold",{what:"buy",open:FOLD.buy});renderKid()};   // one open at a time: both don't fit
-  $("toyout").innerHTML=E("1f9f8")+E("1f44b")+' Give away a toy';$("toyout").onclick=toyGoodbye;
   document.querySelectorAll("[data-mv]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var ref=n.dataset.mv,from=n.dataset.from;L("tv_switch_open",{from:from});
     modal('<div class="big">'+E("1f4fa")+E("1f504")+'</div><div class="q">Which TV?</div><div class="faces">'+
       TVL().map(function(t){return '<div class="btn'+(t.id===from?' no':'')+'" data-to="'+t.id+'">'+E(t.icon)+E("1f4fa")+'<span class="lbl">'+t.name+(t.id===from?" (now)":"")+'</span></div>'}).join("")+'</div>');

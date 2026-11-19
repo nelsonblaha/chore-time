@@ -142,6 +142,14 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Choose TV &amp; viewers", html)
         self.assertIn("Choose the TV and everyone who will watch. No points are spent yet.", html)
 
+    def test_give_away_a_toy_is_an_earning_job_not_a_buy_button(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn('if(c&&c.id==="toy_out"){toyGoodbye();return}', html)
+        self.assertNotIn('id="toyout"', html)
+        toy = next(c for c in json.loads((REPO / "example-config" / "chores.json").read_text())["chores"]
+                   if c["id"] == "toy_out")
+        self.assertEqual((toy["name"], toy.get("hidden")), ("Give away a toy", None))
+
 
 class Case(unittest.TestCase):
     config = None
@@ -1558,6 +1566,17 @@ class FixItJobs(Case):
             self.app.pass_report("max", "plug", points=0)
         mine = [a for a in self.app.state()["awards"]["max"] if a["id"].startswith("trophy:plug")]
         self.assertEqual((len(mine) >= 1, mine[0]["title"]), (True, "Fixer!"))
+
+    def test_a_started_fix_auto_completes_when_the_device_is_verified_online(self):
+        self.s.DOWN["binary_sensor.sensor"] = time.time() - 700
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "plug"})[0], 200)
+        time.sleep(0.02)
+        refs = self.s.auto_verify_chore("plug", time.time(), "sensor", "Device came back online")
+        self.assertEqual(len(refs), 1)
+        st = self.app.state()
+        done = next(h for h in st["history"] if h.get("id") == refs[0])
+        self.assertEqual((done["status"], done["awarded"], st["active"]), ("inspected", 0, {}))
+        self.assertTrue(any(a["title"] == "Fixer!" for a in st["awards"]["max"]), st["awards"]["max"])
 
     def test_a_remind_job_in_progress_shows_its_next_step(self):
         self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "letter"})[0], 200)

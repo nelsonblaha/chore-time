@@ -307,10 +307,9 @@
     },
     {
       "id": "toy_out",
-      "name": "Toy goodbye",
+      "name": "Give away a toy",
       "icon": "1f44b",
       "points": null,
-      "hidden": true,
       "floor": "Other",
       "shared": true
     }
