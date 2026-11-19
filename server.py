@@ -37,6 +37,7 @@ envelopes.configure(HOUSE.get("envelopes"), str(DATA / "envelopes_printed.json")
 import schedule  # noqa: E402
 schedule.configure(HOUSE.get("kid_calendar"), str(DATA / "kid_calendar.json"))
 HA = HOUSE.get("home_assistant") or {}   # empty = no Home Assistant: TV locks, Hubs, lights, vacuum, watch login all off
+REWARD_BLOCK_CACHE = {"ts": 0, "value": {"on": False, "items": []}}
 
 
 def house_path(p):
@@ -48,6 +49,39 @@ def ha_token():
         return HA_TOKEN_FILE.read_text().strip()
     except (OSError, NameError):
         return ""
+
+
+def reward_block_state(fresh=False):
+    """Live, fail-open household gates that apply only to spending points.
+
+    A blocker is active only when Home Assistant explicitly reports one of its
+    configured active states. Missing entities, transport errors, unknown and
+    unavailable therefore never strand a child at the purchase screen.
+    """
+    rules = HOUSE.get("reward_blockers") or []
+    if not rules or not HA_URL:
+        return {"on": False, "items": []}
+    now = time.time()
+    if not fresh and now - REWARD_BLOCK_CACHE["ts"] < 2:
+        return REWARD_BLOCK_CACHE["value"]
+    items = []
+    try:
+        tok = ha_token()
+        for rule in rules:
+            entity = str(rule.get("entity") or "")
+            if not entity:
+                continue
+            state = str((ha_get(entity, tok) or {}).get("state") or "").lower()
+            active_states = {str(x).lower() for x in (rule.get("states") or ["on", "open"])}
+            if state in active_states:
+                items.append({"name": rule.get("name") or "Household check",
+                              "message": rule.get("message") or "Please fix this, then try again.",
+                              "icon": rule.get("icon") or "1f6aa"})
+    except Exception:  # sensor/API/token trouble is deliberately fail-open
+        items = []
+    value = {"on": bool(items), "items": items}
+    REWARD_BLOCK_CACHE.update(ts=now, value=value)
+    return value
 LEDGER = DATA / "ledger.jsonl"
 ILOG = DATA / "interactions.jsonl"
 VACUUM_BUTTON_TOKEN_FILE = Path(os.environ.get("VACUUM_BUTTON_TOKEN_FILE", DATA / "vacuum-button.token")).expanduser()
@@ -1784,6 +1818,7 @@ def derive():
             "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
+            "reward_block": reward_block_state(),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
             "next_step": {m: next_step(chores.get(a["chore"]) or {}, a.get("team") or [k], a) for k, a in active.items()
@@ -1848,7 +1883,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "room_choices",
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
@@ -1914,6 +1949,7 @@ def push_state_sensor(state=None, last_result=None):
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
              "assist_requests": state.get("assist_requests"), "envelope": state.get("envelope"),
              "adult_busy": state.get("adult_busy"), "adult_busy_until": state.get("adult_busy_until"),
+             "reward_block": state.get("reward_block"),
              "next_step": state.get("next_step"),
              "room_choices": state.get("room_choices")}
     try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
@@ -2626,6 +2662,11 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/spend" and b.get("kid") and b.get("reward") in rewards and not is_here(rewards[b["reward"]], c, b["kid"]):
             return self.send(409, {"error": "that reward is at the other house"})
+        if p in ("/api/spend", "/api/reward_consent_request") and b.get("kid") in kids and b.get("reward") in rewards:
+            reward_block_ = reward_block_state(fresh=True)
+            if reward_block_["on"]:
+                return self.send(409, {"error": reward_block_["items"][0]["message"],
+                                       "reward_block": reward_block_})
         if p in ("/api/start", "/api/report", "/api/claim", "/api/team", "/api/resume"):
             kid_ = b.get("kid")
             gate_ = (st.get("must_do_first") or {}).get(kid_) or {}

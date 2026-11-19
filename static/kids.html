@@ -1428,6 +1428,7 @@ function togetherLine(r){var tc=r.together_cost||{},ks=Object.keys(tc).sort();if
   return ks.map(function(k){return k+" watching: "+tc[k]+" "+E("2b50")+" each"}).join(" &middot; ")}
 function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:null});
   var r=S.config.rewards.find(function(x){return x.id===rid}),b=S.balance[kid];
+  if((S.reward_block||{}).on){var rb=(S.reward_block.items||[])[0]||{};modal('<div class="big">'+E(rb.icon||"1f6aa")+'</div><div class="q">Close the downstairs toilet door</div><div class="q" style="font-size:28px">'+safeText(rb.message||"Close it, then come back and try again.")+'</div>');addOk();return}
   if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===rid})){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">You bought '+r.name+'! A grown-up will help you set it up and start your time.</div>');addOk();return}
   if(pastCutoff(r.before,r.before_from)){modal('<div class="big">'+E("1f319")+E(r.icon)+'</div><div class="q">'+r.name+' is done for tonight</div><div class="q" style="font-size:28px">It is available before '+hm12(r.before)+'. You can still choose other allowed rewards.</div>');addOk();return}
   var mf=((S.must_do_first||{})[kid])||{};if(mf.rewards){modal('<div class="big">'+E("1f4da")+'</div><div class="q">'+safeText(mf.name)+' first!</div><div class="q" style="font-size:28px">Rewards come back when it is done.</div>');addOk();return}

@@ -150,6 +150,10 @@ class StaticUiRegressions(unittest.TestCase):
                    if c["id"] == "toy_out")
         self.assertEqual((toy["name"], toy.get("hidden")), ("Give away a toy", None))
 
+    def test_reward_door_block_has_a_direct_kid_message(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("Close the downstairs toilet door", html)
+
 
 class Case(unittest.TestCase):
     config = None
@@ -188,6 +192,43 @@ class SoundSettings(Case):
     def test_house_can_mute_every_kids_interface_sound_effect(self):
         self.s.HOUSE["sound_effects"] = False
         self.assertIs(self.app.state()["sound_effects"], False)
+
+
+class RewardBlockers(Case):
+    DOOR = "binary_sensor.test_toilet_door"
+
+    def setUp(self):
+        super().setUp()
+        self.s.HOUSE["reward_blockers"] = [{"entity": self.DOOR, "states": ["on"],
+                                             "name": "Downstairs toilet door", "icon": "1f6aa",
+                                             "message": "Close the downstairs toilet door, then try again."}]
+        self.s.REWARD_BLOCK_CACHE.update(ts=0, value={"on": False, "items": []})
+        self.app.event(type="adjust", kid="ava", points=20, reason="test")
+
+    def test_open_door_blocks_redemption_but_closing_it_immediately_clears_the_gate(self):
+        self.app.set(self.DOOR, "on")
+        before = self.app.state()["balance"]["ava"]
+        code, blocked = self.app.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})
+        self.assertEqual(code, 409)
+        self.assertIn("Close the downstairs toilet door", blocked["error"])
+        self.assertEqual(self.app.state()["balance"]["ava"], before)
+        self.app.set(self.DOOR, "off")
+        self.assertEqual(self.app.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})[0], 200)
+
+    def test_offline_sensor_fails_open_and_does_not_block_chores(self):
+        self.app.set(self.DOOR, "unavailable")
+        self.assertFalse(self.app.state()["reward_block"]["on"])
+        self.assertEqual(self.app.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})[0], 200)
+        self.app.set(self.DOOR, "on")
+        self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "organize"})[0], 200)
+
+    def test_open_door_stops_adult_consent_before_any_request_is_created(self):
+        next(r for r in self.s.cfg()["rewards"] if r["id"] == "vr")["needs_ok"] = True
+        self.app.set(self.DOOR, "on")
+        code, blocked = self.app.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 409)
+        self.assertIn("Close the downstairs toilet door", blocked["error"])
+        self.assertEqual(self.s.ADULT_REQ, {})
 
 
 # ---------------------------------------------------------------- prices
