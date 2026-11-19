@@ -1997,6 +1997,16 @@ class ShowerByHouse(Case):
 
 
 class GrownUpStartsVR(Case):
+    def test_vr_availability_countdown_never_speaks_on_google_devices(self):
+        a = App(base_config())
+        a.event(type="spend", kid="ava", reward="vr", cost=2, display_minutes=15,
+                ts=time.time() - 14 * 60 - 30)
+        heard = []
+        a.s.announce = lambda *args, **kwargs: heard.append((args, kwargs))
+        a.s.vr_timers("tok")
+        self.assertEqual(heard, [])
+        a.close()
+
     def test_first_stove_job_needs_help_but_later_ones_do_not(self):
         c = base_config()
         c["chores"].insert(0, {"id": "stove", "name": "Clean stove", "icon": "1f9fd", "points": 6,
@@ -2036,24 +2046,32 @@ class GrownUpStartsVR(Case):
         self.assertEqual(code, 200, r)
         st = a.state()
         self.assertEqual((st["balance"]["ava"], len(st["timers"]), st["requests"]), (8, 1, []))
-        self.assertEqual(st["timers"][0]["minutes"], 5)
+        self.assertEqual(st["timers"][0]["minutes"], 15)
         grant = next(g for g in st["tv"]["tvs"]["livingroom"]["grants"] if g["id"] == r["event"]["id"])
         self.assertAlmostEqual(grant["until"] - grant["start"], 15 * 60, delta=2)
         self.assertFalse([g for g in st["tv"]["tvs"]["kitchen"].get("grants", []) if g["id"] == r["event"]["id"]])
         self.assertGreaterEqual(st["timers"][0]["start"], r["event"]["ts"])
+        # Another child's adult-consent path remains live while this turn runs;
+        # the headset/setup workflow is not a global lock.
+        a.event(type="adjust", kid="max", points=2, reason="test")
+        code, overlap = a.post("/api/reward_consent_request", {"kid": "max", "reward": "vr"})
+        self.assertEqual(code, 200)
+        a.s.ADULT_REQ = a.s.load_adult_requests()  # an ordinary service reload must not lose the dialog
+        self.assertIn(overlap["nonce"], {q["nonce"] for q in a.state()["assist_requests"]})
+        self.assertEqual(a.post("/api/assist_answer", {"nonce": overlap["nonce"], "by": "jordan", "ok": True})[0], 200)
+        code, overlapping = a.post("/api/spend", {"kid": "max", "reward": "vr", "consent": overlap["nonce"]})
+        self.assertEqual(code, 200, overlapping)
+        self.assertEqual({t["kid"] for t in a.state()["timers"]}, {"ava", "max"})
+        # A kid can end only their own timer from the countdown screen.
+        self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"], "kid": "max"})[0], 400)
+        self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"], "kid": "ava"})[0], 200)
+        self.assertEqual([t["kid"] for t in a.state()["timers"]], ["max"])
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr", "consent": ask["nonce"]})[0], 409)
-        self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"]})[0], 400)   # grown-ups only
-        self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"], "by": "jordan"})[0], 200)
-        self.assertEqual(a.state()["timers"], [])
-        # Another kid can still use the ordinary two-minute refund after an accepted purchase.
-        a.event(type="adjust", kid="max", points=5, reason="test")
-        code, ask2 = a.post("/api/reward_consent_request", {"kid": "max", "reward": "vr"})
-        self.assertEqual(a.post("/api/assist_answer", {"nonce": ask2["nonce"], "by": "jordan", "ok": True})[0], 200)
-        code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr", "consent": ask2["nonce"]})
-        self.assertEqual(a.state()["balance"]["max"], 3)
-        self.assertEqual(a.post("/api/refund", {"ref": r2["event"]["id"], "kid": "max"})[0], 200)
+        self.assertEqual(a.post("/api/timer_done", {"ref": overlapping["event"]["id"]})[0], 400)
+        # The ordinary two-minute refund also ends that child's timer.
+        self.assertEqual(a.post("/api/refund", {"ref": overlapping["event"]["id"], "kid": "max"})[0], 200)
         st = a.state()
-        self.assertEqual((st["balance"]["max"], [t for t in st["timers"] if t["kid"] == "max"]), (5, []))
+        self.assertEqual((st["balance"]["max"], [t for t in st["timers"] if t["kid"] == "max"]), (2, []))
 
     def test_busy_later_pauses_vr_and_first_time_help_together(self):
         c = base_config()

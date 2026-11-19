@@ -319,6 +319,7 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
   <div id="tmrmsg" style="font-size:40px;font-weight:900;min-height:56px"></div>
   <div class="btn yes" id="tmrok" style="display:none;font-size:48px;font-weight:900;padding:10px 40px;margin-top:10px;color:#222">OK</div>
   <div id="tmrhide" style="position:absolute;top:16px;left:20px;font-size:26px;font-weight:900;color:#cfd8ff;border:2px solid #3a4a80;border-radius:16px;padding:6px 16px">&#9662; Hide</div>
+  <div id="tmrstop" style="position:absolute;bottom:18px;left:22px;font-size:25px;font-weight:900;color:#fff;border:3px solid #ef5350;background:#b71c1c;border-radius:16px;padding:8px 18px">&#9632; Stop now</div>
   <div id="tmrre" style="position:absolute;bottom:18px;right:22px;font-size:22px;font-weight:800;color:#9fb0e0;border:2px solid #3a4a80;border-radius:16px;padding:8px 14px">&#8635; Grown-ups: hold to restart</div>
 </section>
 <div class="modal" id="m"><div class="box" id="mbox"></div></div>
@@ -1090,6 +1091,8 @@ function startTimer(t){var r=S.config.rewards.find(function(x){return x.id===t.r
   tick();tmrT=setInterval(tick,500);
   $("tmrok").onclick=function(e){e.stopPropagation();tmrDismissed[tmrCur]=1;$("timer").classList.remove("on");clearInterval(tmrT);L("timer_ok")};
   $("tmrhide").onclick=function(e){e.stopPropagation();tmrHidden[t.ref]=1;$("timer").classList.remove("on");clearInterval(tmrT);L("timer_hide");syncTimers()};
+  $("tmrstop").onclick=function(e){e.stopPropagation();if(this.dataset.busy)return;this.dataset.busy="1";L("timer_stop",{ref:t.ref});
+    api("/api/timer_done",{ref:t.ref,kid:kid}).then(function(res){delete $("tmrstop").dataset.busy;if(!res.ok){$("tmrmsg").textContent=res.error||"Couldn't stop the timer";return}S=res.state;tmrDismissed[tmrCur]=1;$("timer").classList.remove("on");clearInterval(tmrT);renderKid();syncTimers()})};
   var hold=null,re=$("tmrre");
   function down(e){e.preventDefault();re.style.background="#3a4a80";hold=setTimeout(function(){re.style.background="";L("timer_restart",{ref:t.ref});
     api("/api/timer_restart",{ref:t.ref}).then(function(res){if(res.ok){S=res.state;var nt=(S.timers||[]).find(function(x){return x.ref===t.ref});if(nt)startTimer(nt)}})},2000)}
@@ -1109,8 +1112,9 @@ var boughtHere={},tmrHidden={};
 function syncTimers(){ // full-screen only where it was bought or on that kid's own screen; elsewhere a small chip
   var run=(S.timers||[]).filter(function(t){return t.start+t.minutes*60+60>S.now});
   var chip=$("tmrchip");
-  if(!run.length){chip.style.display="none";return}
-  var t=run[run.length-1],key=t.ref+":"+Math.round(t.start),mine=boughtHere[t.ref]||kid===t.kid;
+  if(!run.length){chip.style.display="none";$("timer").classList.remove("on");clearInterval(tmrT);return}
+  var own=run.filter(function(t){return kid&&t.kid===kid}),t=(own.length?own:run)[(own.length?own:run).length-1],key=t.ref+":"+Math.round(t.start),mine=boughtHere[t.ref]||kid===t.kid;
+  if($("timer").classList.contains("on")&&tmrCur!==key){$("timer").classList.remove("on");clearInterval(tmrT)}
   if(mine&&!tmrHidden[t.ref]&&key!==tmrCur&&!tmrDismissed[key]){startTimer(t);return}
   if($("timer").classList.contains("on")&&tmrCur===key&&!tmrHidden[t.ref])return;
   var k=S.config.kids.find(function(x){return x.id===t.kid})||{icon:"2753"},r=S.config.rewards.find(function(x){return x.id===t.reward})||{icon:"23f1"};

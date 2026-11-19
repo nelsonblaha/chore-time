@@ -1890,7 +1890,34 @@ def notify_request(ev):
 
 # Phone only: Android mirrors it to the Pixel Watch WITH its buttons (taps handled by the phone app).
 # The watch's own HA app shows notifications without buttons (tested), so don't send there.
-ADULT_REQ = {}   # nonce -> {who, ip, ts, status}
+ADULT_REQ_FILE = DATA / "adult_requests.json"
+
+
+def load_adult_requests():
+    """Keep short-lived consent dialogs through an ordinary service reload."""
+    try:
+        saved = json.loads(ADULT_REQ_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    return {str(n): r for n, r in saved.items() if isinstance(r, dict)
+            and now - float(r.get("ts") or 0) < 300
+            and (r.get("status") == "pending" or (r.get("status") == "ok" and not r.get("used")))}
+
+
+def save_adult_requests():
+    active = {n: r for n, r in ADULT_REQ.items()
+              if r.get("status") == "pending" or (r.get("status") == "ok" and not r.get("used"))}
+    try:
+        pending = ADULT_REQ_FILE.with_suffix(".tmp")
+        with LOCK:
+            pending.write_text(json.dumps(active))
+            pending.replace(ADULT_REQ_FILE)
+    except OSError:
+        pass
+
+
+ADULT_REQ = load_adult_requests()   # nonce -> {who, ip, ts, status}
 
 
 def send_adult_request(nonce, who, where):
@@ -1921,6 +1948,8 @@ def send_adult_request(nonce, who, where):
         ha_call(svc, {"title": title, "message": message,
                       "data": {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
                                "actions": actions}}, tok)
+    ilog({"src": "notify", "action": "adult_request_sent", "nonce": nonce,
+          "purpose": req.get("purpose"), "to": ADULT_NOTIFY.get(who, [])})
 
 
 def parent_quiet():
@@ -2098,6 +2127,7 @@ def resolve_assist_request(nonce, ok, by):
         r["until"] = time.time() + 3600
         append({"type": "adult_busy", "kid": r["kid"], "chore": r.get("chore"), "reward": r.get("reward"),
                 "by": by, "until": r["until"]})
+    save_adult_requests()
     after_change()
     threading.Thread(target=clear_adult_request, args=(nonce, r["who"]), daemon=True).start()
     ilog({"src": "adult", "action": r["status"], "purpose": r["purpose"], "kid": r["kid"],
@@ -2226,6 +2256,7 @@ def watch_ha_events():
                                     resolve_assist_request(nonce, act.startswith("CHORE_OK_"), r["who"])
                                 else:
                                     r["status"] = "ok" if act.startswith("CHORE_OK_") else "no"
+                                    save_adult_requests()
                                     ilog({"src": "adult", "action": r["status"], "who": r["who"], "ip": r["ip"]})
                                     print("grown-up request", nonce, r["status"], flush=True)
             except Exception as ex:  # noqa: BLE001
@@ -2531,6 +2562,7 @@ class H(BaseHTTPRequestHandler):
             if not old_:
                 ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
                                     "status": "pending", "purpose": "assist", "kid": kid_, "chore": cid_}
+                save_adult_requests()
                 threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
                 ilog({"src": "adult", "action": "assist_request", "kid": kid_, "chore": cid_})
             return self.send(200, {"ok": True, "nonce": nonce})
@@ -2550,6 +2582,7 @@ class H(BaseHTTPRequestHandler):
             if not old_:
                 ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
                                     "status": "pending", "purpose": "reward", "kid": kid_, "reward": rid_}
+                save_adult_requests()
                 threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
                 ilog({"src": "adult", "action": "reward_request", "kid": kid_, "reward": rid_})
             return self.send(200, {"ok": True, "nonce": nonce})
@@ -2571,6 +2604,7 @@ class H(BaseHTTPRequestHandler):
                 where += " (to lock a TV)"
             ADULT_REQ[nonce] = {"who": who, "ip": self.client_address[0], "ts": time.time(), "status": "pending",
                                 "purpose": "lock" if b.get("purpose") == "lock" else "login"}
+            save_adult_requests()
             ilog({"src": "adult", "action": "request", "who": who, "ip": self.client_address[0]})
             threading.Thread(target=send_adult_request, args=(nonce, who, where), daemon=True).start()
             return self.send(200, {"ok": True, "nonce": nonce})
@@ -2582,6 +2616,7 @@ class H(BaseHTTPRequestHandler):
                 r["status"] = "timeout"
             if r["status"] == "ok" and r.get("purpose") in ("login", "lock"):
                 r["used"] = True
+            save_adult_requests()
             if r["status"] != "pending":
                 threading.Thread(target=clear_adult_request, args=(b["nonce"], r["who"]), daemon=True).start()
             return self.send(200, {"ok": True, "status": r["status"],
@@ -2755,15 +2790,15 @@ class H(BaseHTTPRequestHandler):
                         or consent_.get("reward") != b["reward"] or consent_.get("status") != "ok" or consent_.get("used"):
                     return self.send(409, {"error": "A grown-up needs to allow this first."})
                 consent_["used"] = True
+                save_adult_requests()
             tvx = {}
             setup_tv_ = rewards[b["reward"]].get("setup_tv")
             if setup_tv_ in TVS:
                 setup_min_ = max(1, min(60, int(rewards[b["reward"]].get("setup_tv_minutes") or 15)))
-                # The TV setup window and the reward itself have separate
-                # durations.  In particular, VR needs a little lead time to
-                # start casting without turning a five-minute reward into a
-                # fifteen-minute reward.
-                tvx = {"tv": setup_tv_, "until": time.time() + setup_min_ * 60}
+                # The countdown describes how long the display and TV stay
+                # available; the grown-up handles the actual VR-time call.
+                tvx = {"tv": setup_tv_, "until": time.time() + setup_min_ * 60,
+                       "display_minutes": setup_min_}
             if b["reward"] in UNLOCKS and (b.get("tv") in TVS or b.get("tv") == "*"):
                 tm = rewards[b["reward"]].get("tv_minutes") or UNLOCKS[b["reward"]][0]
                 tvx = {"tv": b["tv"], "until": time.time() + tm * 60, "minutes": tm}
@@ -3198,10 +3233,14 @@ class H(BaseHTTPRequestHandler):
                     if act == "lock":
                         GUARD.setdefault("grace", {}).pop(tid_, None)
             ev = append({"type": "tv_set_until", "tv": b["tv"], "until": until, "by": b["by"], "action": act})
-        elif p == "/api/timer_done":   # grown-ups: clear a timed reward (time's up and the headset is off)
-            if b.get("by") not in insp or b.get("ref") not in {t["ref"] for t in timed_rewards()}:
-                return self.send(400, {"error": "unknown inspector / no timer"})
-            ev = append({"type": "timer_done", "ref": b["ref"], "by": b["by"]})
+        elif p == "/api/timer_done":   # a kid may end their own turn; grown-ups may clear any timer
+            tr_ = {t["ref"]: t for t in timed_rewards()}
+            timer_ = tr_.get(b.get("ref"))
+            adult_ = b.get("by") in insp
+            own_ = b.get("kid") in kids and timer_ and timer_["kid"] == b["kid"]
+            if not timer_ or not (adult_ or own_):
+                return self.send(400, {"error": "not your timer / no timer"})
+            ev = append({"type": "timer_done", "ref": b["ref"], "by": b.get("by") or b["kid"]})
         elif p == "/api/timer_restart":
             tr = {t["ref"]: t for t in timed_rewards()}
             if b.get("ref") not in tr:
@@ -3520,7 +3559,7 @@ def timed_rewards(evs=None, now=None):
         if e["type"] == "reward_start" and e.get("ref") in waiting:
             e = dict(waiting.pop(e["ref"]), ts=e["ts"])
         if e["type"] == "spend" and e["id"] not in undone and rw.get(e.get("reward"), {}).get("minutes"):
-            mins = e.get("minutes") or rw[e["reward"]]["minutes"]
+            mins = e.get("display_minutes") or e.get("minutes") or rw[e["reward"]]["minutes"]
             out[e["id"]] = {"ref": e["id"], "kid": e["kid"], "reward": e["reward"], "start": e["ts"], "minutes": mins,
                             "restarts": 0}
         elif e["type"] == "timer_restart" and e.get("ref") in out:
@@ -3532,25 +3571,16 @@ def timed_rewards(evs=None, now=None):
 
 
 def vr_timers(tok):
-    """Spoken 1-minute warning and time's-up for every running timed reward (restart-aware)."""
-    now = time.time()
-    done = GUARD.setdefault("vr_said", set())
+    """Refresh HA when a visible VR availability countdown expires.
+
+    The grown-up calls actual VR time; never announce countdown warnings on
+    Google speakers.
+    """
     live = sorted(t["ref"] for t in timed_rewards())
     if live != GUARD.get("vr_live"):   # a timer ran out (dropped 2 min after time's up): screens that only see the
         if GUARD.get("vr_live") is not None:   # HA sensor need a push, or "time is up" stays on them
             push_state_sensor()
         GUARD["vr_live"] = live
-    kidname = {k["id"]: k["name"] for k in cfg()["kids"]}
-    for t in timed_rewards():
-        end = t["start"] + t["minutes"] * 60
-        nm = kidname.get(t["kid"], "")
-        k1, k0 = (t["ref"], round(t["start"]), 1), (t["ref"], round(t["start"]), 0)
-        if end - 60 <= now < end and k1 not in done:
-            done.add(k1)
-            announce(f"{nm}, one minute of VR left.", tok, repeat=2)
-        if end <= now < end + 90 and k0 not in done:
-            done.add(k0)
-            announce(f"{nm}, VR time is up. Please take off the headset.", tok, repeat=2)
 
 
 UNLOCKS = {  # reward id -> (minutes, what it allows, longest single playback allowed in s or None)
@@ -3927,7 +3957,6 @@ def watch_tvs():
     except OSError:
         return
     was_on = bool(chore_time(tok))  # a restart mid chore-time must not hand out a fresh grace
-    # VR purchases already finished/announced before a restart must not be re-announced
     GUARD["tv_said"] = set()
     for tid, us in active_unlocks().items():
         tv_us = [u for u in us if u["what"] != "vr"]
@@ -3935,13 +3964,6 @@ def watch_tvs():
             end = max(u["until"] for u in tv_us)
             if end - time.time() <= 300:
                 GUARD["tv_said"].add((tid, round(end)))
-    GUARD["vr_said"] = set()
-    for t in timed_rewards():
-        end = t["start"] + t["minutes"] * 60
-        if time.time() >= end - 60:
-            GUARD["vr_said"].add((t["ref"], round(t["start"]), 1))
-        if time.time() >= end:
-            GUARD["vr_said"].add((t["ref"], round(t["start"]), 0))
     while True:
         try:
             refresh_spotify_interruption(tok)
