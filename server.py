@@ -2759,7 +2759,11 @@ class H(BaseHTTPRequestHandler):
             setup_tv_ = rewards[b["reward"]].get("setup_tv")
             if setup_tv_ in TVS:
                 setup_min_ = max(1, min(60, int(rewards[b["reward"]].get("setup_tv_minutes") or 15)))
-                tvx = {"tv": setup_tv_, "until": time.time() + setup_min_ * 60, "minutes": setup_min_}
+                # The TV setup window and the reward itself have separate
+                # durations.  In particular, VR needs a little lead time to
+                # start casting without turning a five-minute reward into a
+                # fifteen-minute reward.
+                tvx = {"tv": setup_tv_, "until": time.time() + setup_min_ * 60}
             if b["reward"] in UNLOCKS and (b.get("tv") in TVS or b.get("tv") == "*"):
                 tm = rewards[b["reward"]].get("tv_minutes") or UNLOCKS[b["reward"]][0]
                 tvx = {"tv": b["tv"], "until": time.time() + tm * 60, "minutes": tm}

@@ -2036,6 +2036,7 @@ class GrownUpStartsVR(Case):
         self.assertEqual(code, 200, r)
         st = a.state()
         self.assertEqual((st["balance"]["ava"], len(st["timers"]), st["requests"]), (8, 1, []))
+        self.assertEqual(st["timers"][0]["minutes"], 5)
         grant = next(g for g in st["tv"]["tvs"]["livingroom"]["grants"] if g["id"] == r["event"]["id"])
         self.assertAlmostEqual(grant["until"] - grant["start"], 15 * 60, delta=2)
         self.assertFalse([g for g in st["tv"]["tvs"]["kitchen"].get("grants", []) if g["id"] == r["event"]["id"]])
