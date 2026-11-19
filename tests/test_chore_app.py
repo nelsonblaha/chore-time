@@ -2111,16 +2111,26 @@ class SoloJobs(Case):
 
 
 class WindDown(Case):
-    def test_no_rewards_after_the_evening_cutoff(self):
+    def test_only_rewards_with_an_evening_cutoff_close(self):
         c = base_config()
-        c["rewards_until"] = "00:00"   # always past it
+        next(r for r in c["rewards"] if r["id"] == "show")["before"] = "00:00"   # always past it
         a = App(c)
         a.event(type="adjust", kid="ava", points=20, reason="test")
-        self.assertTrue(a.state()["wind_down"]["on"])
-        code, r = a.post("/api/spend", {"kid": "ava", "reward": "games"})
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})
         self.assertEqual(code, 409)
-        self.assertIn("bedtime", r["error"])
-        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "other", "feeling": "ok"})[0], 200)   # jobs still fine
+        self.assertIn("not available", r["error"])
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "games", "tv": "livingroom"})[0], 200)
+
+    def test_evening_routine_reopens_chores_after_required_brushing(self):
+        c = base_config()
+        c.update(routine_at="00:00", bedtime="23:59")
+        a = App(c)
+        a.event(type="report", kid="ava", chore="shower", feeling="ok", points=2, ts=time.time() - 86400)
+        self.assertTrue(a.state()["evening_routine"]["ava"]["due"])
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "other"})[0], 409)
+        self.assertEqual(a.post("/api/report", {"kid": "ava", "chore": "brush_teeth"})[0], 200)
+        self.assertFalse(a.state()["evening_routine"]["ava"]["due"])
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "other"})[0], 200)
 
     def test_off_without_a_cutoff(self):
         self.assertFalse(App(base_config()).state()["wind_down"]["on"])

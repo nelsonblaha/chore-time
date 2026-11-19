@@ -976,6 +976,16 @@ def reward_cost(r, watching=1):
     return r["cost"]
 
 
+def reward_closed(r, now=None):
+    """A reward may have its own evening cutoff; other rewards remain available."""
+    from datetime import datetime
+    now = now or datetime.now()
+    if not r or not r.get("before"):
+        return False
+    h, m = (int(x) for x in str(r["before"]).split(":"))
+    return now >= now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+
 def chore_closed(ch, board):
     """why a chore is unavailable right now (None = open): daylight-only after dark, one-time already done,
     outside its from/until dates (e.g. cleaning the car only in daylight; a one-time job)"""
@@ -1109,6 +1119,19 @@ def wind_down_state(c):
     now = datetime.now()
     hh, mm = (int(x) for x in str(at).split(":"))
     return {"on": now.hour < BED_END_H or (now.hour, now.minute) >= (hh, mm), "at": at}
+
+
+def evening_routine_window(c):
+    """Optional pre-bed routine gate, separate from bedtime and reward-specific cutoffs."""
+    from datetime import datetime
+    now = datetime.now()
+    start, end = c.get("routine_at"), c.get("bedtime")
+    if not start or not end or start in (False, "off") or end in (False, "off"):
+        return {"on": False, "at": start, "until": end}
+    def at(v):
+        h, m = (int(x) for x in str(v).split(":"))
+        return now.replace(hour=h, minute=m, second=0, microsecond=0)
+    return {"on": at(start) <= now < at(end), "at": start, "until": end}
 
 
 def must_do_first_state(c, board, now=None, arrivals=None):
@@ -1607,6 +1630,15 @@ def derive():
         # `each_daily` normally means once per day. A shower is instead offered
         # only when this child's two-night rule says it is due.
         board["shower"]["done_today"] = sorted(k for k, v in shower.items() if not v.get("due"))
+    evening_routine = {}
+    for k_ in c["kids"]:
+        kid_ = k_["id"]
+        items_ = []
+        if kid_ not in ((board.get("brush_teeth") or {}).get("done_today") or []):
+            items_.append("brush_teeth")
+        if (shower.get(kid_) or {}).get("due"):
+            items_.append("shower")
+        evening_routine[kid_] = {"due": bool(items_), "items": items_}
     present = sorted(GUARD.get("home_now") or []) if "GUARD" in globals() else []
     assist_requests = [{"nonce": n, "kid": r.get("kid"), "chore": r.get("chore"), "reward": r.get("reward"),
                         "purpose": r.get("purpose"), "ts": r["ts"]}
@@ -1620,7 +1652,7 @@ def derive():
             "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
-            "wind_down": wind_down_state(c),
+            "wind_down": wind_down_state(c), "evening_routine_window": evening_routine_window(c),
             "config": live_cfg(c, cf_board(c, evs, reports, board), assisted), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
@@ -1631,7 +1663,7 @@ def derive():
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
                           started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first,
             "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
-            "adult_busy_until": adult_busy_until(evs), "shower": shower,
+            "adult_busy_until": adult_busy_until(evs), "shower": shower, "evening_routine": evening_routine,
             "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
@@ -2423,6 +2455,10 @@ class H(BaseHTTPRequestHandler):
             chore_ = b.get("chore") or (st.get("paused", {}).get(kid_) or {}).get("chore")
             if gate_.get("on") and chore_ != gate_.get("chore") and not (chores.get(chore_) or {}).get("bedtime_ok"):
                 return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
+            routine_ = ((st.get("evening_routine") or {}).get(kid_) or {})
+            if (st.get("evening_routine_window") or {}).get("on") and routine_.get("due") and chore_ not in routine_.get("items", []):
+                names_ = ["take a shower" if x == "shower" else "brush your teeth" for x in routine_["items"]]
+                return self.send(409, {"error": "First " + " and ".join(names_) + ". Then chores come back until bedtime."})
             ast_ = ((st.get("adult_first") or {}).get(chore_) or {})
             ak_ = (ast_.get("kids") or {}).get(kid_) or {}
             if (chores.get(chore_) or {}).get("adult_first") and not ak_.get("trained"):
@@ -2437,8 +2473,9 @@ class H(BaseHTTPRequestHandler):
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and b.get("chore") != "get_dressed" \
                 and (st.get("dress") or {}).get("on") and (st["dress"]["kids"].get(b.get("kid")) or "ready") != "ready":
             return self.send(409, {"error": "Put on your clothes first!"})
-        if p == "/api/spend" and (st.get("wind_down") or {}).get("on"):
-            return self.send(409, {"error": "It's almost bedtime: no more rewards after %s. Brush your teeth!" % st["wind_down"]["at"]})
+        if p == "/api/spend" and reward_closed(rewards.get(b.get("reward"))):
+            return self.send(409, {"error": "%s is not available after %s." %
+                                   (rewards[b["reward"]]["name"], rewards[b["reward"]]["before"])})
         if p == "/api/spend" and any(((st.get("must_do_first") or {}).get(k_) or {}).get("rewards") for k_ in [b.get("kid")] + list(b.get("with") or [])):
             k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("must_do_first") or {}).get(k_) or {}).get("rewards"))
             gate_ = st["must_do_first"][k_]

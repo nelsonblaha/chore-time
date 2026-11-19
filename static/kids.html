@@ -645,8 +645,8 @@ function renderKid(){
     if(c.each_daily&&(bd.done_today||[]).indexOf(kid)>=0&&(bd.pending_by||[]).indexOf(kid)<0)return false;   // done today (each kid once a day)
     return true});
   if(MF.on)vis=vis.filter(function(c){return c.id===MF.chore||c.bedtime_ok});
-  var WD=(S.wind_down||{}).on,SH=((S.shower||{})[kid]||{});
-  if(WD)vis=vis.filter(function(c){return c.bedtime_ok&&(!SH.due||c.id==="shower"||c.id==="brush_teeth")});
+  var WD=(S.wind_down||{}).on,RW=(S.evening_routine_window||{}).on,SH=((S.shower||{})[kid]||{}),ER=((S.evening_routine||{})[kid]||{});
+  if(RW&&ER.due)vis=vis.filter(function(c){return (ER.items||[]).indexOf(c.id)>=0});
   var PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
   var lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)||(MF.on&&c.id===MF.chore)};   // mandatory jobs and, from wind-down, Brush teeth lead
@@ -699,7 +699,8 @@ function renderKid(){
         return '<span class="cdk" data-ready="'+m.g.until+'">'+Math.floor(lft/60)+":"+("0"+Math.floor(lft%60)).slice(-2)+'</span> left<div class="cbar"><div class="cfill drain" data-ready="'+m.g.until+'" data-tot="'+tot+'" style="width:'+Math.min(100,100*lft/tot).toFixed(1)+'%"></div></div>'})())+'</div>'+
       '<div class="btn" data-mv="'+m.g.id+'" data-from="'+m.tid+'" style="font-size:20px;font-weight:900;padding:8px 12px">'+E("1f504")+' Switch TV</div></div>'});
 
-  var rw="";S.config.rewards.filter(function(r){return here(r)}).forEach(function(r){rw+="\u0001";var pc=Math.min(100,Math.max(0,b/r.cost*100));
+  var rw="";S.config.rewards.filter(function(r){return here(r)}).forEach(function(r){rw+="\u0001";var pc=Math.min(100,Math.max(0,b/r.cost*100)),late=pastCutoff(r.before);
+    if(late){rw+='<div class="rw cool"><div class="ic" style="opacity:.55">'+E(r.icon)+'</div><div style="flex:1;font-size:18px;font-weight:900">'+E("1f319")+' '+r.name+'<br><span style="font-size:15px">Available before '+hm12(r.before)+'</span></div></div>';return}
     if(RR[r.id]&&RR[r.id]>S.now){var tot=((r.minutes||0)+(r.break_min||0))*60||1800;
       var lft=Math.max(0,RR[r.id]-Date.now()/1000),pct=Math.min(100,100*(1-lft/tot)).toFixed(1);
       rw+='<div class="rw cool" data-r="'+r.id+'"><div class="ic" style="opacity:.6">'+E(r.icon)+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.15">'+E("1f512")+' '+r.name+
@@ -708,16 +709,16 @@ function renderKid(){
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
   var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Tidy up first!</b> and get it checked. Then rewards come back.</div>':'';
   if(MF.rewards){CF=true;banner='<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f4da")+' '+safeText(MF.name)+' first! Rewards come back when it is done.</div>'}
-  if((S.wind_down||{}).on){banner='<div style="width:100%;background:#e8eaf6;border:4px solid #5c6bc0;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f319")+' '+(SH.due?'Second night here: '+E("1f6bf")+' shower and ':'Almost bedtime! No more rewards after '+hm12(S.wind_down.at)+'. ')+E("1faa5")+' Brush your teeth!</div>';CF=true}
+  if(RW){banner='<div style="width:100%;background:#e8eaf6;border:4px solid #5c6bc0;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f319")+' '+(ER.due?(SH.due?'Second night here: '+E("1f6bf")+' shower and '+E("1faa5")+' brush your teeth first.':'Brush your teeth first. Chores and allowed rewards come back when you are done.'):'Routine done! Chores and allowed rewards are open until 8:30.')+'</div>';if(ER.due)CF=true}
   if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
   var RWL=rw.split("\u0001").filter(Boolean),RPER=tvh?3:4,rpages=Math.max(1,Math.ceil(RWL.length/RPER));if(RWP>=rpages)RWP=rpages-1;
-  var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
+  var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&!pastCutoff(r.before)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
   $("tvnow").innerHTML=rfh+tvh;
   document.querySelectorAll("[data-refund]").forEach(function(n){n.onclick=function(e){e.stopPropagation();refundAsk(n.dataset.refund)}});
   setTimeout(function(){if($("cfban"))$("cfban").onclick=function(e){e.stopPropagation();cleanupModal()}},0);   // TV time running stays in sight even when Buy is folded
   $("rewards").innerHTML=banner+RWL.slice(RWP*RPER,RWP*RPER+RPER).join("");$("rwpg").innerHTML=pagerSm("rw",RWP,rpages);
   $("buybody").style.display=FOLD.buy?"":"none";$("buychev").innerHTML=FOLD.buy?"&#9650;":"&#9660;";
-  $("buysum").innerHTML=FOLD.buy?"":(S.wind_down||{}).on?E("1f319")+" bedtime soon":CF?E("1f9f9")+" chores first":canN?E("2705")+" "+canN+" you can buy":"tap to see";
+  $("buysum").innerHTML=FOLD.buy?"":CF?E("1f9f9")+" chores first":canN?E("2705")+" "+canN+" you can buy":"tap to see";
   $("buyh").onclick=function(){FOLD.buy=!FOLD.buy;if(FOLD.buy)FOLD.jobs=false;L("fold",{what:"buy",open:FOLD.buy});renderKid()};   // one open at a time: both don't fit
   $("toyout").innerHTML=E("1f9f8")+E("1f44b")+' Give away a toy';$("toyout").onclick=toyGoodbye;
   document.querySelectorAll("[data-mv]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var ref=n.dataset.mv,from=n.dataset.from;L("tv_switch_open",{from:from});
@@ -805,6 +806,7 @@ function cleanupModal(){var F=(S.chores_first||{})[kid]||{},cid="cleanup_"+kid,b
     api("/api/report",{kid:kid,chore:cid,feeling:"ok",checklist:its}).then(function(r){busy=false;if(r.ok){S=r.state;renderKid()}
       modal('<div class="big">'+E(r.ok?"1f50d":"274c")+'</div><div class="q">'+(r.ok?"Great job! A grown-up will come check.":(r.error||"Ask a grown-up"))+'</div>');chime([523,659,784]);addOk()}).catch(function(){busy=false})}}
 function hm12(t){var a=String(t||"").split(":"),h=+a[0];return (h%12||12)+":"+(a[1]||"00")+(h<12?" AM":" PM")}
+function pastCutoff(t){if(!t)return false;var a=String(t).split(":"),d=new Date();return d>=new Date(d.getFullYear(),d.getMonth(),d.getDate(),+a[0],+a[1])}
 // "reject with penalty": asked for an inspection with nothing done. Big pictures for a kid who can't read much yet.
 function penaltyModal(r,i,after){L("penalty_seen",{ref:r.id});
   modal('<div style="font-size:150px;line-height:1.1">'+E("1f62d")+'</div>'+
@@ -1424,7 +1426,7 @@ function togetherLine(r){var tc=r.together_cost||{},ks=Object.keys(tc).sort();if
 function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:null});
   var r=S.config.rewards.find(function(x){return x.id===rid}),b=S.balance[kid];
   if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===rid})){modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">You bought '+r.name+'! A grown-up will help you set it up and start your time.</div>');addOk();return}
-  if((S.wind_down||{}).on){modal('<div class="big">'+E("1f319")+E("1faa5")+'</div><div class="q">It\'s almost bedtime!</div><div class="q" style="font-size:28px">No more rewards after '+hm12(S.wind_down.at)+'. Brush your teeth and get ready for bed. Rewards come back in the morning.</div>');addOk();return}
+  if(pastCutoff(r.before)){modal('<div class="big">'+E("1f319")+E(r.icon)+'</div><div class="q">'+r.name+' is done for tonight</div><div class="q" style="font-size:28px">It is available before '+hm12(r.before)+'. You can still choose other allowed rewards.</div>');addOk();return}
   var mf=((S.must_do_first||{})[kid])||{};if(mf.rewards){modal('<div class="big">'+E("1f4da")+'</div><div class="q">'+safeText(mf.name)+' first!</div><div class="q" style="font-size:28px">Rewards come back when it is done.</div>');addOk();return}
   if(((S.chores_first||{})[kid]||{}).on){cleanupModal();return}
   var rr=((S.reward_ready||{})[kid]||{})[rid];
