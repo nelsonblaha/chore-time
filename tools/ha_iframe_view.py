@@ -22,13 +22,14 @@ ap.add_argument("--after", help="insert after this view path (new views only)")
 ap.add_argument("--icon", default="mdi:broom")
 ap.add_argument("--users", nargs="*", help="only these HA user ids see it")
 ap.add_argument("--version", default="1")
+ap.add_argument("--query", help="extra iframe query, e.g. packing_test=1&cb=abc123")
 a = ap.parse_args()
 
 
 async def main(call):
     sel = {"url_path": a.dashboard} if a.dashboard else {}
     cfg = (await call({"type": "lovelace/config", **sel}))["result"]
-    url = f"{a.page}?v={a.version}"
+    url = f"{a.page}?v={a.version}" + (("&" + a.query.lstrip("?&")) if a.query else "")
     view = next((v for v in cfg["views"] if v.get("path") == a.view), None)
     if view:
         view["cards"] = [{"type": "iframe", "url": url, "aspect_ratio": "230%"}]

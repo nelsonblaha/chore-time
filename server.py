@@ -2543,7 +2543,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(404, {"error": "unknown request"})
             if r["status"] == "pending" and time.time() - r["ts"] > 120:
                 r["status"] = "timeout"
-            if r["status"] == "ok":
+            if r["status"] == "ok" and r.get("purpose") in ("login", "lock"):
                 r["used"] = True
             if r["status"] != "pending":
                 threading.Thread(target=clear_adult_request, args=(b["nonce"], r["who"]), daemon=True).start()
@@ -2712,25 +2712,22 @@ class H(BaseHTTPRequestHandler):
                 ready = st["reward_ready"].get(wk, {}).get(b["reward"], 0)
                 if ready > time.time():
                     return self.send(409, {"error": who_ + ("screen break" if b["reward"] in ("show", "movie", "games") and st["screen_break"].get(wk) else "needs a break first"), "ready_at": ready})
-            if rewards[b["reward"]].get("needs_ok"):   # e.g. VR: paid now; a grown-up helps set it up, then starts the timer
+            if rewards[b["reward"]].get("needs_ok"):   # e.g. VR: adult consent first; accepted purchase starts its timer
                 consent_ = ADULT_REQ.get(str(b.get("consent") or ""))
                 if not consent_ or consent_.get("purpose") != "reward" or consent_.get("kid") != b["kid"] \
                         or consent_.get("reward") != b["reward"] or consent_.get("status") != "ok" or consent_.get("used"):
                     return self.send(409, {"error": "A grown-up needs to allow this first."})
                 consent_["used"] = True
-                if any(q["kid"] == b["kid"] and q["reward"] == b["reward"] for q in st["requests"]):
-                    return self.send(409, {"error": "already bought: a grown-up will come start it"})
-                ev = append({"type": "spend", "kid": b["kid"], "reward": b["reward"], "cost": cost, "await_ok": True,
-                             "reward_name": rewards[b["reward"]]["name"], "reward_icon": rewards[b["reward"]]["icon"]})
-                threading.Thread(target=notify_request, args=(ev,), daemon=True).start()
-                after_change()
-                ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
-                return self.send(200, {"ok": True, "event": ev, "state": derive()})
             tvx = {}
+            setup_tv_ = rewards[b["reward"]].get("setup_tv")
+            if setup_tv_ in TVS:
+                setup_min_ = max(1, min(60, int(rewards[b["reward"]].get("setup_tv_minutes") or 15)))
+                tvx = {"tv": setup_tv_, "until": time.time() + setup_min_ * 60, "minutes": setup_min_}
             if b["reward"] in UNLOCKS and (b.get("tv") in TVS or b.get("tv") == "*"):
                 tm = rewards[b["reward"]].get("tv_minutes") or UNLOCKS[b["reward"]][0]
                 tvx = {"tv": b["tv"], "until": time.time() + tm * 60, "minutes": tm}
-            queued = bool(tvx) and any(u["what"] != "vr" for tv_ in ([b["tv"]] if b["tv"] in TVS else list(TVS))
+            selected_tv_ = tvx.get("tv") or b.get("tv")
+            queued = bool(tvx) and any(u["what"] != "vr" for tv_ in ([selected_tv_] if selected_tv_ in TVS else list(TVS))
                                        for u in active_unlocks().get(tv_, []))
             grp = {"group": uuid.uuid4().hex[:12], "together": [b["kid"]] + with_} if with_ else {}
             ev = append({"type": "spend", "kid": b["kid"], "reward": b["reward"], "cost": cost, **tvx, **grp,
@@ -3786,7 +3783,7 @@ def tv_grants(evs, now=None):
                 else:
                     until, armed = e["ts"] + max(m, 90) * 60, True   # unused for 90 min -> expires (room to queue behind a sibling's show)
             tvsel = moved.get(e["id"], e.get("tv"))
-            for tid in (list(TVS) if e["reward"] == "vr" or tvsel == "*" else [tvsel]):
+            for tid in (list(TVS) if tvsel == "*" or (e["reward"] == "vr" and tvsel not in TVS) else [tvsel]):
                 if tid in g:
                     g[tid].append({"id": e["id"], "ts": e["ts"], "until": until, "kinds": sorted(kinds), "kid": e["kid"],
                                    "start": started.get(e["id"]) or e["ts"],

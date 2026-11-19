@@ -2018,43 +2018,41 @@ class GrownUpStartsVR(Case):
         self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "stove"})[0], 409)
         a.close()
 
-    def test_vr_is_paid_then_a_grown_up_starts_the_timer_or_refunds(self):
+    def test_vr_consent_then_payment_starts_the_timer_or_can_be_refunded(self):
         c = base_config()
         for r in c["rewards"]:
             if r["id"] == "vr":
                 r["needs_ok"] = True
+                r["setup_tv"] = "livingroom"
+                r["setup_tv_minutes"] = 15
         a = App(c)
         a.event(type="adjust", kid="ava", points=10, reason="test")
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)
         code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
         self.assertEqual(code, 200)
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
+        self.assertEqual(a.post("/api/adult_status", {"nonce": ask["nonce"]})[1]["status"], "ok")  # polling does not consume it
         code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr", "consent": ask["nonce"]})
         self.assertEqual(code, 200, r)
-        self.assertTrue(r["event"]["await_ok"])
-        st = a.state()
-        self.assertEqual((st["balance"]["ava"], st["timers"], len(st["requests"])), (8, [], 1))   # paid, not started
-        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)   # bought already
-        self.assertEqual(a.post("/api/request_answer", {"ref": r["event"]["id"], "by": "jordan", "ok": True})[0], 200)
         st = a.state()
         self.assertEqual((st["balance"]["ava"], len(st["timers"]), st["requests"]), (8, 1, []))
-        self.assertGreaterEqual(st["timers"][0]["start"], r["event"]["ts"])   # the clock starts at the grown-up's go
+        grant = next(g for g in st["tv"]["tvs"]["livingroom"]["grants"] if g["id"] == r["event"]["id"])
+        self.assertAlmostEqual(grant["until"] - grant["start"], 15 * 60, delta=2)
+        self.assertFalse([g for g in st["tv"]["tvs"]["kitchen"].get("grants", []) if g["id"] == r["event"]["id"]])
+        self.assertGreaterEqual(st["timers"][0]["start"], r["event"]["ts"])
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr", "consent": ask["nonce"]})[0], 409)
         self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"]})[0], 400)   # grown-ups only
         self.assertEqual(a.post("/api/timer_done", {"ref": r["event"]["id"], "by": "jordan"})[0], 200)
         self.assertEqual(a.state()["timers"], [])
-        # another kid's, answered "not now": refunded, and a note waits on their screen
+        # Another kid can still use the ordinary two-minute refund after an accepted purchase.
         a.event(type="adjust", kid="max", points=5, reason="test")
         code, ask2 = a.post("/api/reward_consent_request", {"kid": "max", "reward": "vr"})
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask2["nonce"], "by": "jordan", "ok": True})[0], 200)
         code, r2 = a.post("/api/spend", {"kid": "max", "reward": "vr", "consent": ask2["nonce"]})
         self.assertEqual(a.state()["balance"]["max"], 3)
-        self.assertEqual(a.post("/api/request_answer", {"ref": r2["event"]["id"], "by": "jordan", "ok": False})[0], 200)
+        self.assertEqual(a.post("/api/refund", {"ref": r2["event"]["id"], "kid": "max"})[0], 200)
         st = a.state()
         self.assertEqual((st["balance"]["max"], [t for t in st["timers"] if t["kid"] == "max"]), (5, []))
-        note = st["kid_notes"]["max"][0]
-        self.assertIn("Not right now", note["text"])
-        self.assertEqual(a.post("/api/kid_note_seen", {"kid": "max", "ref": note["id"]})[0], 200)
-        self.assertEqual(a.state()["kid_notes"].get("max"), None)
 
     def test_busy_later_pauses_vr_and_first_time_help_together(self):
         c = base_config()
