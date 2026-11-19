@@ -251,7 +251,7 @@ function renderNotYet(){if($("nyfb"))return;var r=S.history.find(function(h){ret
     '<label class="mute" style="display:block;margin-top:10px">What still needs fixing? (add each one — kids see each as a bullet)</label>'+
     ''+listEd("nyfb","","e.g. balloon on the floor")+
     '<button class="no tvgo" id="nygo" style="background:#c62828;color:#fff">Hand it back to fix</button>';
-  wireList("nyfb");$("nygo").onclick=function(){post("/api/inspect",{ref:r.id,ok:false,feedback:$("nyfb").value.trim()},"Handed back to fix").then(closePM)}}
+  wireList("nyfb");$("nygo").onclick=function(){post("/api/inspect",{ref:r.id,ok:false,feedback:listValue("nyfb")},"Handed back to fix").then(closePM)}}
 function listEd(id,text,ph){return '<textarea id="'+id+'" style="display:none">'+esc(text||"")+'</textarea><div id="'+id+'L" style="margin:4px 0"></div>'+
   '<div class="row"><input id="'+id+'I" placeholder="'+ph+'" style="flex:1;font-size:18px;min-width:0" enterkeyhint="done"><button class="ok" id="'+id+'A" style="font-size:18px">＋ Add</button></div>'}
 function wireList(id){var ta=$(id),inp=$(id+"I");if(!ta||!inp)return;var items=(ta.value||"").split("\n").map(function(t){return t.trim()}).filter(Boolean);
@@ -260,6 +260,8 @@ function wireList(id){var ta=$(id),inp=$(id+"I");if(!ta||!inp)return;var items=(
     L.querySelectorAll("button[data-i]").forEach(function(b){b.onclick=function(){items.splice(+b.dataset.i,1);draw();sync()}})}
   function add(){var t=inp.value.trim();if(!t){inp.focus();return}items.push(t);inp.value="";draw();sync();inp.focus()}
   $(id+"A").onclick=add;inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();add()}};inp.oninput=sync;draw()}
+function listValue(id){var ta=$(id),inp=$(id+"I"),all=((ta&&ta.value)||"").split("\n").map(function(t){return t.trim()}).filter(Boolean),draft=inp&&inp.value.trim();
+  if(draft)all.push(draft);return all.filter(function(t,i){return all.indexOf(t)===i}).join("\n")}
 function ptsSlider(id,v,base,mx){v=v==null?0:v;mx=mx||Math.max(10,(base||0)*3,v);
   return '<div style="text-align:center;font-size:40px;font-weight:800;margin:6px 0" id="'+id+'v">'+v+' ⭐</div>'+
     '<input type="range" id="'+id+'" min="0" max="'+mx+'" step="1" value="'+v+'">'+

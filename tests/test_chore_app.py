@@ -167,6 +167,11 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Finished — mark done", html)
         self.assertIn("done:true,items:F.items", html)
 
+    def test_hand_back_includes_an_unadded_reason_draft(self):
+        html = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn('feedback:listValue("nyfb")', html)
+        self.assertIn("if(draft)all.push(draft)", html)
+
 
 class Case(unittest.TestCase):
     config = None
