@@ -2647,7 +2647,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "no envelopes here"})
             act_ = st["active"].get(b["kid"]) or {}
             team_ = set(act_.get("team") or [b["kid"]]) & kids
-            envelopes.mark_printed(team_ or {b["kid"]})
+            envelopes.mark_printed(team_ or {b["kid"]}, used=True)
             ilog({"src": "envelope", "kid": b["kid"], "action": "already_printed"})
             return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/envelope":   # a kid prints the envelope for their letter (not a ledger event)
@@ -4854,10 +4854,11 @@ def gcall(method, path, body=None):
         return json.loads(t) if t else None
 
 
-def grocy_push_envelope_inventory(call=None, events=None, sync_file=None):
-    """Consume one configured envelope and stamp per handed-over letter, retrying each item independently."""
+def grocy_push_envelope_inventory(call=None, events=None, sync_file=None, uses=None):
+    """Consume envelopes when used and handoff supplies when delivered, retrying every item independently."""
     products = envelopes.CFG.get("grocy_products") or {}
-    if not products:
+    envelope_product = envelopes.CFG.get("grocy_envelope_product")
+    if not products and not envelope_product:
         return 0
     call = call or gcall
     events = read_events() if events is None else events
@@ -4866,15 +4867,28 @@ def grocy_push_envelope_inventory(call=None, events=None, sync_file=None):
         done = set(json.loads(sync_file.read_text()).get("done", []))
     except (OSError, ValueError):
         done = set()
+    cutoff = float(envelopes.CFG.get("grocy_track_after") or 0)
+    changed = 0
+    for use in (envelopes.USES if uses is None else uses):
+        if not envelope_product or float(use.get("ts") or 0) < cutoff:
+            continue
+        token = "use:%s:%s" % (use["id"], envelope_product)
+        if token in done:
+            continue
+        call("POST", "/stock/products/%d/consume" % int(envelope_product),
+             {"amount": 1, "transaction_type": "consume", "spoiled": False})
+        done.add(token)
+        changed += 1
+        sync_file.write_text(json.dumps({"done": sorted(done)[-3000:]}))
+        ilog({"src": "grocy", "action": "envelope_supply_used", "ref": use["id"],
+              "supply": "Letter envelope", "product_id": int(envelope_product)})
     envelope_chores = set(envelopes.CFG.get("chores") or [])
     reports = {e["id"]: e for e in events if e.get("type") == "report" and e.get("chore") in envelope_chores}
     ready = {rid: float(r["delivered"]) for rid, r in reports.items() if r.get("delivered")}
     for e in events:
         if e.get("type") == "delivered" and e.get("ref") in reports:
             ready[e["ref"]] = min(float(e.get("ts") or 0), ready.get(e["ref"], float("inf")))
-    cutoff = float(envelopes.CFG.get("grocy_track_after") or 0)
     ready = {ref: completed for ref, completed in ready.items() if completed >= cutoff}
-    changed = 0
     for ref in sorted(ready, key=ready.get):
         for label, product_id in products.items():
             token = "%s:%s" % (ref, product_id)

@@ -1578,19 +1578,27 @@ class Envelopes(Case):
         self.assertIsNone(self.e.desktop_summary(now + 60, run))
         self.assertEqual(len(calls), 1)
 
-    def test_handed_over_letters_consume_one_envelope_and_stamp_once(self):
-        self.e.CFG.update(chores=["letter"], grocy_products={"Envelope": 91, "Stamp": 92}, grocy_track_after=1)
+    def test_print_and_already_recovery_each_record_an_envelope_use(self):
+        self.assertEqual(self.app.post("/api/envelope", {"kid": "max", "from": "max", "to": "gran"})[0], 200)
+        self.assertEqual(self.app.post("/api/envelope_already", {"kid": "max"})[0], 200)
+        self.assertEqual([x["kind"] for x in self.e.USES], ["print", "already_printed"])
+        self.assertEqual(len(self.e.PRINTS), 1)   # recovery affects stock, not the next-day print count
+
+    def test_envelopes_are_consumed_when_used_and_stamps_at_handoff(self):
+        self.e.CFG.update(chores=["letter"], grocy_envelope_product=91,
+                          grocy_products={"Stamp": 92}, grocy_track_after=1)
         events = [{"id": "old", "type": "report", "chore": "letter", "ts": 0, "delivered": .5},
                   {"id": "r1", "type": "report", "chore": "letter", "ts": 1, "delivered": 2},
                   {"id": "r2", "type": "report", "chore": "letter", "ts": 3},
                   {"id": "d2", "type": "delivered", "ref": "r2", "ts": 4},
                   {"id": "r3", "type": "report", "chore": "other", "ts": 5, "delivered": 6}]
+        uses = [{"id": "old-print", "ts": .5}, {"id": "printed", "ts": 2}, {"id": "already", "ts": 3}]
         calls = []
         sync = self.app.dir / "envelope-inventory.json"
         call = lambda method, path, body: calls.append((method, path, body))
-        self.assertEqual(self.s.grocy_push_envelope_inventory(call, events, sync), 4)
-        self.assertEqual([x[1] for x in calls], ["/stock/products/91/consume", "/stock/products/92/consume"] * 2)
-        self.assertEqual(self.s.grocy_push_envelope_inventory(call, events, sync), 0)
+        self.assertEqual(self.s.grocy_push_envelope_inventory(call, events, sync, uses), 4)
+        self.assertEqual([x[1] for x in calls], ["/stock/products/91/consume"] * 2 + ["/stock/products/92/consume"] * 2)
+        self.assertEqual(self.s.grocy_push_envelope_inventory(call, events, sync, uses), 0)
         self.assertEqual(len(calls), 4)
 
     def test_unknown_sender_or_recipient_is_refused(self):

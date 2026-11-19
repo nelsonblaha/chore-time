@@ -4,7 +4,8 @@ house.json "envelopes" (all optional except the addresses):
   printer        CUPS queue name
   lp_user        optional CUPS job owner (keeps automated envelope jobs out of the desktop user's print notifications)
   desktop_summary_after local time for one quiet next-day desktop summary (for example "08:00")
-  grocy_products {label: product id}; one of each is consumed when a letter is handed over
+  grocy_envelope_product product id consumed for every accepted print and "already printed" recovery
+  grocy_products {label: product id}; one of each remaining supply (for example a stamp) is consumed at handoff
   grocy_track_after epoch timestamp for the physical-count baseline (older handoffs are not deducted retroactively)
   lp_options     {"PageSize": "Env10", "InputSlot": "Manual", ...} passed to lp as -o key=value
   size_pt        [width, height] of the envelope in points, landscape (US #10 = [684, 297])
@@ -24,12 +25,14 @@ import re
 import subprocess
 import tempfile
 import time
+import uuid
 
 CFG = {}
 LAST = {"ts": 0.0}
 JOBS = set()     # print jobs this app sent (only these can be checked or cancelled)
 PRINTED = {}     # kid -> when an envelope was last printed for them (so coming back skips straight to "deliver it")
 PRINTS = []      # successful automated prints, retained briefly for the next-day desktop summary
+USES = []        # physical envelopes used by prints/reprints or recovered through "already printed"
 SUMMARY = {}     # {date: YYYY-MM-DD}; prevents duplicate summaries after service restarts
 MIN_GAP_S = 20   # a double tap must not print two envelopes
 
@@ -44,6 +47,7 @@ def configure(cfg, state_file=None):
     PRINTED.clear()
     LASTPRINT.clear()
     PRINTS.clear()
+    USES.clear()
     SUMMARY.clear()
     try:
         saved = json.loads(open(state_file).read()) if state_file else {}
@@ -51,6 +55,7 @@ def configure(cfg, state_file=None):
         saved = {}
     LASTPRINT.update(saved.pop("_last", None) or {})
     PRINTS.extend(x for x in (saved.pop("_prints", None) or []) if isinstance(x, dict) and isinstance(x.get("ts"), (int, float)))
+    USES.extend(x for x in (saved.pop("_uses", None) or []) if isinstance(x, dict) and x.get("id") and isinstance(x.get("ts"), (int, float)))
     summary_date = saved.pop("_summary_date", None)
     if summary_date:
         SUMMARY["date"] = summary_date
@@ -64,19 +69,24 @@ def _save():
     if STATE["file"]:
         try:
             with open(STATE["file"], "w") as f:
-                json.dump(dict(PRINTED, _last=LASTPRINT, _prints=PRINTS[-100:], _summary_date=SUMMARY.get("date")), f)
+                json.dump(dict(PRINTED, _last=LASTPRINT, _prints=PRINTS[-100:], _uses=USES[-1000:],
+                               _summary_date=SUMMARY.get("date")), f)
         except OSError:
             pass
 
 
-def mark_printed(kids_, info=None):
+def mark_printed(kids_, info=None, used=False):
+    now = time.time()
     for k in kids_:
-        PRINTED[k] = time.time()
+        PRINTED[k] = now
     if info:
         LASTPRINT.clear()
-        LASTPRINT.update(info, ts=time.time())
+        LASTPRINT.update(info, ts=now)
         PRINTS.append(dict(info, ts=LASTPRINT["ts"]))
-        PRINTS[:] = [x for x in PRINTS if time.time() - x["ts"] < 14 * 86400]
+        USES.append({"id": "print:" + str(info.get("job") or uuid.uuid4().hex), "ts": now, "kind": "print"})
+        PRINTS[:] = [x for x in PRINTS if now - x["ts"] < 14 * 86400]
+    elif used:
+        USES.append({"id": "already:" + uuid.uuid4().hex, "ts": now, "kind": "already_printed"})
     _save()
 
 
