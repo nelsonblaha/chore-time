@@ -1186,17 +1186,28 @@ class RobotLocatorFreshness(unittest.TestCase):
         rc = self.g["HOUSE"]["robot_locator"]["robots"][self.V]
         rc.update(occupancy={"sensor": "sensor.occ", "floor": "down"},
                   room_ids={"Family Room": "family"},
-                  audio={"sensor.den_sound": {"room": "Family Room", "min": 30, "delta": 5}})
-        sound = {"state": "20"}
+                  audio={"sensor.den_sound": {"room": "Family Room", "min": 30, "delta": 5,
+                                               "requires_independent_position": True,
+                                               "corroborate_only": True}})
+        sound = {"state": "20", "attributes": {"observed_at": 1000, "valid_until": 1015}}
         self.ha["sensor.den_sound"] = lambda: sound
         self.ha["sensor.occ"] = lambda: {"state": "ok", "attributes": {"valid_until": self.now + 60,
             "rooms": {"family": {"state": "clear", "valid_until": self.now + 60}},
             "floors": {"down": {"state": "vacant"}}}}
         self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
+        self.pos = (10000, 10000)
         self.tick(1000)
         sound["state"] = "42"
+        sound["attributes"] = {"observed_at": 1005, "valid_until": 1020}
         s = self.tick(1005)
         self.assertEqual(s["explains"]["sensor.den_sound"]["kind"], "audio")
+        self.assertTrue(s["explains"]["sensor.den_sound"]["independent_position"])
+        self.assertTrue(next(e for e in s["evidence"] if e["src"] == "sensor.den_sound")["corroborate_only"])
+
+    def test_corroboration_cannot_create_a_robot_location_by_itself(self):
+        self.L.add(self.V, "sensor.sound", "audio", "Family Room", self.now,
+                   reading=0.5, corroborate_only=True)
+        self.assertEqual(self.L.fuse(self.V, self.now), (None, 0.0, None, []))
 
     def test_learned_affine_transform_converts_robot_map_to_plan(self):
         samples = [

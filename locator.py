@@ -353,8 +353,10 @@ class Locator:
             print("locator training write failed", ex, flush=True)
 
     def add(self, vac, src, kind, room, at, reading=None, plan=None, map_xy=None,
-            position_source=None, location_source=None):
+            position_source=None, location_source=None, corroborate_only=False):
         event = {"src": src, "kind": kind, "room": room, "at": at}
+        if corroborate_only:
+            event["corroborate_only"] = True
         if reading is not None:
             event["reading"] = reading
         if plan:
@@ -468,6 +470,14 @@ class Locator:
             self.sensorprev["audio:" + entity] = value
             if previous is None or value == previous:
                 continue
+            attrs = state.get("attributes") or {}
+            try:
+                observed = float(attrs.get("observed_at", now))
+                valid_until = float(attrs.get("valid_until", observed + float(cfg.get("max_age", 15))))
+            except (TypeError, ValueError):
+                continue
+            if observed > now + 2 or valid_until <= now or now - observed > float(cfg.get("max_age", 15)):
+                continue
             if isinstance(value, float) and cfg.get("min") is not None and value < float(cfg["min"]):
                 continue
             if isinstance(value, float) and isinstance(previous, (int, float)) \
@@ -476,7 +486,12 @@ class Locator:
             room = cfg.get("room")
             if loc.get("room") != room or not self.room_empty(rc, room, now, cfg.get("occupancy_room")):
                 continue
-            self.add(vac, entity, "audio", room, now, reading=value, location_source=loc.get("source"))
+            position = self.xy.get(vac)
+            if cfg.get("requires_independent_position") and \
+                    (not position or abs(position[1] - observed) > TRAIN_XY_TTL):
+                continue
+            self.add(vac, entity, "audio", room, observed, reading=value,
+                     location_source=loc.get("source"), corroborate_only=cfg.get("corroborate_only", False))
 
     def gather(self, vac, rc, st, room_now, now, since=0, loc=None):
         """this tick's evidence from the robot, its map, the room sensors and the cameras"""
@@ -528,7 +543,11 @@ class Locator:
     def fuse(self, vac, now):
         """(room, confidence, top source, [evidence]) from the recent evidence, or (None, 0, None, [])"""
         score, top = Counter(), {}
-        for e in self.ev.get(vac) or []:
+        events = self.ev.get(vac) or []
+        supported_rooms = {e["room"] for e in events if not e.get("corroborate_only")}
+        for e in events:
+            if e.get("corroborate_only") and e["room"] not in supported_rooms:
+                continue
             w = self.rel(vac, e["src"], e["kind"]) * 0.5 ** ((now - e["at"]) / HALF_S)
             score[e["room"]] += w
             if w > top.get(e["room"], (0, None))[0]:
@@ -536,7 +555,8 @@ class Locator:
         if not score:
             return None, 0.0, None, []
         room, best = score.most_common(1)[0]
-        ev = [{"src": e["src"], "room": e["room"], "age": int(now - e["at"])} for e in (self.ev.get(vac) or [])][-12:]
+        ev = [{"src": e["src"], "room": e["room"], "age": int(now - e["at"]),
+               "corroborate_only": bool(e.get("corroborate_only"))} for e in events][-12:]
         return room, round(best / sum(score.values()), 2), top[room][1], ev
 
     def explains(self, vac, room, now):
