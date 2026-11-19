@@ -5,6 +5,7 @@ Runs the real server module against a throwaway data dir, with Home Assistant / 
 Nothing here talks to the network or the live ledger.
 """
 import importlib
+import hashlib
 import json
 import os
 import shutil
@@ -208,8 +209,70 @@ class SharedVsExclusive(Case):
 
 class SoundSettings(Case):
     def test_house_can_mute_every_kids_interface_sound_effect(self):
-        self.s.HOUSE["sound_effects"] = False
+        s=self.s;s.HOUSE["sound_effects"] = False
         self.assertIs(self.app.state()["sound_effects"], False)
+        s.ANNOUNCE_TTS,s.ANNOUNCE_SPEAKER,s.ANNOUNCE_MEDIA_BASE="tts.test","media_player.test",None
+        self.app.orig["announce"]("This must stay quiet.","tok")
+        self.assertEqual(self.app.calls,[])
+
+        old_derive,old_cfg=s.derive,s.cfg
+        s.derive=lambda:{"dress":{"on":True,"school":False,"kids":{"ava":"todo"}}}
+        s.cfg=lambda:{"kids":[{"id":"ava","name":"Ava"}]}
+        s.DRESS["speakers"]=["media_player.test"]
+        self.addCleanup(lambda:setattr(s,"derive",old_derive))
+        self.addCleanup(lambda:setattr(s,"cfg",old_cfg))
+        self.addCleanup(lambda:s.DRESS.pop("speakers",None))
+        s.dress_announce()
+        self.assertEqual(self.app.calls,[])
+
+    def test_kid_pin_is_verified_but_never_published(self):
+        salt="00112233445566778899aabbccddeeff";rounds=120000
+        digest=hashlib.pbkdf2_hmac("sha256",b"2353",bytes.fromhex(salt),rounds).hex()
+        config=json.loads((self.app.dir/"chores.json").read_text())
+        config["kids"][0]["pin_hash"]=f"pbkdf2_sha256${rounds}${salt}${digest}"
+        (self.app.dir/"chores.json").write_text(json.dumps(config))
+        kid=next(k for k in self.app.state()["config"]["kids"] if k["id"]=="ava")
+        self.assertTrue(kid["pin_required"])
+        self.assertNotIn("pin_hash",kid)
+        self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"9999"})[0],403)
+        self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"2353"})[0],200)
+
+    def test_document_chore_allows_one_pending_row_per_safe_drive_link(self):
+        config=json.loads((self.app.dir/"chores.json").read_text())
+        config["chores"].append({"id":"scan","name":"Scan paper","icon":"1f4c4","points":1,
+                                  "cooldown_h":0,"only":["ava"],"multi_pending":True,"document_review":True})
+        (self.app.dir/"chores.json").write_text(json.dumps(config))
+        one=self.app.post("/api/report",{"kid":"ava","chore":"scan","note":"Capitol project",
+                          "document_title":"Capitol project sheet",
+                          "document_url":"https://drive.google.com/file/d/abc123/view?secret=drop"})
+        two=self.app.post("/api/report",{"kid":"ava","chore":"scan","note":"Break notice",
+                          "document_title":"Thanksgiving break notice",
+                          "document_url":"https://drive.google.com/file/d/def456/view"})
+        self.assertEqual((one[0],two[0]),(200,200))
+        rows=[r for r in two[1]["state"]["history"] if r.get("chore")=="scan" and r.get("status")=="pending"]
+        self.assertEqual(len(rows),2)
+        self.assertEqual(rows[-1]["document_url"],"https://drive.google.com/file/d/abc123/view")
+        bad=self.app.post("/api/report",{"kid":"ava","chore":"scan","note":"Bad link",
+                          "document_url":"https://example.com/not-drive"})
+        self.assertNotIn("document_url",bad[1]["event"])
+
+    def test_grownup_can_open_first_come_forgotten_pin_reset(self):
+        salt="00112233445566778899aabbccddeeff";rounds=120000
+        digest=hashlib.pbkdf2_hmac("sha256",b"2353",bytes.fromhex(salt),rounds).hex()
+        config=json.loads((self.app.dir/"chores.json").read_text())
+        config["kids"][0]["pin_hash"]=f"pbkdf2_sha256${rounds}${salt}${digest}"
+        (self.app.dir/"chores.json").write_text(json.dumps(config))
+        code,requested=self.app.post("/api/kid_pin_reset_request",{"kid":"ava"})
+        self.assertEqual(code,200)
+        nonce=requested["nonce"]
+        self.assertEqual(next(q for q in requested["state"]["assist_requests"] if q["nonce"]==nonce)["purpose"],"pin_reset")
+        code,allowed=self.app.post("/api/assist_answer",{"nonce":nonce,"ok":True,"by":"jordan"})
+        self.assertEqual(code,200)
+        self.assertIn("ava",allowed["state"]["pin_reset_open"])
+        self.assertEqual(self.app.post("/api/kid_pin_change",{"kid":"ava","new_pin":"915"})[0],200)
+        self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"2353"})[0],403)
+        self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"915"})[0],200)
+        self.assertNotIn("ava",self.app.state()["pin_reset_open"])
 
 
 class RewardBlockers(Case):

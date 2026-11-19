@@ -8,6 +8,7 @@ Events (one JSON object per line):
   adjust   {kid, points(+/-), reason, by}
   undo     {ref, by}                                     -> voids a report/spend/adjust/inspect
 """
+import hashlib
 import hmac
 import json
 from tidy_spaces import space_states
@@ -424,8 +425,10 @@ def is_system(cid):
 
 def save_cfg(c):
     tmp = CONFIG.with_suffix(".tmp")
-    tmp.write_text(json.dumps(c, indent=2))
+    with open(tmp, "w", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
+        output.write(json.dumps(c, indent=2))
     tmp.replace(CONFIG)
+    os.chmod(CONFIG, 0o600)
 
 
 def read_events():
@@ -1032,7 +1035,14 @@ def dress_kids(c):
             and (not k.get("home_entity") or ha_get(k["home_entity"], tok).get("state") == "on")]
 
 
+def sound_enabled():
+    """One house-wide gate for every sound initiated by the kids' chore system."""
+    return HOUSE.get("sound_effects") is not False
+
+
 def dress_announce(first=False):
+    if not sound_enabled():
+        return
     d_ = derive().get("dress") or {}
     todo = [k for k, v in (d_.get("kids") or {}).items() if v == "todo"]
     if not d_.get("on") or not todo or d_.get("school"):   # school mornings are quiet (kids may still be asleep)
@@ -1194,7 +1204,34 @@ def live_cfg(c, board, assisted=None):
         why = None if ch.get("hidden") else ("snoozed" if ast.get("snoozed_until", 0) > time.time()
                                                else chore_closed(ch, board))
         out.append(dict(ch, hidden=True, closed=why) if why else ch)
-    return dict(c, chores=out)
+    kids = []
+    for kid in c["kids"]:
+        public = {key: value for key, value in kid.items() if key != "pin_hash"}
+        if kid.get("pin_hash"):
+            public["pin_required"] = True
+        kids.append(public)
+    return dict(c, chores=out, kids=kids)
+
+
+def verify_kid_pin(kid, supplied):
+    """Verify a private PBKDF2 value without ever placing the PIN in public state or logs."""
+    try:
+        scheme, rounds, salt, expected = str(kid.get("pin_hash") or "").split("$", 3)
+        if scheme != "pbkdf2_sha256" or not str(supplied).isdigit() or not 3 <= len(str(supplied)) <= 8:
+            return False
+        actual = hashlib.pbkdf2_hmac("sha256", str(supplied).encode(), bytes.fromhex(salt), int(rounds)).hex()
+        return hmac.compare_digest(actual, expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def make_kid_pin_hash(pin):
+    pin = str(pin)
+    if not pin.isdigit() or not 3 <= len(pin) <= 8:
+        raise ValueError("Use 3 to 8 numbers.")
+    rounds, salt = 120000, os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, rounds).hex()
+    return f"pbkdf2_sha256${rounds}${salt.hex()}${digest}"
 
 
 def home_of(c):
@@ -1800,9 +1837,13 @@ def derive():
     assist_requests = [{"nonce": n, "kid": r.get("kid"), "chore": r.get("chore"), "reward": r.get("reward"),
                         "purpose": r.get("purpose"), "who": r.get("who"), "ts": r["ts"],
                         "expires": r["ts"] + ADULT_REQUEST_TTL_S}
-                       for n, r in ADULT_REQ.items() if r.get("purpose") in ("assist", "reward")
+                       for n, r in ADULT_REQ.items() if r.get("purpose") in ("assist", "reward", "pin_reset")
                        and r.get("status") == "pending" and time.time() - r["ts"] <= ADULT_REQUEST_TTL_S] \
         if "ADULT_REQ" in globals() else []
+    pin_reset_open = {r["kid"]: {"until": r.get("until"), "nonce": n}
+                      for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset" and r.get("status") == "ok"
+                      and not r.get("used") and float(r.get("until") or 0) > time.time()} \
+        if "ADULT_REQ" in globals() else {}
     for gate_ in must_first.values():
         if gate_.get("rewards") and gate_.get("chore") in board:
             board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
@@ -1811,7 +1852,7 @@ def derive():
     laundry_chore = DRESS.get("laundry_chore")
     if dress.get("on") and laundry_chore and (board.get(laundry_chore) or {}).get("opened"):
         dress["laundry_hint"] = DRESS.get("laundry_message") or "A lot of your favorite clothes are in the laundry pile."
-    return {"version": ver, "ver_tv": ver_tv, "sound_effects": HOUSE.get("sound_effects") is not False,
+    return {"version": ver, "ver_tv": ver_tv, "sound_effects": sound_enabled(),
             "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
@@ -1825,6 +1866,7 @@ def derive():
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
             "dress": dress, "chores_first": chores_first,
             "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
+            "pin_reset_open": pin_reset_open,
             "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
             "shower": shower, "evening_routine": evening_routine,
             "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
@@ -1897,7 +1939,8 @@ def room_log(state):
 
 DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
-DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
+DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",
+                  "document_url", "document_title")
 
 
 def demo_attrs(attrs):
@@ -1941,7 +1984,8 @@ def push_state_sensor(state=None, last_result=None):
     state = state or derive()
     keep = ("id", "ts", "type", "kid", "chore", "chore_name", "chore_icon", "status", "points", "awarded",
             "feeling", "inspected_by", "inspect_id", "reason", "by", "reward", "reward_name", "reward_icon", "cost", "tv",
-            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered", "inspected_ts", "certified", "prank")
+            "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered", "inspected_ts", "certified", "prank",
+            "document_url", "document_title")
     hist = [{k: h[k] for k in keep if k in h} for h in state["history"][:40]]
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
@@ -2079,7 +2123,7 @@ def load_adult_requests():
         return {}
     now = time.time()
     return {str(n): r for n, r in saved.items() if isinstance(r, dict)
-            and now - float(r.get("ts") or 0) < (ADULT_REQUEST_TTL_S if r.get("status") == "pending" and r.get("purpose") in ("assist", "reward") else 300)
+            and now - float(r.get("ts") or 0) < (ADULT_REQUEST_TTL_S if r.get("purpose") in ("assist", "reward", "pin_reset") else 300)
             and (r.get("status") == "pending" or (r.get("status") == "ok" and not r.get("used")))}
 
 
@@ -2104,10 +2148,12 @@ def send_adult_request(nonce, who, where):
     except OSError:
         return
     req = ADULT_REQ.get(nonce) or {}
-    if req.get("purpose") in ("assist", "reward"):
+    if req.get("purpose") in ("assist", "reward", "pin_reset"):
         c = cfg()
         kn = next((k["name"] for k in c["kids"] if k["id"] == req.get("kid")), req.get("kid", "A kid"))
-        if req.get("purpose") == "reward":
+        if req.get("purpose") == "pin_reset":
+            title, message = "Chores: forgotten PIN", "%s forgot their PIN. Open a 10-minute first-come window to set a new one?" % kn
+        elif req.get("purpose") == "reward":
             rw = next((x for x in c["rewards"] if x["id"] == req.get("reward")), {})
             title, message = "Chores: VR permission", "%s wants to redeem %s for %s⭐. Are you available to help?" % (
                 kn, rw.get("name", "VR"), rw.get("cost", "?"))
@@ -2115,8 +2161,8 @@ def send_adult_request(nonce, who, where):
             ch = next((x for x in c["chores"] if x["id"] == req.get("chore")), {})
             title, message = "Chores: first-time help needed", "%s wants to do %s (%s⭐). Can you teach and help this first time?" % (
                 kn, ch.get("name", "this chore"), ch.get("points", "?"))
-        actions = [{"action": "CHORE_OK_" + nonce, "title": "Allow now" if req.get("purpose") == "reward" else "Help now"},
-                   {"action": "CHORE_NO_" + nonce, "title": "Busy, later (1 hour)"}]
+        actions = [{"action": "CHORE_OK_" + nonce, "title": "Open reset" if req.get("purpose") == "pin_reset" else "Allow now" if req.get("purpose") == "reward" else "Help now"},
+                   {"action": "CHORE_NO_" + nonce, "title": "Dismiss" if req.get("purpose") == "pin_reset" else "Busy, later (1 hour)"}]
     else:
         title = "Chores: is this you?"
         message = f"Someone at the {where} wants grown-up mode as {who.title()}."
@@ -2306,12 +2352,14 @@ def clear_adult_request(nonce, who):
 def resolve_assist_request(nonce, ok, by):
     """Resolve one adult-required invitation exactly once."""
     r = ADULT_REQ.get(nonce)
-    if not r or r.get("purpose") not in ("assist", "reward") or r.get("status") != "pending":
+    if not r or r.get("purpose") not in ("assist", "reward", "pin_reset") or r.get("status") != "pending":
         return None
     r["status"] = "ok" if ok else "no"
-    if ok and r.get("purpose") == "assist":
+    if ok and r.get("purpose") == "pin_reset":
+        r["until"] = time.time() + ADULT_REQUEST_TTL_S
+    elif ok and r.get("purpose") == "assist":
         append({"type": "assist_ok", "kid": r["kid"], "chore": r["chore"], "by": by})
-    elif not ok:
+    elif not ok and r.get("purpose") != "pin_reset":
         r["until"] = time.time() + 3600
         append({"type": "adult_busy", "kid": r["kid"], "chore": r.get("chore"), "reward": r.get("reward"),
                 "by": by, "until": r["until"]})
@@ -2328,7 +2376,7 @@ def resolve_phone_adult_request(nonce, ok):
     r = ADULT_REQ.get(nonce)
     if not r or r.get("status") != "pending":
         return None
-    if r.get("purpose") in ("assist", "reward"):
+    if r.get("purpose") in ("assist", "reward", "pin_reset"):
         return resolve_assist_request(nonce, ok, r["who"])
     r["status"] = "ok" if ok else "no"
     save_adult_requests()
@@ -2620,6 +2668,68 @@ class H(BaseHTTPRequestHandler):
             acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
+        if p == "/api/kid_unlock":
+            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid")), None)
+            if not kid_:
+                return self.send(404, {"error": "unknown kid"})
+            if not kid_.get("pin_hash"):
+                return self.send(200, {"ok": True})
+            now_, ip_ = time.time(), self.client_address[0]
+            attempts_ = [x for x in GUARD.setdefault("kid_pin_failures", {}).get(ip_, []) if now_ - x < 60]
+            if len(attempts_) >= 5:
+                return self.send(429, {"error": "Too many tries. Wait one minute."})
+            if not verify_kid_pin(kid_, b.get("pin")):
+                GUARD["kid_pin_failures"][ip_] = attempts_ + [now_]
+                ilog({"src": "kid_pin", "kid": kid_["id"], "ip": ip_, "ok": False})
+                return self.send(403, {"error": "That PIN did not match."})
+            GUARD["kid_pin_failures"].pop(ip_, None)
+            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": ip_, "ok": True})
+            return self.send(200, {"ok": True})
+        if p == "/api/kid_pin_reset_request":
+            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
+            if not kid_:
+                return self.send(404, {"error": "That profile does not have a PIN."})
+            old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset"
+                         and r.get("kid") == kid_["id"] and r.get("status") == "pending"
+                         and time.time() - r["ts"] < ADULT_REQUEST_TTL_S), None)
+            nonce_ = old_ or uuid.uuid4().hex[:8]
+            if not old_:
+                target_ = available_request_adult(st) or LEAD_ADULT
+                if not target_:
+                    return self.send(409, {"error": "No grown-up reset contact is configured."})
+                ADULT_REQ[nonce_] = {"who": target_, "ip": self.client_address[0], "ts": time.time(),
+                                     "status": "pending", "purpose": "pin_reset", "kid": kid_["id"]}
+                save_adult_requests()
+                threading.Thread(target=send_adult_request, args=(nonce_, target_, "chore screen"), daemon=True).start()
+                after_change()
+            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": self.client_address[0], "action": "reset_requested"})
+            return self.send(200, {"ok": True, "nonce": nonce_, "state": derive()})
+        if p == "/api/kid_pin_change":
+            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
+            if not kid_:
+                return self.send(404, {"error": "That profile does not have a PIN."})
+            reset_ = next((r for r in ADULT_REQ.values() if r.get("purpose") == "pin_reset" and r.get("kid") == kid_["id"]
+                           and r.get("status") == "ok" and not r.get("used") and float(r.get("until") or 0) > time.time()), None)
+            if not reset_ and not verify_kid_pin(kid_, b.get("current_pin")):
+                return self.send(403, {"error": "The current PIN did not match."})
+            try:
+                new_hash_ = make_kid_pin_hash(b.get("new_pin"))
+            except ValueError as ex:
+                return self.send(400, {"error": str(ex)})
+            with LOCK:
+                c_ = cfg()
+                target_ = next((x for x in c_["kids"] if x["id"] == kid_["id"]), None)
+                if not target_:
+                    return self.send(404, {"error": "unknown kid"})
+                target_["pin_hash"] = new_hash_
+                save_cfg(c_)
+            if reset_:
+                reset_["used"] = True
+                save_adult_requests()
+            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": self.client_address[0],
+                  "action": "changed_after_reset" if reset_ else "changed"})
+            after_change()
+            return self.send(200, {"ok": True, "state": derive()})
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})
@@ -2966,7 +3076,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "already tidy"})
             if bd["pending_by"] and chores[b["chore"]].get("room"):
                 return self.send(409, {"error": "already waiting for inspection"})
-            if b["chore"] != "other" and b["kid"] in (bd.get("pending_by") or []):   # the same kid twice (a second tap on a waiting tile)
+            if b["chore"] != "other" and b["kid"] in (bd.get("pending_by") or []) and not ch_.get("multi_pending"):
+                # Most chores can wait only once. Document intake deliberately allows one inspection row per paper.
                 return self.send(409, {"error": "already waiting for inspection"})
             if ch_.get("cleanup_for"):
                 required = ((st.get("chores_first") or {}).get(b["kid"]) or {}).get("items") or []
@@ -2982,6 +3093,11 @@ class H(BaseHTTPRequestHandler):
                          "old_toy_name": str(b.get("old_toy_name") or "")[:40]}
             if b.get("note"):
                 extra["note"] = " ".join(str(b["note"]).split())[:40]
+            if ch_.get("document_review") and b.get("document_url"):
+                parsed_ = urllib.parse.urlparse(str(b["document_url"]))
+                if parsed_.scheme == "https" and parsed_.netloc == "drive.google.com" and parsed_.path.startswith("/file/d/"):
+                    extra["document_url"] = urllib.parse.urlunparse((parsed_.scheme, parsed_.netloc, parsed_.path, "", "", ""))[:300]
+                    extra["document_title"] = " ".join(str(b.get("document_title") or b.get("note") or "Scanned paper").split())[:100]
             named = (st["active"].get(b["kid"]) or {}) if (st["active"].get(b["kid"]) or {}).get("chore") == b["chore"] else \
                 (st["paused"].get(b["kid"]) or {}) if (st["paused"].get(b["kid"]) or {}).get("chore") == b["chore"] else {}
             if named.get("title") and not extra.get("note"):
@@ -3685,8 +3801,9 @@ def cast(ip, path):
             time.sleep(2)
         subprocess.run([CATT, "-d", ip, "cast_site", url], timeout=60,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if path.startswith("/") and not path.startswith("/tv"):  # kid page on a Hub: make the chimes audible
-            subprocess.run([CATT, "-d", ip, "volume", str(HUB_VOLUME)], timeout=20,
+        if path.startswith("/") and not path.startswith("/tv"):
+            # The server mute also protects stale/cached kid pages which have not received the state flag yet.
+            subprocess.run([CATT, "-d", ip, "volume", str(HUB_VOLUME if sound_enabled() else 0)], timeout=20,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as ex:  # noqa: BLE001
         print("cast failed", ip, ex, flush=True)
@@ -3787,7 +3904,7 @@ def announce(msg, tok, speaker=None, repeat=1):
     """Say msg on the speaker(s), `repeat` times in a row (VR: twice, so a kid in a headset catches it).
     announce.media_base: when the speaker can't fetch HA's own TTS links (e.g. Music Assistant can't resolve
     HA's internal hostname, so only its announcement bell plays), the audio is made here and played from that base."""
-    if not ANNOUNCE_TTS or not (speaker or ANNOUNCE_SPEAKER):   # no speaker configured: stay silent
+    if not sound_enabled() or not ANNOUNCE_TTS or not (speaker or ANNOUNCE_SPEAKER):
         return
     text = " ".join([msg] * max(1, int(repeat)))
     ilog({"src": "announce", "msg": msg, "repeat": repeat, "speaker": speaker or ANNOUNCE_SPEAKER})
