@@ -14,6 +14,7 @@ More robots: each gets its own copy (server loads this module once per house.jso
                   people tracker instead of motion sensors; an occupied room shut off by closed doors doesn't count, its
                   robot rooms are skipped
   guest_switches  {segment: switch}: skip a room while a guest stays there
+  sleep_protection {segment: entity}: hold a room while the sleep guard is on or unavailable
   untidy_blocks   true: a room marked untidy waits until it's tidy
   smart_mode      "always" | "day": the robot's own automatic mode (it picks vacuum or mop per room)
   tvs             which TVs count as someone here ([] = none on this floor)
@@ -45,6 +46,7 @@ HELD = set()     # of those, sensors whose On holds for many minutes (a thermost
 PUBLISH, LOG_SRC, NAME = "sensor.vacuum_autopilot", "vac", "Vacuum autopilot"   # one per robot: own sensor, log, name
 OCC = {}         # presence-tracker floor vacancy instead of motion sensors (vacuum.occupancy), see occ_presence()
 TV_IDS = None    # TVs that count as "someone here" (None = every TV; [] = none, e.g. a floor without TVs)
+SLEEP_PROTECTION = {}
 GUESTS = {}      # segment -> a "guest staying here" switch: skip that room while it's on
 UNTIDY_BLOCKS = False   # a room marked untidy (tidy_spaces) is never vacuumed until it's tidy again
 SMART = None     # "always" | "day": the robot's own automatic mode (it picks vacuum/mop per room); night keeps quiet tiers
@@ -84,9 +86,10 @@ def configure(v):
     global RESUME_QUIET_S, SCHEDULE, EVERY_H, DINNER
     RESUME_QUIET_S = int(v.get("resume_quiet_s", 20))
     SCHEDULE, EVERY_H, DINNER = dict(v.get("schedule") or {}), float(v.get("every_h", 72)), dict(v.get("dinner") or {})
-    global PUBLISH, LOG_SRC, OCC, TV_IDS, GUESTS, UNTIDY_BLOCKS, SMART, NAME
+    global PUBLISH, LOG_SRC, OCC, TV_IDS, GUESTS, SLEEP_PROTECTION, UNTIDY_BLOCKS, SMART, NAME
     PUBLISH, LOG_SRC = v.get("publish", "sensor.vacuum_autopilot"), v.get("log_src", "vac")
     NAME = v.get("name", "Vacuum autopilot")
+    SLEEP_PROTECTION = dict(v.get("sleep_protection") or {})
     OCC, TV_IDS, GUESTS = dict(v.get("occupancy") or {}), v.get("tvs"), dict(v.get("guest_switches") or {})
     global FLOOR, BACKOFF, PIN_MAP, EXPLORE, PROGRESS, CLEAN_TIME
     PROGRESS, CLEAN_TIME = v.get("progress"), v.get("clean_time")   # the robot's own % done and seconds this clean
@@ -294,8 +297,7 @@ class Pilot:
         accessible_untidy = untidy - closed
         blocked_other = set()
         for seg in SEGMENTS:
-            why = (status.get(seg) or {}).get("why", "")
-            if (status.get(seg) or {}).get("blocked") and not why.startswith("marked untidy"):
+            if (status.get(seg) or {}).get("blocked") and (status.get(seg) or {}).get("block_kind") != "untidy":
                 blocked_other.add(seg)
         accessible_exclusions = blocked_other - closed
         skipped = []
@@ -596,12 +598,19 @@ class Pilot:
                       and (tidy.get(sp["id"]) or {}).get("state") == "untidy"]
             messy = untidy if UNTIDY_BLOCKS else []
             if any(c in busy for c in cids) or any(x.get("pending_by") for x in xs):
+                d["block_kind"] = "chore"
                 d["why"] = "a kid's job here is in progress or waiting for a check"
                 d["blocked"] = True
             elif GUESTS.get(seg) and self.get(GUESTS[seg]).get("state") == "on":
+                d["block_kind"] = "guest"
                 d["why"] = "a guest is staying here"
                 d["blocked"] = True
+            elif seg in SLEEP_PROTECTION and self.get(SLEEP_PROTECTION[seg]).get("state") != "off":
+                d["block_kind"] = "sleep"
+                d["why"] = "waiting for the room's sleep protection to clear"
+                d["blocked"] = True
             elif messy:
+                d["block_kind"] = "untidy"
                 d["why"] = "marked untidy (%s): tidy it first" % ", ".join(messy)
                 d["blocked"] = True
             elif seg in incomplete:
@@ -818,6 +827,21 @@ class Pilot:
                  whole_floor=whole_floor, skipped=skipped)
         self.save()
 
+    def room_holds(self, rooms, explicit):
+        closed = self.closed_segments()
+        status = self.segment_status()
+        untidy = set() if explicit else self.untidy_segments()
+        holds = {}
+        for name in rooms:
+            rule = status.get(name) or {}
+            if name in closed:
+                holds[name] = name + ": all monitored entrances are closed"
+            elif rule.get("blocked") and rule.get("block_kind") != "untidy":
+                holds[name] = name + ": " + rule["why"]
+            elif name in untidy:
+                holds[name] = name + ": marked untidy"
+        return holds
+
     def manual_wait(self, vs, incl, now):
         """Why the FIFO head cannot launch yet; None means the robot is genuinely free."""
         q = self.D.get("manual_queue") or []
@@ -837,6 +861,8 @@ class Pilot:
                 return "charging to 50% before the next queued clean"
         except (TypeError, ValueError):
             return "waiting for a valid battery reading"
+        if item.get("gesture") != "long":
+            return next(iter(self.room_holds(item["rooms"], explicit=True).values()), None)
         if item.get("attempts"):
             quiet, _ = self.quiet_for()
             if quiet is None or quiet < START_QUIET_S:
@@ -1032,6 +1058,13 @@ class Pilot:
             if manual:
                 item = manual[0]
                 wait = self.manual_wait(vs, incl, now)
+                if not wait and item.get("gesture") == "long" and not item.get("native_requested"):
+                    holds = self.room_holds(item["rooms"], explicit=False)
+                    allowed = [r for r in item["rooms"] if r not in holds]
+                    if allowed:
+                        item["rooms"] = allowed
+                    else:
+                        wait = "no selected rooms currently available"
                 if not wait and item.get("native_requested"):
                     self.refresh_native_request(item)
                     wait = item.get("launch_blocked")
@@ -1140,10 +1173,20 @@ class Pilot:
             if vs in ("docked", "charging"):
                 self.finish("manual jobs cancelled", now)
         elif ph == "between":       # next group only if downstairs is still empty (a manual FIFO job needs no vacancy)
-            q, who = self.quiet_for(held=False)
-            if now - D.get("run_started", now) > MAX_RUN_S:
+            manual = next((job for job in D.get("manual_queue", []) if job["id"] == D.get("manual_active")), None)
+            next_group = D["groups"][D["gi"] + 1]
+            holds = self.room_holds(next_group["rooms"], explicit=manual.get("gesture") != "long") if manual else {}
+            hold = next(iter(holds.values()), None)
+            if hold and manual.get("gesture") == "long":
+                D["groups"].pop(D["gi"] + 1)
+                self.log("room_skipped", rooms=next_group["rooms"], why=hold)
+                if D["gi"] + 1 == len(D["groups"]):
+                    self.finish("done", now)
+            elif now - D.get("run_started", now) > MAX_RUN_S:
                 self.finish("run too old to continue", now)
-            elif D.get("run_kind") == "manual" or q >= BETWEEN_QUIET_S:
+            elif hold:
+                info["why"] = "manual clean queued: " + hold
+            elif manual or (self.quiet_for(held=False)[0] or 0) >= BETWEEN_QUIET_S:
                 D["gi"] += 1
                 D["phase"] = "running"
                 self.launch(now)

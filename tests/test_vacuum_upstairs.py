@@ -246,13 +246,33 @@ class Upstairs(unittest.TestCase):
         calls = self.tick(2)
         self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
 
-    def test_automatic_retry_of_unstarted_button_job_waits_for_vacancy(self):
+    def test_retry_of_explicit_room_does_not_require_floor_vacancy(self):
         self.button(rooms=["Bath"])
         self.tick()
         self.tick(301)
         self.occ({"bedroom": "occupied"})
-        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(301)])
-        self.assertIn("empty", self.p.manual_wait("docked", "off", self.now[0]))
+        self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(301)])
+
+    def test_explicit_tidy_override_waits_for_sleep_and_closed_entrances(self):
+        self.va.SLEEP_PROTECTION = {"Study": "binary_sensor.resting"}
+        self.tidy["study"] = {"state": "untidy"}
+        self.occ({"study": "occupied"})
+        self.S("binary_sensor.resting", "on")
+        self.button(rooms=["Study"])
+        self.assertIn("sleep protection", self.p.manual_wait("docked", "off", self.now[0]))
+        self.S("binary_sensor.resting", "off")
+        self.S("binary_sensor.study_hall_door", "off")
+        self.S("binary_sensor.study_bath_door", "off")
+        self.assertIn("entrances", self.p.manual_wait("docked", "off", self.now[0]))
+        self.S("binary_sensor.study_hall_door", "on")
+        self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick()])
+        self.assertEqual(self.tidy["study"]["state"], "untidy")
+
+    def test_long_press_skips_a_protected_sleeper(self):
+        self.va.SLEEP_PROTECTION = {"Bedroom": "binary_sensor.resting"}
+        self.S("binary_sensor.resting", "on")
+        self.assertNotIn("Bedroom", self.button("long", [])["rooms"])
+        self.assertFalse(self.p.D["manual_queue"][0]["whole_floor"])
 
     def test_interrupted_manual_job_is_retired_after_return_to_dock(self):
         self.button(rooms=["Bath"], request_id="original")
