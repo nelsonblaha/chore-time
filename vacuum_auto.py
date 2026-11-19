@@ -160,6 +160,7 @@ class Pilot:
         self.g = g
         configure(g["HOUSE"][key])
         self.floor = FLOOR
+        self.room_cleaning_sensor = g["HOUSE"][key].get("room_cleaning_evidence")
         self.lock = threading.RLock()
         self.path = g["DATA"] / ("vacuum_auto.json" if key == "vacuum" else "vacuum_auto_%s.json" % key)
         try:
@@ -175,7 +176,7 @@ class Pilot:
         self.tok = g["ha_token"]()
         self.last_pub = None
         g.setdefault("VACUUM_PLANNERS", {})[self.floor] = self
-        if not self.D["visits"]:
+        if not self.D["visits"] and not self.room_cleaning_sensor:
             self.backfill()
 
     def backfill(self, days=4):
@@ -549,7 +550,7 @@ class Pilot:
                 return {}
             return {seg: ts for seg, ts in values.items() if seg in SEGMENTS
                     and type(ts) in (int, float) and 0 < ts <= time.time() + 5
-                    and self.D["visits"].get(seg, 0) < ts}
+                    and not self.request_serviced(seg, ts)}
         except (TypeError, ValueError):
             return {}
 
@@ -557,8 +558,8 @@ class Pilot:
         """Per robot segment: the autopilot's real decision and why (for dashboards).
         Goals (house.json vacuum.schedule): some rooms nightly (after a time; optionally only if dinner was eaten
         there, per a motion sensor), everything else every `every_h` hours (default 72). A freshly passed tidy also
-        counts (the floor is clear). ANY robot visit resets the clock, including a manual run (e.g. a room's clean
-        button). Never while a kid's job there is in progress or waiting for a check."""
+        counts (the floor is clear). With a room-cleaning evidence source, confirmed manual and automatic
+        cleans reset the clock. Never while a kid's job there is in progress or waiting for a check."""
         st = self.g["derive"]()
         b = st["board"]
         chs = {c["id"]: c for c in st.get("config", {}).get("chores", [])}
@@ -574,9 +575,10 @@ class Pilot:
             # the map rooms this robot area really covers: explicit in house.json (a kids' job can span several robot
             # areas, e.g. "front hall + dining"), else derived from its jobs
             rooms = SEG_ROOMS.get(seg) or sorted({r for c in cids for r in (chs.get(c, {}).get("map_rooms") or [])})
-            last = self.D["visits"].get(seg, 0)
+            confirmed = self.D["visits"].get(seg, 0)
+            last = max(confirmed, self.D.get("prior_schedule_dates", {}).get(seg, 0))
             sch = SCHEDULE.get(seg) or {}
-            d = {"chores": cids, "rooms": rooms, "last_robot": last, "mop": seg in MOP, "eligible": False}
+            d = {"chores": cids, "rooms": rooms, "last_robot": (confirmed if not getattr(self, "room_cleaning_sensor", None) or "room_credit_since" in self.D else 0), "mop": seg in MOP, "eligible": False}
             d["requested"] = seg in requests
             d["incomplete"] = seg in incomplete
             if d["incomplete"]:
@@ -672,22 +674,60 @@ class Pilot:
         return ate
 
     # --- robot room tracking (always on, manual runs count too) -------------------------------
+    def update_room_cleaning(self, room, now):
+        """Only a confirmed completed job can refresh the room's cleaning date."""
+        row = self.get(self.room_cleaning_sensor) or {}
+        attrs = row.get("attributes") or {}
+        rooms = attrs.get("rooms")
+        if (row.get("state") != "ready" or not isinstance(rooms, dict)
+                or not isinstance(attrs.get("updated_at"), (int, float)) or not 0 <= now - attrs["updated_at"] < 180):
+            return 0
+        if "room_credit_since" not in self.D:
+            # Carry pre-migration schedule dates through their original due date.
+            # They are never exposed as confirmed cleans or used for new requests.
+            self.D["prior_schedule_dates"] = dict(self.D["visits"])
+            self.D["visits"] = {}
+            self.D["room_credit_since"] = now
+        for name, info in rooms.items():
+            if name not in SEGMENTS or not isinstance(info, dict):
+                continue
+            finished = info.get("last_completed")
+            if type(finished) in (int, float) and self.D["visits"].get(name, 0) < finished <= now:
+                self.D["visits"][name] = finished
+                since = self.D.get("incomplete_since")
+                if since and finished >= since and name in (self.D.get("incomplete") or []):
+                    self.completed([name])
+        job = (rooms.get(room) or {}).get("current_job") or {}
+        return job.get("seconds", 0) if job.get("targeted") else 0
+
+    def request_serviced(self, seg, issued):
+        last = self.D["visits"].get(seg, 0)
+        if issued <= self.D.get("room_credit_since", 0):
+            last = max(last, self.D.get("prior_schedule_dates", {}).get(seg, 0))
+        return last >= issued
+
     def track(self, vs, room, now):
         """credit a room once the robot has spent DWELL_S actually CLEANING in it (pauses/returns don't count)"""
         D = self.D
-        if D.get("t_vs") == "cleaning" and D.get("cur"):
+        verified = bool(getattr(self, "room_cleaning_sensor", None))
+        if verified:
+            measured = self.update_room_cleaning(room, now)
+        elif D.get("t_vs") == "cleaning" and D.get("cur"):
             D["cur_clean"] = D.get("cur_clean", 0) + min(now - D.get("t_last", now), 3600)
         D["t_last"], D["t_vs"] = now, vs
         cur = D.get("cur")
         if (vs == "cleaning" or (vs == "paused" and cur)) and room and room != cur:
-            if cur and D.get("cur_clean", 0) >= DWELL_S:
+            if not verified and cur and D.get("cur_clean", 0) >= DWELL_S:
                 D["visits"][cur] = now
             D["prev"], D["prev_left"] = cur, now
             D["cur"], D["cur_clean"] = room, 0
         elif vs in ("docked", "returning", "idle", "error") and cur:
-            if D.get("cur_clean", 0) >= DWELL_S:
+            if not verified and D.get("cur_clean", 0) >= DWELL_S:
                 D["visits"][cur] = now
             D["prev"], D["prev_left"], D["cur"], D["cur_clean"] = cur, now, None, 0
+
+        if verified:
+            D["cur_clean"] = measured if D.get("cur") else 0
 
     def robot_rooms(self, now):
         ex = {self.D.get("cur")}
