@@ -1794,7 +1794,9 @@ def push_state_sensor(state=None, last_result=None):
              "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
              "music_block": state.get("music_block"),
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
-             "kid_notes": state.get("kid_notes"), "requests": state.get("requests"), "envelope": state.get("envelope"), "next_step": state.get("next_step")}
+             "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
+             "assist_requests": state.get("assist_requests"), "envelope": state.get("envelope"),
+             "next_step": state.get("next_step")}
     try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
         import room_eye
         if room_eye.EYE and room_eye.EYE.S.get("photos"):
@@ -1944,12 +1946,14 @@ def send_adult_request(nonce, who, where):
         message = f"Someone at the {where} wants grown-up mode as {who.title()}."
         actions = [{"action": "CHORE_OK_" + nonce, "title": "It's me"},
                    {"action": "CHORE_NO_" + nonce, "title": "Not me"}]
+    accepted = []
     for svc in ADULT_NOTIFY.get(who, []):
-        ha_call(svc, {"title": title, "message": message,
-                      "data": {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
-                               "actions": actions}}, tok)
-    ilog({"src": "notify", "action": "adult_request_sent", "nonce": nonce,
-          "purpose": req.get("purpose"), "to": ADULT_NOTIFY.get(who, [])})
+        if ha_call(svc, {"title": title, "message": message,
+                         "data": {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
+                                  "actions": actions}}, tok):
+            accepted.append(svc)
+    ilog({"src": "notify", "action": "adult_request_accepted_by_ha" if accepted else "adult_request_failed",
+          "nonce": nonce, "purpose": req.get("purpose"), "to": accepted})
 
 
 def parent_quiet():
@@ -2561,10 +2565,16 @@ class H(BaseHTTPRequestHandler):
             nonce = old_ or uuid.uuid4().hex[:8]
             if not old_:
                 ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
-                                    "status": "pending", "purpose": "assist", "kid": kid_, "chore": cid_}
+                                    "status": "pending", "purpose": "assist", "kid": kid_, "chore": cid_,
+                                    "last_notify": time.time()}
                 save_adult_requests()
                 threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
                 ilog({"src": "adult", "action": "assist_request", "kid": kid_, "chore": cid_})
+            elif time.time() - ADULT_REQ[nonce].get("last_notify", 0) > 10:
+                ADULT_REQ[nonce]["last_notify"] = time.time()
+                save_adult_requests()
+                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+            after_change()
             return self.send(200, {"ok": True, "nonce": nonce})
         if p == "/api/reward_consent_request":
             kid_, rid_ = b.get("kid"), b.get("reward")
@@ -2581,10 +2591,16 @@ class H(BaseHTTPRequestHandler):
             nonce = old_ or uuid.uuid4().hex[:8]
             if not old_:
                 ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
-                                    "status": "pending", "purpose": "reward", "kid": kid_, "reward": rid_}
+                                    "status": "pending", "purpose": "reward", "kid": kid_, "reward": rid_,
+                                    "last_notify": time.time()}
                 save_adult_requests()
                 threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
                 ilog({"src": "adult", "action": "reward_request", "kid": kid_, "reward": rid_})
+            elif time.time() - ADULT_REQ[nonce].get("last_notify", 0) > 10:
+                ADULT_REQ[nonce]["last_notify"] = time.time()
+                save_adult_requests()
+                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+            after_change()
             return self.send(200, {"ok": True, "nonce": nonce})
         if p == "/api/assist_answer":
             if b.get("by") not in insp:
@@ -3721,8 +3737,10 @@ def ha_call(svc, data, tok):
                                  method="POST")
     try:
         urllib.request.urlopen(req, timeout=10).read()
+        return True
     except Exception as ex:  # noqa: BLE001
         print("HA call failed", svc, ex, flush=True)
+        return False
 
 
 def external_display_active(t, players, tok):

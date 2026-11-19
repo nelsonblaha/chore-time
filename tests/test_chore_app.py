@@ -81,7 +81,7 @@ class App:
         s.ha_get = lambda e, tok: self.states.get(e, {"state": "unavailable", "attributes": {}})
         s.ha_call = lambda svc, data, tok: self.calls.append((svc, data))
         s.ha_post_state = lambda *a, **k: None
-        self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting", "announce") if hasattr(s, n)}
+        self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting", "announce", "push_state_sensor") if hasattr(s, n)}
         for n in ("announce", "notify_report", "notify_inspecting", "notify_started", "send_adult_request",
                   "clear_adult_request", "push_state_sensor", "push_ha", "after_change"):
             if hasattr(s, n):
@@ -2038,8 +2038,25 @@ class GrownUpStartsVR(Case):
         a = App(c)
         a.event(type="adjust", kid="ava", points=10, reason="test")
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "vr"})[0], 409)
+        changed = []
+        a.s.after_change = lambda: changed.append(True)
         code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
         self.assertEqual(code, 200)
+        self.assertTrue(changed)  # make the request appear on Home Assistant dashboards immediately
+        state = a.state()
+        sent = []
+        old_urlopen = a.s.urllib.request.urlopen
+
+        class Response:
+            def read(self):
+                return b"{}"
+
+        a.s.urllib.request.urlopen = lambda req, timeout=0: sent.append(json.loads(req.data)) or Response()
+        try:
+            a.orig["push_state_sensor"](state)
+        finally:
+            a.s.urllib.request.urlopen = old_urlopen
+        self.assertIn(ask["nonce"], {q["nonce"] for q in sent[-1]["attributes"]["assist_requests"]})
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
         self.assertEqual(a.post("/api/adult_status", {"nonce": ask["nonce"]})[1]["status"], "ok")  # polling does not consume it
         code, r = a.post("/api/spend", {"kid": "ava", "reward": "vr", "consent": ask["nonce"]})
