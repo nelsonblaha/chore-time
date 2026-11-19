@@ -18,6 +18,7 @@ house.json:
   "vacuum_help": {
     "points": {"rescue": 3, "water": 2},          # main-brush rescue: plus any inspected room-tidying credit
     "robots": [{"id": "down", "name": "Downstairs Robot", "floor": "Downstairs",
+                "vacuum": "vacuum.downstairs_robot",                                  # proves recovery/docking
                 "error": "sensor.downstairs_robot_vacuum_error",
                 "dock_error": "sensor.downstairs_robot_dock_error",                      # optional
                 "water": ["binary_sensor.downstairs_robot_dock_clean_water_box"],        # optional, on = needs water
@@ -239,13 +240,22 @@ class Helper:
             for kind, cid in (("rescue", rescue_id(robot)), ("water", water_id(robot))):
                 K = R.setdefault(kind, {})
                 cur = n if n and n["kind"] == kind else None
+                # A robot that reports an error and then loses power/network has not demonstrated recovery. Keep the
+                # incident alive through bedtime and a service restart until its error clears or it is seen docked.
+                # Do not reuse the last room: the locator commonly goes stale just before a stranded robot disappears.
+                if kind == "rescue" and not cur and K.get("episode") and K.get("error") in STUCK:
+                    err_state = self.read(robot.get("error")).get("state") if robot.get("error") else None
+                    vac_state = self.read(robot.get("vacuum")).get("state") if robot.get("vacuum") else None
+                    if err_state in ("unknown", "unavailable") and vac_state in (None, "unknown", "unavailable"):
+                        cur = {"kind": "rescue", "error": K["error"], "since": K["episode"],
+                               "telemetry_lost": True}
                 if cur:
                     K["clear_since"] = 0
                     ep = round(cur["since"])
                     if now - cur["since"] < HOLD_S:
                         continue
                     if K.get("episode") != ep:        # a new time it needs help
-                        K.update(episode=ep, untidy=False, opened=False)
+                        K.update(episode=ep, error=cur.get("error"), untidy=False, opened=False)
                         room = robot_room(robot, self.read) if kind == "rescue" else None
                         sp = spaces_of(robot, room, spaces_all) if room else []
                         K.update(room=room, spaces=[s["id"] for s in sp])
@@ -262,7 +272,9 @@ class Helper:
                         if busy(cid, st) or (st["board"].get(cid) or {}).get("opened"):
                             K["opened"] = True        # already open (e.g. from before a restart)
                         else:
-                            note = rescue_note(robot, cur, sp, K.get("room"), int(pts.get("rescue", 3))) if kind == "rescue" \
+                            note_sp = [] if cur.get("telemetry_lost") else sp
+                            note_room = None if cur.get("telemetry_lost") else K.get("room")
+                            note = rescue_note(robot, cur, note_sp, note_room, int(pts.get("rescue", 3))) if kind == "rescue" \
                                 else water_note(robot, cur)
                             price = int(pts.get("rescue", 3)) if kind == "rescue" else int(pts.get("water", 2))
                             g["append"]({"type": "reopen", "chore": cid, "by": "vacuum", "note": note,

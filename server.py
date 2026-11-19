@@ -211,6 +211,25 @@ def compute_awards(c, reports, evs, earned, typical):
                     key=lambda r: r.get("inspected_ts") or r["ts"])
     records, jobs, days = {}, {k: 0 for k in kids}, {k: set() for k in kids}
     pbs = {}   # each kid's own best time per job: {chore: {kid: {"sec", "ts"}}}
+    school_dress = [e for e in evs if e.get("type") == "dress" and e.get("school")]
+
+    def school_dress_tier(kid, completed):
+        """Absolute-time school-morning award for an inspected Get dressed report."""
+        session = next((e for e in reversed(school_dress) if e["ts"] <= completed), None)
+        if not session or not session.get("on") or kid not in (session.get("kids") or []):
+            return None
+        done = datetime.fromtimestamp(completed)
+        if datetime.fromtimestamp(session["ts"]).date() != done.date():
+            return None
+        for tier in (SCHOOL.get("awards") or []):
+            try:
+                hh, mm = (int(x) for x in str(tier["by"]).split(":"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (done.hour, done.minute, done.second) <= (hh, mm, 59):
+                return tier
+        return None
+
     expanded = []
     for r in passed:
         for m in (r.get("team") or [r["kid"]]):
@@ -234,6 +253,13 @@ def compute_awards(c, reports, evs, earned, typical):
             took_ = r["ts"] - r["started"] if r.get("started") and 0 <= r["ts"] - r["started"] < 4 * 3600 else None
             add(k, "trophy:%s:%d" % (cid, int(ts)), t_.get("icon", "1f3c6"), t_.get("title", ch.get("name", cid) + "!"),
                 t_.get("sub") or ("in " + fmt_s(took_) if took_ is not None else datetime.fromtimestamp(ts).strftime("%b %-d")), ts)
+        if cid == "get_dressed":
+            tier_ = school_dress_tier(k, r["ts"])
+            if tier_:
+                day_ = datetime.fromtimestamp(r["ts"]).date().isoformat()
+                add(k, "school-dressed:%s" % day_, tier_.get("icon", "1f680"),
+                    tier_.get("title", "School ready!"),
+                    tier_.get("sub") or ("Dressed by " + str(tier_["by"])), ts)
         if ch.get("bundle"):
             add(k, "bundle:" + cid, "1f3e0", ch.get("name", cid) + "!", "The big job", ts)
         timed = cid != "other" and not ch.get("no_record")   # "something else" can be anything: no record to beat

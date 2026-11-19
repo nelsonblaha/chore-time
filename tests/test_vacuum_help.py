@@ -11,7 +11,8 @@ from test_chore_app import Case
 ERR, DOCK, ROOM, WATER = ("sensor.down_robot_vacuum_error", "sensor.down_robot_dock_error",
                           "sensor.down_robot_current_room", "binary_sensor.down_robot_dock_dirty_water_box")
 HELP = {"points": {"rescue": 3, "water": 2, "sensors": 2},
-        "robots": [{"id": "down", "name": "Robo", "floor": "Downstairs", "error": ERR, "dock_error": DOCK,
+        "robots": [{"id": "down", "name": "Robo", "floor": "Downstairs", "vacuum": "vacuum.down",
+                    "error": ERR, "dock_error": DOCK,
                     "sensors_left": "sensor.down_robot_sensor_time_left", "sensors_reset": "button.down_robot_reset_sensor",
                     "water": [WATER], "room": ["sensor.down_robot_room_live", ROOM],
                     "rooms": {"Kitchen": ["kitchen"], "Porch": ["porch"]}}]}
@@ -26,7 +27,7 @@ class RobotHeroJobs(Case):
         self.vh = vacuum_help
         self.s.HOUSE["vacuum_help"], self.s.HOUSE["tidy_spaces"] = HELP, SPACES
         self.h = vacuum_help.Helper(vars(self.s), HELP)
-        for e, v in ((ERR, "none"), (DOCK, "ok"), (WATER, "off"), (ROOM, "Kitchen"), ("sensor.down_robot_sensor_time_left", "5000")):
+        for e, v in (("vacuum.down", "docked"), (ERR, "none"), (DOCK, "ok"), (WATER, "off"), (ROOM, "Kitchen"), ("sensor.down_robot_sensor_time_left", "5000")):
             self.app.set(e, v, ago=3600)
 
     def job(self, cid):
@@ -97,6 +98,23 @@ class RobotHeroJobs(Case):
         self.assertNotIn("Tidy", st["board"]["help_rescue_down"]["note"])
         ev = self.app.pass_report("ava", "help_rescue_down", points=3)
         self.assertNotIn("partial_of", ev)
+
+    def test_a_flat_battery_that_stops_answering_still_opens_after_bedtime(self):
+        self.app.post("/api/bedtime", {"by": "jordan", "on": True})
+        self.app.set(ERR, "low_battery", ago=60)
+        self.app.set("vacuum.down", "error", ago=60)
+        self.tick()
+        self.assertEqual(self.job("help_rescue_down").get("closed"), "on_demand")
+        self.assertEqual(self.h.D["down"]["rescue"]["error"], "low_battery")
+
+        self.app.set(ERR, "unavailable")
+        self.app.set("vacuum.down", "unavailable")
+        self.app.post("/api/bedtime", {"by": "jordan", "on": False})
+        self.tick()
+        st = self.app.state()
+        self.assertIsNone(self.job("help_rescue_down").get("closed"))
+        self.assertIn("battery ran out", st["board"]["help_rescue_down"]["note"])
+        self.assertNotIn("Kitchen", st["board"]["help_rescue_down"]["note"])
 
     def test_water_tanks_open_a_water_job(self):
         self.app.set(DOCK, "water_empty", ago=60)

@@ -1691,6 +1691,23 @@ class SchoolMornings(Case):
         self.assertTrue(any(a["id"].startswith("pb:get_dressed") and "beat your 10:00" in a["sub"] for a in st["awards"]["ava"]),
                         st["awards"]["ava"])
 
+    def test_school_morning_awards_use_absolute_completion_time(self):
+        self.s.SCHOOL["awards"] = [
+            {"by": "06:30", "icon": "1f680", "title": "Morning Rocket!", "sub": "Dressed by 6:30 — amazing!"},
+            {"by": "06:45", "icon": "2705", "title": "School Ready!", "sub": "Dressed by 6:45 — ready on time"},
+        ]
+        morning = self.MON.replace(hour=5, minute=30).timestamp()
+        self.app.event(type="dress", on=True, kids=["ava", "max", "zoe"], by="auto", school=True, ts=morning)
+        for kid, hm in (("ava", (6, 30)), ("max", (6, 45)), ("zoe", (6, 46))):
+            done = self.MON.replace(hour=hm[0], minute=hm[1]).timestamp()
+            report = self.app.event(type="report", kid=kid, chore="get_dressed", feeling="ok", points=0,
+                                    ts=done, started=done - 300)
+            self.app.post("/api/inspect", {"ref": report["id"], "by": "jordan", "ok": True, "points": 0})
+        awards = self.app.state()["awards"]
+        self.assertTrue(any(a["title"] == "Morning Rocket!" for a in awards["ava"]), awards["ava"])
+        self.assertTrue(any(a["title"] == "School Ready!" for a in awards["max"]), awards["max"])
+        self.assertFalse(any(a["id"].startswith("school-dressed:") for a in awards["zoe"]), awards["zoe"])
+
     def test_next_school_morning_skips_the_weekend_and_holidays(self):
         sat = (self.MON + timedelta(days=5)).replace(hour=9)
         self.assertEqual(self.s.school_next(sat, self.s.cfg()["kids"])["day"], "Mon")
