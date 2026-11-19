@@ -263,7 +263,8 @@ class Locator:
                 if now-at <= 15 and self.floor_empty(self.cfg[vac],now):
                     robot = self.g['ha_get'](vac,self.tok)
                     if robot.get('state') in ('cleaning','returning') and epoch(robot) <= at:
-                        self.add(vac,'camera:'+camera,'camera',room,at)
+                        self.add(vac, 'camera:' + camera, 'camera', room, at, map_xy=xy,
+                                 position_source="visual_robot", location_source="visual_robot")
                 self.M.setdefault('_camera_watermarks',{})[camera] = at
                 changed = True
         return changed
@@ -335,13 +336,24 @@ class Locator:
         except OSError as ex:
             print("locator training write failed", ex, flush=True)
 
-    def add(self, vac, src, kind, room, at, reading=None, plan=None, map_xy=None):
+    def add(self, vac, src, kind, room, at, reading=None, plan=None, map_xy=None,
+            position_source=None, location_source=None):
         event = {"src": src, "kind": kind, "room": room, "at": at}
         if reading is not None:
             event["reading"] = reading
         if plan:
             event["plan"] = [round(plan[0], 2), round(plan[1], 2)]
             self.plan[vac] = {"x": plan[0], "y": plan[1], "room": room, "source": src, "at": at}
+        position = (map_xy, at) if map_xy is not None else self.xy.get(vac)
+        if position_source == "visual_robot":
+            event.update(independent_position=True, position_source=position_source, position_at=at)
+        elif position and abs(position[1] - at) <= TRAIN_XY_TTL:
+            event.update(independent_position=True, position_source=position_source or "native_navigation",
+                         position_at=position[1])
+        else:
+            event["independent_position"] = False
+        if location_source:
+            event["location_source"] = location_source
         self.ev.setdefault(vac, []).append(event)
         if kind not in ("map", "position", "person"):
             self.train(vac, src, kind, room, at, reading, plan, map_xy)
@@ -421,7 +433,8 @@ class Locator:
                     float(cfg["y"]) + distance * ppi * math.sin(angle))
             reading = {"distance_in": round(measured, 1), "direction": direction,
                        "moving": moving, "still": still}
-            self.add(vac, entity, "radar", room, now, reading=reading, plan=plan)
+            self.add(vac, entity, "radar", room, now, reading=reading, plan=plan,
+                     location_source=loc.get("source"))
 
     def audio(self, vac, rc, loc, now):
         for entity, spec in (rc.get("audio") or {}).items():
@@ -447,7 +460,7 @@ class Locator:
             room = cfg.get("room")
             if loc.get("room") != room or not self.room_empty(rc, room, now, cfg.get("occupancy_room")):
                 continue
-            self.add(vac, entity, "audio", room, now, reading=value)
+            self.add(vac, entity, "audio", room, now, reading=value, location_source=loc.get("source"))
 
     def gather(self, vac, rc, st, room_now, now, since=0, loc=None):
         """this tick's evidence from the robot, its map, the room sensors and the cameras"""
@@ -477,7 +490,7 @@ class Locator:
             rising = s_ == "on" and self.mprev.get("f:" + ent) == "off"
             self.mprev["f:" + ent] = s_
             if rising and self.room_empty(rc, room, now):
-                self.add(vac, ent, "motion", room, now, reading="on")
+                self.add(vac, ent, "motion", room, now, reading="on", location_source=(loc or {}).get("source"))
         for ent, room in (rc.get("cameras") or {}).items():
             s_ = self.g["ha_get"](ent, self.tok)
             v = s_.get("state")
@@ -485,7 +498,8 @@ class Locator:
             self.camprev[ent] = v
             event_type = (s_.get("attributes") or {}).get("event_type")
             if new and self.room_empty(rc, room, now) and event_type in ("camera_motion", "camera_sound"):
-                self.add(vac, ent, "camera", room, now, reading=event_type)
+                self.add(vac, ent, "camera", room, now, reading=event_type,
+                         location_source=(loc or {}).get("source"))
         self.radar(vac, rc, loc or {}, now)
         self.audio(vac, rc, loc or {}, now)
         self.ev[vac] = [e for e in self.ev.get(vac) or [] if now - e["at"] <= WINDOW_S and e["at"] >= since]
@@ -517,9 +531,15 @@ class Locator:
             confidence = self.rel(vac, event["src"], event["kind"]) * 0.5 ** ((now - event["at"]) / HALF_S)
             current = out.get(event["src"])
             if current is None or event["at"] >= current["at"]:
-                out[event["src"]] = {"robot": vac, "at": int(event["at"]),
-                                     "confidence": round(confidence, 2), "room": room,
-                                     "kind": event["kind"]}
+                out[event["src"]] = {
+                    "robot": vac, "at": int(event["at"]), "observed_at": int(event["at"]),
+                    "valid_until": int(event["at"] + WINDOW_S), "confidence": round(confidence, 2),
+                    "confidence_scale": "0..1", "room": room, "kind": event["kind"],
+                    "independent_position": bool(event.get("independent_position")),
+                    "position_source": event.get("position_source"),
+                    "position_at": int(event["position_at"]) if event.get("position_at") else None,
+                    "location_source": event.get("location_source"),
+                }
         return out
 
     def plan_position(self, vac, room, now):
@@ -644,7 +664,8 @@ class Locator:
                  "x": xy[0] if xy else None, "y": xy[1] if xy else None, "votes": loc["votes"],
                  "held_since": int(loc["held_since"]) if loc.get("held_since") else None,
                  "fused_from": loc.get("fused_from"), "confidence": loc.get("confidence"), "evidence": loc.get("evidence"),
-                 "explains": loc.get("explains") or {}, "plan_x": loc.get("plan_x"), "plan_y": loc.get("plan_y"),
+                 "explain_schema": 1, "explains": loc.get("explains") or {},
+                 "plan_x": loc.get("plan_x"), "plan_y": loc.get("plan_y"),
                  "plan_source": loc.get("plan_source"), "plan_at": int(loc["plan_at"]) if loc.get("plan_at") else None,
                  "plan_model": loc.get("plan_model"),
                  "reliability": {k: round((v[0] + 1) / (v[1] + 2), 2) for k, v in ((self.M.get("_rel") or {}).get(vac) or {}).items()},

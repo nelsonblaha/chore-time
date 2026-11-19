@@ -1146,7 +1146,14 @@ class RobotLocatorFreshness(unittest.TestCase):
         self.vac = {"state": "cleaning", "last_changed": self.iso(900)}
         s = self.tick(1000)
         self.assertEqual((s["plan_x"], s["plan_y"], s["plan_source"]), (140.0, 200.0, "binary_sensor.den_presence"))
-        self.assertEqual(s["explains"]["binary_sensor.den_presence"]["kind"], "radar")
+        explanation = s["explains"]["binary_sensor.den_presence"]
+        self.assertEqual(s["explain_schema"], 1)
+        self.assertEqual(explanation["kind"], "radar")
+        self.assertEqual((explanation["observed_at"], explanation["valid_until"]), (1000, 1060))
+        self.assertEqual(explanation["confidence_scale"], "0..1")
+        self.assertTrue(explanation["independent_position"])
+        self.assertEqual((explanation["position_source"], explanation["position_at"]), ("native_navigation", 1000))
+        self.assertEqual(explanation["location_source"], "map")
         rows = (self.tmp / "robot-location-training.jsonl").read_text().splitlines()
         self.assertEqual(json.loads(rows[-1])["plan_x"], 140.0)
         self.assertTrue((self.tmp / "robot_map.json").exists())

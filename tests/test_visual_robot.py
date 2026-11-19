@@ -29,6 +29,8 @@ class VisualRobotTest(unittest.TestCase):
             self.assertEqual(loc.classify('vac',1500,2000)[0],'target')
             self.assertFalse(loc.visual_sightings(181))
             record(path,dict(row,at=182,xy=None))
-            self.assertTrue(loc.visual_sightings(185));loc.add.assert_called_once_with('vac','camera:cam','camera','target',182)
+            self.assertTrue(loc.visual_sightings(185));loc.add.assert_called_once_with(
+                'vac','camera:cam','camera','target',182,map_xy=None,
+                position_source='visual_robot',location_source='visual_robot')
             loc.add.reset_mock();record(path,dict(row,at=186,map='other'))
             self.assertFalse(loc.visual_sightings(189));loc.add.assert_not_called()
