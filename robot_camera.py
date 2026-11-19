@@ -106,13 +106,51 @@ def record(path,event):
     os.replace(tmp,path)
 
 
+def record_calibration(directory, camera, event, jpeg, limit=96):
+    """Keep a bounded private set of people-free frames paired with native navigation.
+
+    Calibration samples deliberately use a different journal from verified sightings, so the locator can never
+    learn a room from an unsurveyed view.
+    """
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(directory, 0o700)
+    journal = directory / (camera + '.json')
+    try:
+        previous = json.loads(journal.read_text())
+        if not isinstance(previous, list):
+            previous = []
+    except (OSError, ValueError):
+        previous = []
+    name = f"{camera}-{int(event['at'] * 1000)}.jpg"
+    image = directory / name
+    tmp_image = image.with_suffix('.tmp')
+    with open(tmp_image, 'wb', opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
+        output.write(jpeg)
+    os.replace(tmp_image, image)
+    rows = [*previous, {**event, 'image': name}][-limit:]
+    tmp_journal = journal.with_suffix('.tmp')
+    with open(tmp_journal, 'w', opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
+        json.dump(rows, output, allow_nan=False)
+    os.replace(tmp_journal, journal)
+    keep = {row.get('image') for row in rows if isinstance(row, dict)}
+    for old in directory.glob(camera + '-*.jpg'):
+        if old.name not in keep:
+            old.unlink(missing_ok=True)
+    return len(rows)
+
+
 def run(g, camera, config):
     import room_eye
     from locator import robot_position
-    view = FloorView(Path(config['floor_reference']).expanduser())
+    reference = config.get('floor_reference')
+    view = FloorView(Path(reference).expanduser()) if reference else None
+    calibration_dir = Path(config.get('calibration_dir') or
+                           (g['DATA'] / 'robot-camera-calibration')).expanduser()
+    calibration_every = max(1, float(config.get('calibration_every_s', 2)))
     motion = MovingObject()
     vacuum, room = config['vacuum'], config['room']
-    last_seen, last_report, state = None, 0, None
+    last_seen, last_report, state, last_calibration = None, 0, None, 0
+    calibration_count = 0
     journal = g['DATA'] / ('robot-camera-' + camera + '.json')
     while True:
         active = False
@@ -123,20 +161,35 @@ def run(g, camera, config):
             map_state = g['ha_get'](config['map_select'],tok).get('state') if active else None
             allowed = active and map_state == config['map_name'] and eye and \
                 eye.capture_allowed(camera, purpose='robot_position')[0]
-            status = 'watching' if allowed else 'idle'
+            status = ('calibrating' if view is None else 'watching') if allowed else 'idle'
             point = None
-            if allowed:
+            should_capture = allowed and (view is not None or time.time()-last_calibration >= calibration_every)
+            if should_capture:
                 started = time.time()
                 data, people = eye.capture(camera,'robot_position')
                 captured = time.time()
                 if data and people == 0 and captured-started < 3:
-                    with Image.open(io.BytesIO(data)) as image:
-                        point = view.locate(image)
+                    if view is not None:
+                        with Image.open(io.BytesIO(data)) as image:
+                            point = view.locate(image)
+                    else:
+                        xy = robot_position(g,tok,vacuum,timeout=3)
+                        paired = xy if time.time()-started < 4 else None
+                        # A calibration frame has the same strict second permission check as a verified sighting.
+                        still_allowed = eye.capture_allowed(camera, purpose='robot_position')[0]
+                        still_active = g['ha_get'](vacuum,tok).get('state') in ('cleaning','returning')
+                        same_map = g['ha_get'](config['map_select'],tok).get('state') == config['map_name']
+                        if paired and still_allowed and still_active and same_map:
+                            event = dict(at=captured, room=room, camera=camera, vacuum=vacuum,
+                                         xy=list(paired), map=map_state)
+                            calibration_count = record_calibration(calibration_dir,camera,event,data,
+                                                                   int(config.get('calibration_limit',96)))
+                            last_calibration = captured
                 elif not data or people != 0:
                     status = 'waiting'
             else:
                 captured = time.time()
-            matched = motion.observe(captured,point)
+            matched = view is not None and motion.observe(captured,point)
             if matched and (last_seen is None or captured-last_seen['at'] >= 6):
                 xy = robot_position(g,tok,vacuum,timeout=3)
                 paired = xy if time.time()-started < 4 else None
@@ -151,7 +204,10 @@ def run(g, camera, config):
                 status = 'seen'
             if state != status or now-last_report >= 15:
                 attrs = dict(friendly_name=config['name'], room=room, updated_at=now, valid_until=now+30,
-                             last_sighting=last_seen, source='moving robot on surveyed camera floor patch')
+                             last_sighting=last_seen, calibration_only=view is None,
+                             calibration_samples=calibration_count,
+                             source=('people-free frames paired with independent native navigation; no locator output'
+                                     if view is None else 'moving robot on surveyed camera floor patch'))
                 g['ha_post_state'](config['publish'],status,attrs,tok)
                 state,last_report = status,now
         except Exception as error:
