@@ -145,6 +145,69 @@ class Upstairs(unittest.TestCase):
         self.occ({"hall": "occupied"})
         self.assertIn("vacuum.pause", [c[0] for c in self.tick()])
 
+    def test_person_in_active_segment_stays_paused_until_robot_docks(self):
+        self.run_until_start()
+        self.S("vacuum.up", "cleaning")
+        self.S("sensor.up_room", "Hall")
+        self.occ({"hall":"occupied"})
+        self.assertIn("vacuum.pause", [c[0] for c in self.tick()])
+        pause = self.p.D["paused_at"]
+        # A delayed device acknowledgment must not reset the original deadline.
+        self.tick(11)
+        self.assertEqual((self.p.D["phase"], self.p.D["paused_at"]), ("paused",pause))
+        self.S("vacuum.up","paused")
+        self.occ({"hall":"still"})
+        self.assertFalse(self.tick(40))
+        calls = self.tick(550)
+        self.assertIn(("vacuum.return_to_base", {"entity_id":"vacuum.up"}), calls)
+        self.S("vacuum.up","docked")
+        self.tick()
+        self.assertIn("Hall", self.p.D["incomplete"])
+
+    def test_resume_rechecks_floor_before_retry_and_never_starts_a_whole_floor(self):
+        self.run_until_start()
+        self.S("vacuum.up","cleaning")
+        self.occ({"hall":"occupied"})
+        self.tick()
+        self.S("vacuum.up","paused")
+        self.occ({})
+        self.tick(5)
+        self.assertNotIn("vacuum.send_command", [c[0] for c in self.tick(10)])
+        self.assertIn("vacuum.send_command", [c[0] for c in self.tick(11)])
+        self.occ({"hall":"still"})
+        self.assertNotIn("vacuum.start", [c[0] for c in self.tick(31)])
+        self.assertEqual(self.p.D["phase"], "paused")
+
+    def test_empty_roster_needs_fresh_house_vacancy_to_release_unknown_floor(self):
+        self.va.OCC = dict(self.va.OCC, house_vacancy="sensor.house")
+        self.occ({}, floor="unknown")
+        attrs=self.H[OCC]["attributes"]
+        attrs.update(expected=0,people_min=0,people_max=0,unexplained=0)
+        for state,expiry in [("checking",self.now[0]+15),("vacant",self.now[0]-1)]:
+            self.S("sensor.house",state,expires_at=expiry)
+            self.assertIsNotNone(self.p.occ_presence()[0])
+        self.S("sensor.house","vacant",expires_at=self.now[0]+15)
+        self.assertIsNone(self.p.occ_presence()[0])
+        attrs["expected"]=1
+        self.assertIsNotNone(self.p.occ_presence()[0])
+
+    def test_native_interruption_corrects_only_targeted_rooms_for_the_same_run(self):
+        now=self.now[0];start=now-600
+        run=dict(start=start,end=now-60,kind="auto",why="done",groups=[dict(rooms=["Hall","Bath","Study"])])
+        self.p.D["runs"]=[run]
+        self.p.room_cleaning_sensor="sensor.room_work"
+        rooms={name:dict(last_job=dict(begin=begin,end=end,targeted=True,outcome=outcome))
+               for name,begin,end,outcome in [
+                   ("Hall",start+2,now-120,"incomplete"),("Bath",start-1000,start-120,"incomplete"),
+                   ("Study",start+2,now-120,"completed"),("Bedroom",start+2,now-120,"incomplete")]}
+        self.S("sensor.room_work","ready",updated_at=now,rooms=rooms)
+        self.p.update_room_cleaning("Hall",now)
+        self.assertEqual(self.p.D["incomplete"],["Hall"])
+        self.assertEqual(run["why"],"robot reported interrupted cleaning")
+        self.assertEqual(self.p.D["visits"],{})
+        self.p.update_room_cleaning("Hall",now)
+        self.assertEqual(self.p.D["incomplete"],["Hall"])
+
     def test_guest_room_and_untidy_rooms_are_skipped(self):
         self.S("input_boolean.bedroom_guest", "on")
         self.tidy["bath"] = {"state": "untidy"}

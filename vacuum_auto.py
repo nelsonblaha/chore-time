@@ -252,7 +252,15 @@ class Pilot:
         fl = (a.get("floors") or {}).get(OCC["floor"]) or {}
         if fl.get("state") == "vacant":             # the tracker's own floor verdict
             return None, set()
-        if fl.get("state") != "occupied":            # unknown / missing: someone may be there
+        if fl.get("state") == "unknown" and OCC.get("house_vacancy"):
+            whole = self.get(OCC["house_vacancy"])
+            expiry = (whole.get("attributes") or {}).get("expires_at")
+            if (whole.get("state") == "vacant" and type(expiry) in (int, float)
+                    and time.time() < expiry <= time.time() + 30
+                    and all(type(a.get(k)) is int and a[k] == 0 for k in
+                            ("expected", "people_min", "people_max", "unexplained"))):
+                return None, set()
+        if fl.get("state") != "occupied" or not fl.get("rooms"):            # unknown / missing: someone may be there
             return "floor %s" % (fl.get("state") or "unknown"), set()
         rooms = fl.get("rooms") or []
         sealed = set()
@@ -417,7 +425,12 @@ class Pilot:
         A held sensor's On is the moment it turned on, not someone there now; with held=False (a run under way, when
         the robot itself trips them and they stay On for half an hour) held sensors are left out."""
         if OCC:
-            return self.occ_quiet()
+            quiet, who = self.occ_quiet()
+            for door, stamp in entry_edges.recent(time.time()).items():
+                age = max(0, time.time() - stamp)
+                if door in ENTRY_DOORS and age < quiet:
+                    quiet, who = age, door
+            return quiet, who
         now, q, who, seen = time.time(), 10 ** 9, None, 0
         for e, seg in SENSORS.items():
             if seg in exclude or (e in HELD and not held):
@@ -456,7 +469,9 @@ class Pilot:
         a door opening, an entry point (stairs, entry hall) outside the robot's rooms, or 2+ rooms in a row."""
         D = self.D
         if OCC:
-            return self.occ_presence(starting=False)[0]
+            who, _ = self.occ_presence(starting=False)
+            if who or not ENTRY_DOORS:
+                return who
         seen = D.setdefault("seen_on", {})
         trig = [t for t in D.setdefault("trig", []) if now - t[0] < 300]
         robot = self.robot_rooms(now)
@@ -708,6 +723,25 @@ class Pilot:
                 since = self.D.get("incomplete_since")
                 if since and finished >= since and name in (self.D.get("incomplete") or []):
                     self.completed([name])
+        # The native interruption record can arrive after a return to dock was
+        # provisionally recorded as normal. Restore only this run's requested rooms.
+        run = (self.D.get("runs") or [{}])[-1]
+        if run.get("kind") == "auto" and run.get("why") in ("done", "robot reported interrupted cleaning"):
+            targeted = [name for group in run.get("groups", []) for name in group.get("rooms", [])]
+            interrupted = []
+            for name in targeted:
+                last = (rooms.get(name) or {}).get("last_job") or {}
+                begin, end = last.get("begin"), last.get("end")
+                if (last.get("targeted") is True and last.get("outcome") == "incomplete"
+                        and type(begin) in (int, float) and type(end) in (int, float)
+                        and run["start"] - 2 <= begin <= end <= run["end"] + 2
+                        and self.D["visits"].get(name, 0) < end
+                        and (run["why"] == "done" or name not in (self.D.get("incomplete") or []))):
+                    interrupted.append(name)
+            if interrupted:
+                run["why"] = "robot reported interrupted cleaning"
+                self.remember_incomplete(interrupted, run["why"], run["end"])
+                self.log("native_interruption", rooms=interrupted)
         job = (rooms.get(room) or {}).get("current_job") or {}
         return job.get("seconds", 0) if job.get("targeted") else 0
 
@@ -1142,7 +1176,7 @@ class Pilot:
                 who = None if D.get("run_kind") == "manual" else self.person_entered(now)
                 if who:
                     self.call("vacuum.pause", {"entity_id": VAC})
-                    D.update(phase="paused", paused_at=now)
+                    D.update(phase="paused", paused_at=now, pause_sent=now, resume_fallback=False, occ_quiet_since=None)
                     D["pauses"].append({"ts": now, "who": who, "robot_in": D.get("cur")})
                     self.log("pause", who=who, robot_in=D.get("cur"))
                 elif (D.get("groups") or [{}])[D.get("gi", 0)].get("mode") != "smart_mode":
@@ -1201,36 +1235,52 @@ class Pilot:
                 self.finish("people back between rooms", now)
         elif ph == "paused":
             q, who = self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
-            if vs == "cleaning":                      # someone resumed it by hand
-                D["phase"] = "running"
-                self.log("resumed_elsewhere")
-            elif vs in ("returning", "docked"):       # someone sent it home by hand: the run is over
+            age = max(0, now - D["paused_at"])
+            if vs in ("returning", "docked"):
                 D["phase"] = "docking"
                 self.log("sent_home_elsewhere", robot_in=D.get("cur"))
-            elif q >= RESUME_QUIET_S:
+            elif min(q, age) < RESUME_QUIET_S and age >= PARK_DOCK_S:
+                self.call("vacuum.return_to_base", {"entity_id": VAC})
+                D["phase"] = "docking"
+                self.log("dock", who=who)
+            elif vs == "cleaning":
+                if min(q, age) >= RESUME_QUIET_S:
+                    D["phase"] = "running"
+                    self.log("resumed_elsewhere")
+                elif now - D.get("pause_sent", D["paused_at"]) >= 30:
+                    self.call("vacuum.pause", {"entity_id": VAC})
+                    D["pause_sent"] = now
+            elif vs == "paused" and min(q, age) >= RESUME_QUIET_S:
                 self.call("vacuum.send_command", {"entity_id": VAC, "command": "resume_segment_clean"})
                 D.update(phase="resuming", resume_at=now)
                 self.log("resume")
-            elif now - D["paused_at"] >= PARK_DOCK_S:
+            elif age >= PARK_DOCK_S:
                 self.call("vacuum.return_to_base", {"entity_id": VAC})
                 D["phase"] = "docking"
                 self.log("dock", who=who)
         elif ph == "resuming":
-            if vs == "cleaning":
+            q, who = self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
+            if vs in ("returning", "docked"):
+                D["phase"] = "docking"
+            elif q < RESUME_QUIET_S:
+                if vs == "cleaning":
+                    self.call("vacuum.pause", {"entity_id": VAC})
+                D.update(phase="paused", pause_sent=now, resume_fallback=False)
+                self.log("resume_held", who=who)
+            elif vs == "cleaning":
                 D["phase"] = "running"
             elif now - D.get("resume_at", now) > 30:
-                if not D.get("resume_fallback"):
-                    self.call("vacuum.start", {"entity_id": VAC})
+                if vs == "paused" and not D.get("resume_fallback"):
+                    self.call("vacuum.send_command", {"entity_id": VAC, "command": "resume_segment_clean"})
                     D.update(resume_fallback=True, resume_at=now)
-                    self.log("resume_fallback")
+                    self.log("resume_retry")
                 else:
-                    D["resume_fallback"] = False
                     self.call("vacuum.return_to_base", {"entity_id": VAC})
                     D["phase"] = "docking"
                     self.log("resume_failed")
         elif ph == "docking":
             if vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)):
-                self.finish("docked: person stayed downstairs", now)
+                self.finish("docked: person stayed " + FLOOR, now)
             elif vs == "docked":
                 D["docking_since"] = D.get("docking_since") or now
                 if now - D["docking_since"] > 120:
