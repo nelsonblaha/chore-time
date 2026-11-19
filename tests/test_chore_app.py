@@ -1720,25 +1720,34 @@ class GrownUpFromHA(unittest.TestCase):
 
 
 class SpotifyChoreInterruption(Case):
-    def test_only_fresh_complete_ha_receipt_is_exposed(self):
-        raw = {"state": "blocked", "attributes": {"receiver": "media_player.den", "rooms": ["den"],
-                                                      "attempted_at": 90, "valid_until": 130, "attempt_id": "a1"}}
-        self.assertEqual(self.s.normalize_spotify_interruption(raw, now=100),
-                         {"receiver": "media_player.den", "rooms": ["den"], "attempted_at": 90.0,
-                          "valid_until": 130.0, "attempt_id": "a1"})
-        self.assertIsNone(self.s.normalize_spotify_interruption(raw, now=130))
-        raw["attributes"].pop("receiver")
-        self.assertIsNone(self.s.normalize_spotify_interruption(raw, now=100))
+    def test_fresh_complete_ha_receipts_keep_concurrent_rooms(self):
+        item = lambda receiver, room, at, until, aid: {"receiver": receiver, "rooms": [room], "attempted_at": at,
+                                                       "valid_until": until, "attempt_id": aid}
+        raw = {"state": "blocked", "attributes": {"recent": [item("media_player.den", "den", 90, 130, "a1"),
+                                                                    item("media_player.kitchen", "kitchen", 95, 140, "a2"),
+                                                                    item("media_player.old", "office", 70, 99, "old")]}}
+        self.assertEqual(self.s.normalize_spotify_interruptions(raw, now=100),
+                         [item("media_player.kitchen", "kitchen", 95.0, 140.0, "a2"),
+                          item("media_player.den", "den", 90.0, 130.0, "a1")])
+        self.assertEqual(self.s.normalize_spotify_interruptions(raw, now=140), [])
+        raw["attributes"]["recent"][0].pop("receiver")
+        self.assertEqual(len(self.s.normalize_spotify_interruptions(raw, now=100)), 1)
 
     def test_display_ip_maps_to_physical_room(self):
-        hubs, tvs = self.s.HUBS, self.s.TVS
+        hubs, tvs, aliases = self.s.HUBS, self.s.TVS, self.s.HOUSE.get("display_aliases")
         try:
             self.s.HUBS, self.s.TVS = {"den_hub": {"ip": "10.0.0.2", "room": "den"}}, {"tv": {"ip": "10.0.0.3", "room": "kitchen"}}
+            self.s.HOUSE["display_aliases"] = {"office": {"kind": "tv", "ip": "10.0.0.4", "room": "office"}}
             self.assertEqual(self.s.display_for_ip("10.0.0.2"), {"kind": "hub", "id": "den_hub", "room": "den"})
             self.assertEqual(self.s.display_for_ip("10.0.0.3"), {"kind": "tv", "id": "tv", "room": "kitchen"})
+            self.assertEqual(self.s.display_for_ip("10.0.0.4"), {"kind": "tv", "id": "office", "room": "office"})
             self.assertIsNone(self.s.display_for_ip("10.0.0.9"))
         finally:
             self.s.HUBS, self.s.TVS = hubs, tvs
+            if aliases is None:
+                self.s.HOUSE.pop("display_aliases", None)
+            else:
+                self.s.HOUSE["display_aliases"] = aliases
 
 
 class PausedTeamJobs(Case):

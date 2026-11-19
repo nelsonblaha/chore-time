@@ -3360,24 +3360,32 @@ def ha_get(ent, tok):
 SPOTIFY_INTERRUPTION = "sensor.spotify_chore_interruption"
 
 
-def normalize_spotify_interruption(raw, now=None):
-    """HA's short-lived positive-Spotify receipt, or None once it is stale/incomplete."""
+def normalize_spotify_interruptions(raw, now=None):
+    """HA's fresh positive-Spotify receipts; concurrent rooms retain separate expiries."""
     now = time.time() if now is None else now
     attrs = (raw or {}).get("attributes") or {}
-    try:
-        until = float(attrs.get("valid_until") or 0)
-        attempted = float(attrs.get("attempted_at") or 0)
-    except (TypeError, ValueError):
-        return None
-    rooms = attrs.get("rooms") if isinstance(attrs.get("rooms"), list) else []
-    if (raw or {}).get("state") in (None, "unknown", "unavailable") or until <= now or not attrs.get("receiver") or not rooms or not attrs.get("attempt_id"):
-        return None
-    return {"receiver": attrs["receiver"], "rooms": [str(x) for x in rooms], "attempted_at": attempted,
-            "valid_until": until, "attempt_id": str(attrs["attempt_id"])}
+    if (raw or {}).get("state") in (None, "unknown", "unavailable"):
+        return []
+    rows = attrs.get("recent") if isinstance(attrs.get("recent"), list) else [attrs]
+    out = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        try:
+            until = float(item.get("valid_until") or 0)
+            attempted = float(item.get("attempted_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        rooms = item.get("rooms") if isinstance(item.get("rooms"), list) else []
+        if until <= now or not item.get("receiver") or not rooms or not item.get("attempt_id"):
+            continue
+        out.append({"receiver": item["receiver"], "rooms": [str(x) for x in rooms], "attempted_at": attempted,
+                    "valid_until": until, "attempt_id": str(item["attempt_id"])})
+    return sorted(out, key=lambda x: x["attempted_at"], reverse=True)
 
 
 def refresh_spotify_interruption(tok):
-    GUARD["music_interruption"] = normalize_spotify_interruption(ha_get(SPOTIFY_INTERRUPTION, tok))
+    GUARD["music_interruptions"] = normalize_spotify_interruptions(ha_get(SPOTIFY_INTERRUPTION, tok))
 
 
 def display_for_ip(ip):
@@ -3387,14 +3395,16 @@ def display_for_ip(ip):
     for display_id, cfg_ in TVS.items():
         if cfg_.get("ip") == ip:
             return {"kind": "tv", "id": display_id, "room": cfg_.get("room") or display_id}
+    for display_id, cfg_ in (HOUSE.get("display_aliases") or {}).items():
+        if cfg_.get("ip") == ip:
+            return {"kind": cfg_.get("kind") or "display", "id": display_id, "room": cfg_.get("room") or display_id}
     return None
 
 
 def active_spotify_interruption(room):
-    item = GUARD.get("music_interruption")
-    if not item or item.get("valid_until", 0) <= time.time():
-        return None
-    return item if room and room in item.get("rooms", []) else None
+    now = time.time()
+    return next((item for item in GUARD.get("music_interruptions") or []
+                 if item.get("valid_until", 0) > now and room and room in item.get("rooms", [])), None)
 
 
 def ha_post_state(ent, state, attrs, tok):
