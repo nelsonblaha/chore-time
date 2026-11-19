@@ -2045,7 +2045,10 @@ class ChoresFirst(Case):
         self.assertTrue(a.state()["chores_first"]["ava"]["on"])
 
     def test_parent_can_record_already_finished_mandatory_work(self):
+        self.s.GUARD["home_now"] = {"ava"}
+        self.app.post("/api/music_block", {"on": True, "by": "jordan"})
         self.app.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Blanket away"]})
+        self.assertTrue(self.app.state()["music_block"]["effective"])
         code, r = self.app.post("/api/chores_first", {"kid": "ava", "on": False, "done": True,
                                                        "items": ["Blanket away"], "by": "jordan"})
         self.assertEqual(code, 200)
@@ -2053,6 +2056,7 @@ class ChoresFirst(Case):
         self.assertFalse(gate["on"])
         self.assertEqual(gate["items"], ["Blanket away"])
         self.assertEqual(gate["lifted"], {"by": "jordan", "ts": gate["since"], "manual": True})
+        self.assertFalse(r["state"]["music_block"]["effective"])
 
     def test_spotify_switch_is_armed_then_effective_only_while_required_work_remains(self):
         a = App(base_config())

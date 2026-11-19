@@ -994,6 +994,11 @@ def music_block_state(evs, chores_first, must_first, present=None, reports=None,
             done = any(r.get("status") == "inspected" and not r.get("partial")
                        and float(r.get("inspected_ts") or 0) >= baseline
                        and kid in (r.get("team") or [r.get("kid")]) for r in (reports or {}).values())
+            # A grown-up's explicit "Finished — mark done" is an approval too. This matters when a mandatory
+            # item carried overnight: clearing it after midnight must not immediately replace it with the generic
+            # one-approved-chore fallback.
+            done = done or any(e.get("type") == "chores_first" and e.get("kid") == kid and e.get("done")
+                               and float(e.get("ts") or 0) >= baseline for e in evs)
             if not done:
                 blockers.append({"kid": kid, "kind": "one_chore", "name": "One approved chore",
                                  "items": ["Finish one chore and have a grown-up approve it"]})
