@@ -121,7 +121,8 @@ def run(g, camera, config):
             tok = g['ha_token']()
             active = g['ha_get'](vacuum,tok).get('state') in ('cleaning','returning')
             map_state = g['ha_get'](config['map_select'],tok).get('state') if active else None
-            allowed = active and map_state == config['map_name'] and eye and eye.capture_allowed(camera)[0]
+            allowed = active and map_state == config['map_name'] and eye and \
+                eye.capture_allowed(camera, purpose='robot_position')[0]
             status = 'watching' if allowed else 'idle'
             point = None
             if allowed:
@@ -140,7 +141,8 @@ def run(g, camera, config):
                 xy = robot_position(g,tok,vacuum,timeout=3)
                 paired = xy if time.time()-started < 4 else None
                 # Recheck after coordinate retrieval. Occupancy or privacy changes discard the sample.
-                if eye.capture_allowed(camera)[0] and g['ha_get'](vacuum,tok).get('state') in ('cleaning','returning'):
+                if eye.capture_allowed(camera, purpose='robot_position')[0] and \
+                        g['ha_get'](vacuum,tok).get('state') in ('cleaning','returning'):
                     last_seen = dict(at=captured, room=room, camera=camera, vacuum=vacuum,
                                      pixel=list(point), xy=paired, map=map_state)
                     record(journal,last_seen)

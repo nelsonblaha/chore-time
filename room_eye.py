@@ -202,18 +202,20 @@ class Eye:
         except Exception:  # noqa: BLE001
             return {}
 
-    def capture_allowed(self, cam, wake=False):
+    def capture_allowed(self, cam, wake=False, purpose=None):
         """Recheck permission immediately before touching the room. Unknown fails closed.
 
         Normal learning only uses a camera whose vacancy policy has it on. Inspection shots may ask the service to
-        wake a camera, but only when that camera explicitly advertises inspection permission.
+        wake a camera, but only when that camera explicitly advertises inspection permission. A surveyed robot-only
+        view uses its own permission and never inherits either broader grant.
         """
         try:
             _, _, b = self.http("GET", "/cameras", timeout=10)
             state = (json.loads(b).get(cam) or {})
         except Exception:  # noqa: BLE001
             return False, "camera permission unavailable"
-        field = "inspection_allowed" if wake else "on"
+        field = "robot_position_allowed" if purpose == "robot_position" else \
+            "inspection_allowed" if wake else "on"
         if state.get(field) is not True:
             return False, state.get("reason") or "camera is private"
         return True, None

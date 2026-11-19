@@ -222,6 +222,16 @@ class RoomEyeLive(Case):
             self.eye.http = lambda *args, payload=payload, **kwargs: (200, {}, payload)
             self.assertFalse(self.eye.capture_allowed("cam1")[0])
 
+    def test_robot_position_permission_is_narrow_and_explicit(self):
+        self.eye.capture_allowed = self.re.Eye.capture_allowed.__get__(self.eye)
+        payload = b'{"cam1":{"on":false,"inspection_allowed":false,"robot_position_allowed":true}}'
+        self.eye.http = lambda *args, **kwargs: (200, {}, payload)
+        self.assertFalse(self.eye.capture_allowed("cam1")[0])
+        self.assertFalse(self.eye.capture_allowed("cam1", wake=True)[0])
+        self.assertTrue(self.eye.capture_allowed("cam1", purpose="robot_position")[0])
+        self.eye.http = lambda *args, **kwargs: (200, {}, b'{"cam1":{"on":false}}')
+        self.assertFalse(self.eye.capture_allowed("cam1", purpose="robot_position")[0])
+
     def test_robot_seen_by_a_camera_teaches_the_locator(self):
         import locator
         self.app.set("vacuum.robo", "returning")
