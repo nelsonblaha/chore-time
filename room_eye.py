@@ -29,6 +29,7 @@ house.json:
 Needs numpy and Pillow.
 """
 import io
+import hashlib
 import json
 import time
 import urllib.request
@@ -358,6 +359,23 @@ class Eye:
         self.S["samples"].append({"id": sid, "camera": cam, "label": label, "ts": time.time(), "why": why})
         self.g["ilog"]({"src": "room_eye", "action": "sample", "camera": cam, "label": label, "why": why})
         return sid
+
+    def import_reference(self, cam, jpeg, label="tidy", why="manual reference"):
+        """Import trusted JPEG evidence once, deduplicated by its exact bytes."""
+        if cam not in self.cfg.get("cameras", {}) or label not in ("tidy", "untidy"):
+            raise ValueError("known camera and tidy/untidy label required")
+        prep(jpeg)   # validate that Pillow can decode the payload before changing state
+        digest = hashlib.sha256(jpeg).hexdigest()
+        for sample in self.S["samples"]:
+            path = self.dir / "samples" / (sample["id"] + ".jpg")
+            if sample.get("sha256") == digest or (path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == digest):
+                sample.setdefault("sha256", digest)
+                self.save()
+                return sample["id"], False
+        sid = self.keep(cam, jpeg, label, why)
+        self.S["samples"][-1]["sha256"] = digest
+        self.save()
+        return sid, True
 
     def load(self, s):
         return prep((self.dir / "samples" / (s["id"] + ".jpg")).read_bytes())[0]

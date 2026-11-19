@@ -92,6 +92,15 @@ class RoomEyeLive(Case):
             self.next_pic = picture(light=l, seed=i)
             self.tick()
 
+    def test_trusted_reference_import_is_deduplicated_by_exact_bytes(self):
+        jpeg = picture(light=7, seed=44)
+        sid, added = self.eye.import_reference("cam1", jpeg, "tidy", "test handoff")
+        self.assertTrue(added)
+        self.assertEqual(self.samples("tidy"), 1)
+        self.assertEqual((self.eye.dir / "samples" / (sid + ".jpg")).read_bytes(), jpeg)
+        again, added = self.eye.import_reference("cam1", jpeg, "tidy", "same bytes")
+        self.assertEqual((again, added, self.samples("tidy")), (sid, False, 1))
+
     def test_trust_the_map_while_new_then_check_and_mark_mess_live(self):
         self.teach_tidy()
         self.assertEqual(self.samples("tidy"), 3)                 # the first pictures are labelled by the map

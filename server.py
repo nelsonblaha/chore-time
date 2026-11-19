@@ -2181,6 +2181,23 @@ class H(BaseHTTPRequestHandler):
                   "gesture": b.get("gesture"), "request_id": str(b.get("request_id") or "")[:160],
                   "result": result})
             return self.send(200 if result.get("ok") else 400, result)
+        if self.path == "/api/room_eye/reference":   # trusted local handoff: import an existing full-room reference
+            import base64, room_eye
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                return self.send(403, {"error": "loopback only"})
+            if not room_eye.EYE:
+                return self.send(503, {"error": "room eye is off"})
+            encoded = str(b.get("jpeg") or "")
+            if len(encoded) > 4 * 1024 * 1024:
+                return self.send(413, {"error": "image too large"})
+            try:
+                jpeg = base64.b64decode(encoded, validate=True)
+                sid, added = room_eye.EYE.import_reference(str(b.get("camera") or ""), jpeg,
+                                                            str(b.get("label") or "tidy"),
+                                                            str(b.get("why") or "manual reference")[:120])
+            except (ValueError, OSError) as ex:
+                return self.send(400, {"error": str(ex)[:120]})
+            return self.send(200, {"ok": True, "sample_id": sid, "added": added})
         c = cfg()
         kids = {k["id"] for k in c["kids"]}
         chores = {x["id"]: x for x in c["chores"]}
