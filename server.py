@@ -736,7 +736,7 @@ def chores_first_state(evs, kids, reports=None):
 
 
 def adult_first_state(c, evs, reports, now=None):
-    """First-time teaching jobs: per-child training, a live approval, and a house-wide one-hour snooze."""
+    """First-time teaching jobs: per-child training, a live approval, and per-adult snoozes."""
     now = time.time() if now is None else now
     out = {}
     for ch in c.get("chores") or []:
@@ -745,8 +745,7 @@ def adult_first_state(c, evs, reports, now=None):
         cid = ch["id"]
         trained = {m for r in (reports or {}).values() if r.get("chore") == cid and r.get("status") == "inspected"
                    and not r.get("partial") for m in (r.get("team") or [r.get("kid")])}
-        snoozes = [e for e in evs if e.get("type") in ("assist_snooze", "adult_busy")]
-        snoozed_until = max([float(e.get("until") or 0) for e in snoozes] or [0])
+        snoozed_until = adult_busy_until(evs, now)
         approved = {e.get("kid") for e in evs if e.get("type") == "assist_ok" and e.get("chore") == cid
                     }
         out[cid] = {"snoozed_until": snoozed_until if snoozed_until > now else 0,
@@ -756,10 +755,28 @@ def adult_first_state(c, evs, reports, now=None):
 
 
 def adult_busy_until(evs, now=None):
-    """One shared 'busy, later' pause for every action that needs a grown-up."""
+    """When every configured adult is busy, return the first time one becomes available."""
     now = time.time() if now is None else now
-    until = max([float(e.get("until") or 0) for e in evs if e.get("type") in ("assist_snooze", "adult_busy")] or [0])
-    return until if until > now else 0
+    busy = adult_busy_state(evs, now)
+    adults = list(ADULTS) if "ADULTS" in globals() else []
+    if not adults or any(busy.get(a, 0) <= now for a in adults):
+        return 0
+    return min(busy[a] for a in adults)
+
+
+def adult_busy_state(evs, now=None):
+    """Per-adult one-hour snoozes; legacy unowned snoozes apply to every adult."""
+    now = time.time() if now is None else now
+    adults = list(ADULTS) if "ADULTS" in globals() else []
+    out = {a: 0 for a in adults}
+    for e in evs:
+        if e.get("type") not in ("assist_snooze", "adult_busy"):
+            continue
+        until = float(e.get("until") or 0)
+        targets = [e.get("by")] if e.get("by") in out else adults
+        for adult in targets:
+            out[adult] = max(out.get(adult, 0), until)
+    return {a: u for a, u in out.items() if u > now}
 
 
 def shower_requirement_state(c, reports, now=None, home_days=None, current_houses=None):
@@ -1647,9 +1664,10 @@ def derive():
         evening_routine[kid_] = {"due": bool(items_), "items": items_}
     present = sorted(GUARD.get("home_now") or []) if "GUARD" in globals() else []
     assist_requests = [{"nonce": n, "kid": r.get("kid"), "chore": r.get("chore"), "reward": r.get("reward"),
-                        "purpose": r.get("purpose"), "ts": r["ts"]}
+                        "purpose": r.get("purpose"), "who": r.get("who"), "ts": r["ts"],
+                        "expires": r["ts"] + ADULT_REQUEST_TTL_S}
                        for n, r in ADULT_REQ.items() if r.get("purpose") in ("assist", "reward")
-                       and r.get("status") == "pending" and time.time() - r["ts"] <= 120] \
+                       and r.get("status") == "pending" and time.time() - r["ts"] <= ADULT_REQUEST_TTL_S] \
         if "ADULT_REQ" in globals() else []
     for gate_ in must_first.values():
         if gate_.get("rewards") and gate_.get("chore") in board:
@@ -1669,7 +1687,8 @@ def derive():
             "dress": dict(dress_state(evs, reports, GUARD.get("awake_ts")),
                           started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"}), "chores_first": chores_first,
             "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
-            "adult_busy_until": adult_busy_until(evs), "shower": shower, "evening_routine": evening_routine,
+            "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
+            "shower": shower, "evening_routine": evening_routine,
             "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
@@ -1738,7 +1757,7 @@ def room_log(state):
 
 
 DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "room_choices",
-             "adult_first", "assist_requests", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
+             "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present")
 
 
@@ -1802,7 +1821,9 @@ def push_state_sensor(state=None, last_result=None):
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
              "assist_requests": state.get("assist_requests"), "envelope": state.get("envelope"),
-             "next_step": state.get("next_step"), "room_choices": state.get("room_choices")}
+             "adult_busy": state.get("adult_busy"), "adult_busy_until": state.get("adult_busy_until"),
+             "next_step": state.get("next_step"),
+             "room_choices": state.get("room_choices")}
     try:   # before/after pictures for inspections (room eye): which exist; the pictures themselves stay out of HA's states
         import room_eye
         if room_eye.EYE and room_eye.EYE.S.get("photos"):
@@ -1851,6 +1872,13 @@ LEAD_ADULT = next(iter(ADULT_NOTIFY), next(iter(ADULTS), None))   # gets the pho
 PARENT_NOTIFY = ADULT_NOTIFY.get(LEAD_ADULT, [])
 
 
+def available_request_adult(state):
+    """Prefer an available adult with a push target; dashboard-only adults remain valid fallbacks."""
+    busy = state.get("adult_busy") or {}
+    available = [a for a in ADULTS if float(busy.get(a) or 0) <= time.time()]
+    return next((a for a in available if ADULT_NOTIFY.get(a)), available[0] if available else None)
+
+
 def notify_parents(ev):
     try:
         tok = ha_token()
@@ -1897,9 +1925,10 @@ def notify_request(ev):
                                            {"action": "CHORE_REQNO_" + ev["id"], "title": "Not now (refund)"}]}}, tok)
 
 
-# Phone only: Android mirrors it to the Pixel Watch WITH its buttons (taps handled by the phone app).
-# The watch's own HA app shows notifications without buttons (tested), so don't send there.
+# The phone carries action buttons. Optional buzz_notify targets alert Wear OS directly,
+# where Home Assistant supports the notification but not its action buttons.
 ADULT_REQ_FILE = DATA / "adult_requests.json"
+ADULT_REQUEST_TTL_S = 10 * 60
 
 
 def load_adult_requests():
@@ -1910,7 +1939,7 @@ def load_adult_requests():
         return {}
     now = time.time()
     return {str(n): r for n, r in saved.items() if isinstance(r, dict)
-            and now - float(r.get("ts") or 0) < 300
+            and now - float(r.get("ts") or 0) < (ADULT_REQUEST_TTL_S if r.get("status") == "pending" and r.get("purpose") in ("assist", "reward") else 300)
             and (r.get("status") == "pending" or (r.get("status") == "ok" and not r.get("used")))}
 
 
@@ -2519,7 +2548,7 @@ class H(BaseHTTPRequestHandler):
             ak_ = (ast_.get("kids") or {}).get(kid_) or {}
             if (chores.get(chore_) or {}).get("adult_first") and not ak_.get("trained"):
                 if ast_.get("snoozed_until", 0) > time.time():
-                    return self.send(409, {"error": "A grown-up is busy. This will come back in an hour."})
+                    return self.send(409, {"error": "Every grown-up is busy. This will come back when one is available."})
                 if not ak_.get("approved"):
                     return self.send(409, {"error": "A grown-up needs to accept and help the first time."})
         if p in ("/api/start", "/api/report", "/api/spend", "/api/claim", "/api/team", "/api/resume") and st["bedtime"]["on"] \
@@ -2577,24 +2606,28 @@ class H(BaseHTTPRequestHandler):
             if ak_.get("trained") or ak_.get("approved"):
                 return self.send(200, {"ok": True, "approved": True, "state": st})
             if ast_.get("snoozed_until", 0) > time.time():
-                return self.send(409, {"error": "A grown-up is busy. This will come back in an hour.",
+                return self.send(409, {"error": "Every grown-up is busy. Adult-help requests come back when one is available.",
                                        "until": ast_["snoozed_until"]})
             # Reuse the pending invitation from a double tap instead of buzzing twice.
             old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "assist"
                          and r.get("status") == "pending" and r.get("kid") == kid_
-                         and r.get("chore") == cid_ and time.time() - r["ts"] < 120), None)
+                         and r.get("chore") == cid_ and time.time() - r["ts"] < ADULT_REQUEST_TTL_S), None)
             nonce = old_ or uuid.uuid4().hex[:8]
             if not old_:
-                ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
+                target_ = available_request_adult(st)
+                if not target_:
+                    return self.send(409, {"error": "Every grown-up is busy right now.",
+                                           "until": st.get("adult_busy_until", 0)})
+                ADULT_REQ[nonce] = {"who": target_, "ip": self.client_address[0], "ts": time.time(),
                                     "status": "pending", "purpose": "assist", "kid": kid_, "chore": cid_,
                                     "last_notify": time.time()}
                 save_adult_requests()
-                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+                threading.Thread(target=send_adult_request, args=(nonce, target_, "chore screen"), daemon=True).start()
                 ilog({"src": "adult", "action": "assist_request", "kid": kid_, "chore": cid_})
             elif time.time() - ADULT_REQ[nonce].get("last_notify", 0) > 10:
                 ADULT_REQ[nonce]["last_notify"] = time.time()
                 save_adult_requests()
-                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+                threading.Thread(target=send_adult_request, args=(nonce, ADULT_REQ[nonce]["who"], "chore screen"), daemon=True).start()
             after_change()
             return self.send(200, {"ok": True, "nonce": nonce})
         if p == "/api/reward_consent_request":
@@ -2622,7 +2655,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "needs a break first", "ready_at": ready_})
             busy_until_ = st.get("adult_busy_until", 0)
             if busy_until_ > time.time():
-                return self.send(409, {"error": "A grown-up is busy. This will come back in an hour.",
+                return self.send(409, {"error": "Every grown-up is busy. Adult-help requests come back when one is available.",
                                        "until": busy_until_})
             # A page reload must not throw away a recent yes. Return the same
             # unused approval so the child can finish the purchase.
@@ -2633,21 +2666,37 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"ok": True, "nonce": approved_})
             old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "reward"
                          and r.get("status") == "pending" and r.get("kid") == kid_
-                         and r.get("reward") == rid_ and time.time() - r["ts"] < 120), None)
+                         and r.get("reward") == rid_ and time.time() - r["ts"] < ADULT_REQUEST_TTL_S), None)
             nonce = old_ or uuid.uuid4().hex[:8]
             if not old_:
-                ADULT_REQ[nonce] = {"who": LEAD_ADULT, "ip": self.client_address[0], "ts": time.time(),
+                target_ = available_request_adult(st)
+                if not target_:
+                    return self.send(409, {"error": "Every grown-up is busy right now.",
+                                           "until": st.get("adult_busy_until", 0)})
+                ADULT_REQ[nonce] = {"who": target_, "ip": self.client_address[0], "ts": time.time(),
                                     "status": "pending", "purpose": "reward", "kid": kid_, "reward": rid_,
                                     "last_notify": time.time()}
                 save_adult_requests()
-                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+                threading.Thread(target=send_adult_request, args=(nonce, target_, "chore screen"), daemon=True).start()
                 ilog({"src": "adult", "action": "reward_request", "kid": kid_, "reward": rid_})
             elif time.time() - ADULT_REQ[nonce].get("last_notify", 0) > 10:
                 ADULT_REQ[nonce]["last_notify"] = time.time()
                 save_adult_requests()
-                threading.Thread(target=send_adult_request, args=(nonce, LEAD_ADULT, "chore screen"), daemon=True).start()
+                threading.Thread(target=send_adult_request, args=(nonce, ADULT_REQ[nonce]["who"], "chore screen"), daemon=True).start()
             after_change()
             return self.send(200, {"ok": True, "nonce": nonce})
+        if p == "/api/adult_request_cancel":
+            nonce_ = str(b.get("nonce") or "")
+            r_ = ADULT_REQ.get(nonce_)
+            if not r_ or r_.get("purpose") not in ("assist", "reward") or r_.get("status") != "pending" \
+                    or r_.get("kid") != b.get("kid"):
+                return self.send(409, {"error": "that request is no longer waiting"})
+            r_["status"] = "canceled"
+            save_adult_requests()
+            after_change()
+            threading.Thread(target=clear_adult_request, args=(nonce_, r_["who"]), daemon=True).start()
+            ilog({"src": "adult", "action": "canceled", "purpose": r_["purpose"], "kid": r_["kid"]})
+            return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/assist_answer":
             if b.get("by") not in insp:
                 return self.send(400, {"error": "unknown grown-up"})
@@ -2675,7 +2724,8 @@ class H(BaseHTTPRequestHandler):
             if not r:
                 return self.send(404, {"error": "unknown request"})
             timed_out_ = False
-            if r["status"] == "pending" and time.time() - r["ts"] > 120:
+            ttl_ = ADULT_REQUEST_TTL_S if r.get("purpose") in ("assist", "reward") else 120
+            if r["status"] == "pending" and time.time() - r["ts"] > ttl_:
                 r["status"] = "timeout"
                 timed_out_ = True
             if r["status"] == "ok" and r.get("purpose") in ("login", "lock"):

@@ -2040,7 +2040,8 @@ class GrownUpStartsVR(Case):
         a.event(type="chores_first", kid="ava", on=False, items=[], by="jordan")
         code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
         self.assertEqual(code, 200)
-        a.s.ADULT_REQ[ask["nonce"]]["ts"] -= 121
+        self.assertAlmostEqual(a.state()["assist_requests"][0]["expires"] - a.s.ADULT_REQ[ask["nonce"]]["ts"], 600, delta=1)
+        a.s.ADULT_REQ[ask["nonce"]]["ts"] -= a.s.ADULT_REQUEST_TTL_S + 1
         changed = []
         a.s.after_change = lambda: changed.append(True)
         code, status = a.post("/api/adult_status", {"nonce": ask["nonce"]})
@@ -2049,6 +2050,20 @@ class GrownUpStartsVR(Case):
         self.assertEqual(status["state"]["adult_busy_until"], 0)
         self.assertEqual(status["state"]["assist_requests"], [])
         self.assertIn("No grown-up answered yet", (REPO / "static" / "kids.html").read_text())
+        a.close()
+
+    def test_kid_can_cancel_a_waiting_adult_request(self):
+        c = base_config()
+        next(r for r in c["rewards"] if r["id"] == "vr")["needs_ok"] = True
+        a = App(c)
+        a.event(type="adjust", kid="ava", points=2, reason="test")
+        code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.post("/api/adult_request_cancel", {"kid": "max", "nonce": ask["nonce"]})[0], 409)
+        code, canceled = a.post("/api/adult_request_cancel", {"kid": "ava", "nonce": ask["nonce"]})
+        self.assertEqual(code, 200)
+        self.assertEqual(canceled["state"]["assist_requests"], [])
+        self.assertEqual(a.s.ADULT_REQ[ask["nonce"]]["status"], "canceled")
         a.close()
 
     def test_vr_consent_then_payment_starts_the_timer_or_can_be_refunded(self):
@@ -2116,7 +2131,7 @@ class GrownUpStartsVR(Case):
         st = a.state()
         self.assertEqual((st["balance"]["max"], [t for t in st["timers"] if t["kid"] == "max"]), (2, []))
 
-    def test_busy_later_pauses_vr_and_first_time_help_together(self):
+    def test_busy_later_snoozes_only_the_adult_who_answered(self):
         c = base_config()
         next(r for r in c["rewards"] if r["id"] == "vr")["needs_ok"] = True
         c["chores"].insert(0, {"id": "stove", "name": "Clean stove", "icon": "1f9fd", "points": 6,
@@ -2126,12 +2141,21 @@ class GrownUpStartsVR(Case):
         code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
         self.assertEqual(code, 200)
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": False})[0], 200)
-        self.assertGreater(a.state()["adult_busy_until"], time.time())
-        self.assertEqual(a.post("/api/assist_request", {"kid": "ava", "chore": "stove"})[0], 409)
-        self.assertTrue(next(ch for ch in a.state()["config"]["chores"] if ch["id"] == "stove")["hidden"])
+        state = a.state()
+        self.assertGreater(state["adult_busy"]["jordan"], time.time())
+        self.assertEqual(state["adult_busy_until"], 0)  # Casey is still available.
+        code, other = a.post("/api/assist_request", {"kid": "ava", "chore": "stove"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.s.ADULT_REQ[other["nonce"]]["who"], "casey")
+        self.assertFalse(next(ch for ch in a.state()["config"]["chores"] if ch["id"] == "stove").get("hidden"))
+        self.assertEqual(a.post("/api/assist_answer", {"nonce": other["nonce"], "by": "casey", "ok": False})[0], 200)
+        state = a.state()
+        self.assertGreater(state["adult_busy"]["casey"], time.time())
+        self.assertGreater(state["adult_busy_until"], time.time())  # Now every adult is busy.
+        self.assertTrue(next(ch for ch in state["config"]["chores"] if ch["id"] == "stove")["hidden"])
         a.close()
 
-    def test_busy_later_from_the_phone_uses_the_same_shared_pause(self):
+    def test_busy_later_from_the_phone_also_targets_only_that_adult(self):
         c = base_config()
         next(r for r in c["rewards"] if r["id"] == "vr")["needs_ok"] = True
         a = App(c)
@@ -2139,7 +2163,12 @@ class GrownUpStartsVR(Case):
         code, ask = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
         self.assertEqual(code, 200)
         self.assertEqual(a.s.resolve_phone_adult_request(ask["nonce"], False)["status"], "no")
-        self.assertGreater(a.state()["adult_busy_until"], time.time())
+        state = a.state()
+        self.assertGreater(state["adult_busy"]["jordan"], time.time())
+        self.assertEqual(state["adult_busy_until"], 0)
+        code, retry = a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})
+        self.assertEqual(code, 200)
+        self.assertEqual(a.s.ADULT_REQ[retry["nonce"]]["who"], "casey")
         a.close()
 
     def test_kid_can_refund_own_reward_for_exactly_two_minutes(self):
