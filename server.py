@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 from tidy_spaces import space_states
+import stepped_jobs
 import random, os, re, threading, time, uuid, urllib.request, urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -101,6 +102,7 @@ PORT = int(os.environ.get("CHORE_PORT", HOUSE.get("port", 8790)))
 HA_URL = os.environ.get("HA_URL", HA.get("url", ""))
 HA_TOKEN_FILE = house_path(os.environ.get("HA_TOKEN_FILE") or HA.get("token_file")) or (DATA / "ha-token")
 LOCK = threading.Lock()
+PROJECT_LOCK = threading.Lock()
 CT_SWITCH = HA.get("chore_time_switch", "input_boolean.chore_time")      # mirrors chore time in HA
 CT_HOURS = HA.get("chore_time_hours", "input_number.chore_time_hours")
 RELAY_TEXT = HA.get("relay_text", "input_text.chore_action")              # HA dashboards post actions here
@@ -547,7 +549,7 @@ def auto_verify_chore(cid, verified_at, by, reason):
         return [report["id"]]
 
 
-PAUSE_DAYS = 7   # "finish later" keeps a job this many days (kids may be at the other house in between)
+PAUSE_DAYS = 7   # legacy holds created before indefinite holds retain their recorded expiry
 
 
 def slot_on(ch, d):
@@ -1209,6 +1211,101 @@ def chore_closed(ch, board):
     return None
 
 
+WET_WEATHER_STATES = {"rainy", "pouring", "lightning-rainy", "snowy-rainy", "hail"}
+DRY_WEATHER_STATES = {"sunny", "clear-night", "partlycloudy", "cloudy", "windy", "windy-variant", "fog"}
+
+
+def _ha_timestamp(row):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(row.get("last_updated") or row.get("last_changed") or "").replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0
+
+
+def read_outdoor_context(tok=None, now=None):
+    """Read configured weather/rain entities into allowed/blocked/unknown.
+
+    Stale zero rain is not evidence of dry weather.  One fresh wet signal wins;
+    otherwise at least one fresh recognized signal is needed for ``allowed``.
+    """
+    now = now or time.time()
+    cfg_ = HOUSE.get("weather_context") or {}
+    max_age = float(cfg_.get("max_age_s") or 600)
+    evidence, allowed, blocked = [], False, False
+    for entity in cfg_.get("weather") or []:
+        row = ha_get(entity, tok or ha_token()) or {}
+        state, observed = str(row.get("state") or "").lower(), _ha_timestamp(row)
+        fresh = bool(observed and now - observed <= max_age)
+        evidence.append({"entity": entity, "state": state, "observed_at": observed or None, "fresh": fresh})
+        if fresh and state in WET_WEATHER_STATES:
+            blocked = True
+        elif fresh and state in DRY_WEATHER_STATES:
+            allowed = True
+    for entity in cfg_.get("rain") or []:
+        row = ha_get(entity, tok or ha_token()) or {}
+        state, observed = row.get("state"), _ha_timestamp(row)
+        fresh = bool(observed and now - observed <= max_age)
+        try:
+            amount = float(state)
+        except (TypeError, ValueError):
+            amount = None
+        evidence.append({"entity": entity, "state": state, "observed_at": observed or None, "fresh": fresh})
+        if fresh and amount is not None:
+            blocked = blocked or amount > float(cfg_.get("rain_threshold") or 0)
+            allowed = allowed or amount <= float(cfg_.get("rain_threshold") or 0)
+    state = "blocked" if blocked else "allowed" if allowed else "unknown"
+    return {"state": state, "reason": "rain" if blocked else "dry" if allowed else "weather unavailable",
+            "checked_at": now, "evidence": evidence}
+
+
+def watch_project_context():
+    """Refresh safety context independently of lights or any other optional worker."""
+    while True:
+        try:
+            tok, old_ = ha_token(), (GUARD.get("sun_up"), GUARD.get("outdoor_context"))
+            sun_state_ = (ha_get(SUN, tok) or {}).get("state")
+            GUARD["sun_up"] = True if sun_state_ == "above_horizon" else False if sun_state_ == "below_horizon" else None
+            GUARD["sun_ts"] = time.time()
+            GUARD["outdoor_context"] = read_outdoor_context(tok)
+            if old_ != (GUARD["sun_up"], GUARD["outdoor_context"]):
+                after_change()
+            project_safety_stop("context")
+        except Exception as ex:  # noqa: BLE001
+            GUARD["sun_up"], GUARD["sun_ts"] = None, time.time()
+            GUARD["outdoor_context"] = {"state": "unknown", "reason": "weather unavailable",
+                                         "checked_at": time.time(), "evidence": []}
+            project_safety_stop("context")
+            print("project context error", ex, flush=True)
+        time.sleep(30)
+
+
+def stepped_context(ch, evs=None, now=None):
+    """Combine every requested outdoor condition with fail-safe three-state semantics."""
+    now = now or time.time()
+    requested = list(((stepped_jobs.definition(ch) or {}).get("contexts") or []))
+    items = []
+    for name in requested:
+        if name == "daylight":
+            fresh = now - float(GUARD.get("sun_ts") or 0) <= 120
+            state = ("allowed" if GUARD.get("sun_up") is True else "blocked" if GUARD.get("sun_up") is False else "unknown") if fresh else "unknown"
+            items.append({"context": name, "state": state,
+                          "reason": "daylight" if state == "allowed" else "dark" if state == "blocked" else "sun unavailable"})
+        elif name == "dry":
+            row = GUARD.get("outdoor_context") or {"state": "unknown", "reason": "weather unavailable"}
+            items.append({"context": name, "state": row["state"], "reason": row.get("reason")})
+        else:
+            items.append({"context": name, "state": "unknown", "reason": "unsupported context"})
+    state = "blocked" if any(x["state"] == "blocked" for x in items) else \
+        "unknown" if any(x["state"] == "unknown" for x in items) else "allowed"
+    approval = max((e["ts"] for e in (evs or []) if e.get("type") == "context_approve"
+                    and e.get("chore") == ch.get("id") and now - e["ts"] <= 1800), default=0)
+    if state == "unknown" and approval:
+        return {"state": "allowed", "base_state": "unknown", "manual": True,
+                "approved_at": approval, "items": items}
+    return {"state": state, "manual": False, "items": items}
+
+
 def cf_board(c, evs, reports, board):
     """mark each kid's clean-up job open (blocked) with the grown-up's list as its note"""
     for k, v in chores_first_state(evs, [x["id"] for x in c["kids"]], reports).items():
@@ -1293,6 +1390,7 @@ def watch_kid_where():
             if out != GUARD.get("kid_where"):
                 GUARD["kid_where"] = out
                 after_change()
+                project_safety_stop("household")
         except Exception as ex:  # noqa: BLE001
             print("kid where error", ex, flush=True)
         time.sleep(30)
@@ -1302,19 +1400,47 @@ BED_END_H = int((HOUSE.get("hours") or {}).get("bed_end", 6))   # bedtime holds 
 
 
 def bedtime_hold(st):
-    """At bedtime every job in progress goes on hold, resumable from 6 AM. One per call; teams pause together."""
+    """At bedtime every ordinary job goes on an indefinite hold. One per call; teams pause together."""
     chs = {x["id"]: x for x in st["config"]["chores"]}
     hold = [(k, a) for k, a in st["active"].items() if not (chs.get(a["chore"]) or {}).get("bedtime_ok")]   # the evening routine goes on
     if not (st.get("bedtime") or {}).get("on") or not hold:
         return False
-    from datetime import datetime as _d, timedelta as _td
     kid_, act_ = hold[0]
-    eod_ = _d.combine((_d.now() + _td(days=1)).date(), _d.max.time()).timestamp()
     append({"type": "pause", "kid": kid_, "chore": act_["chore"], "elapsed": time.time() - act_["ts"],
-            "team": act_.get("team") or [kid_], "notimer": bool(act_.get("notimer")), "until": eod_, "why": "bedtime"})
+            "team": act_.get("team") or [kid_], "notimer": bool(act_.get("notimer")),
+            "hold": "indefinite", "why": "bedtime"})
     ilog({"src": "bedtime", "action": "hold", "kid": kid_, "chore": act_["chore"]})
     after_change()
     return True
+
+
+def project_safety_stop(reason):
+    """Move every affected active stepped session into its mandatory stop sequence."""
+    stopped = 0
+    with PROJECT_LOCK:
+        c_ = cfg()
+        chores_ = {x["id"]: x for x in c_["chores"]}
+        events_ = read_events()
+        for project_ in stepped_jobs.derive(c_["chores"], events_):
+            session_ = project_.get("active_session")
+            if not session_ or session_.get("stop_mode"):
+                continue
+            ch_ = chores_.get(project_["chore"]) or {}
+            affected_ = reason == "bedtime"
+            if reason == "context":
+                affected_ = stepped_context(ch_, events_)["state"] != "allowed"
+            elif reason == "household":
+                affected_ = any(not is_here(ch_, c_, k) for k in session_["team"])
+            if not affected_:
+                continue
+            append({"type": "project_stop", "instance": project_["instance"], "session": session_["id"],
+                    "mode": "pause", "reason": reason, "system": True})
+            ilog({"src": "project", "action": "safety_stop", "chore": project_["chore"],
+                  "instance": project_["instance"], "reason": reason})
+            stopped += 1
+    if stopped:
+        after_change()
+    return stopped
 
 
 def watch_bedtime():
@@ -1322,6 +1448,8 @@ def watch_bedtime():
         try:
             while bedtime_hold(derive()):
                 pass
+            if (derive().get("bedtime") or {}).get("on"):
+                project_safety_stop("bedtime")
         except Exception as ex:  # noqa: BLE001
             print("bedtime hold error", ex, flush=True)
         time.sleep(10)
@@ -1486,9 +1614,10 @@ def derive():
                     pend[m] += v
     active, shelf = {}, {}   # shelf: each kid's jobs saved for later, newest last (starting another job keeps them)
 
-    def unshelve(k, chore=None):   # drop a kid's saved job: the newest, or the one for this chore
+    def unshelve(k, chore=None, hold_id=None):   # drop newest, or an explicitly selected saved job
         st_ = shelf.get(k) or []
-        hit = next((z for z in reversed(st_) if chore is None or z["chore"] == chore), None)
+        hit = next((z for z in reversed(st_) if (chore is None or z["chore"] == chore)
+                    and (hold_id is None or z.get("id") == hold_id)), None)
         if hit:
             st_.remove(hit)
         return hit
@@ -1511,10 +1640,13 @@ def derive():
             unshelve(e["kid"], e["chore"])
             shelf.setdefault(e["kid"], []).append(
                 {"chore": e["chore"], "elapsed": e["elapsed"], "team": e.get("team") or [e["kid"]],
-                 "notimer": e.get("notimer"), "ts": e["ts"], "until": e["until"],
+                 "notimer": e.get("notimer"), "ts": e["ts"], "until": e.get("until"),
+                 "indefinite": e.get("hold") == "indefinite", "id": e["id"], "kid": e["kid"],
                  **{k: gone[k] for k in ("split", "round", "rework", "title") if gone.get(k)}})   # a sent-back team job keeps its deal
         elif e["type"] == "resume" and shelf.get(e["kid"]):
-            pz = unshelve(e["kid"])
+            pz = unshelve(e["kid"], e.get("chore"), e.get("hold_id"))
+            if not pz:
+                continue
             for m in pz["team"]:
                 active[m] = {"chore": pz["chore"], "ts": e["ts"] - pz["elapsed"], "team": list(pz["team"]), "notimer": pz.get("notimer"),
                              **({"title": pz["title"]} if pz.get("title") else {})}
@@ -1533,7 +1665,8 @@ def derive():
         elif e["type"] == "keep":   # a grown-up keeps a saved job longer (e.g. over days at the other house)
             z = next((z for z in reversed(shelf.get(e["kid"]) or []) if z["chore"] == e["chore"]), None)
             if z:
-                z["until"] = e["until"]
+                if not z.get("indefinite"):
+                    z["until"] = e["until"]
         elif e["type"] == "rework":
             for m in e["team"]:
                 active[m] = {"chore": e["chore"], "ts": e["ts"] - e["worked"], "team": list(e["team"]),
@@ -1573,8 +1706,9 @@ def derive():
                         active.pop(m, None)
             if e.get("kid") in shelf:
                 unshelve(e["kid"], e.get("chore"))
-    shelf = {k: [z for z in v if z["until"] > time.time()] for k, v in shelf.items()}
+    shelf = {k: [z for z in v if z.get("indefinite") or float(z.get("until") or 0) > time.time()] for k, v in shelf.items()}
     paused = {k: v[-1] for k, v in shelf.items() if v}   # the one a kid's screen shows; older ones come back after it
+    paused_all = [dict(z, kid=k) for k, rows in shelf.items() for z in rows]
     durs = {}
     for r in reports.values():
         if r.get("started") and r["status"] != "rejected" and not r.get("partial"):
@@ -1899,13 +2033,17 @@ def derive():
     if dress.get("on") and laundry_chore and (board.get(laundry_chore) or {}).get("opened"):
         dress["laundry_hint"] = DRESS.get("laundry_message") or "A lot of your favorite clothes are in the laundry pile."
     pin_epoch = hashlib.sha256("|".join(k["id"] + ":" + str(k.get("pin_hash") or "") for k in c["kids"]).encode()).hexdigest()[:12]
+    projects_ = stepped_jobs.derive(c["chores"], evs)
+    project_contexts_ = {ch_["id"]: stepped_context(ch_, evs) for ch_ in c["chores"] if stepped_jobs.definition(ch_)}
     return {"version": ver, "ver_tv": ver_tv, "sound_effects": sound_enabled(),
             "pin_epoch": pin_epoch,
             "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
             "chore_mode": GUARD.get("mode") if "GUARD" in globals() else None, "toys": toys, "reward_ready": reward_ready,
             "timers": timed_rewards(raw_evs), "screen_break": screen_break, "bedtime": bedtime_state(c, evs), "refundable": refundable,
             "wind_down": wind_down_state(c), "evening_routine_window": evening_routine_window(c),
-            "config": live_cfg(c, cf_board(c, evs, reports, board), assisted), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused, "typical": typical,
+            "config": live_cfg(c, cf_board(c, evs, reports, board), assisted), "balance": bal, "earned": earned, "goals": goals, "goal_since": goal_since, "favorite": favorite, "active": active, "paused": paused,
+            "paused_all": paused_all, "projects": [stepped_jobs.public_project(p) for p in projects_],
+            "project_contexts": project_contexts_, "typical": typical,
             **(lambda A: {**A, **dict(zip(("achievements", "streak"), achievements(c, reports, earned, A["awards"])))})(compute_awards(c, reports, evs, earned, typical)),
             **dict(zip(("expected", "personal_best"), expected_times(c, reports, typical))), "pending_points": pend, "board": board,
             "tv": {"lock_until": GUARD.get("lock_until", 0) if "GUARD" in globals() else 0, "tvs": tvs},
@@ -1987,6 +2125,7 @@ def room_log(state):
 
 
 DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices",
+             "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",
                   "document_url", "document_title")
@@ -2001,6 +2140,11 @@ def demo_attrs(attrs):
     c.pop("households", None)
     c["kids"] = [{k: x.get(k) for k in ("id", "name", "color", "icon")} for x in c.get("kids") or []]
     c["inspectors"] = [{k: x.get(k) for k in ("id", "name", "icon")} for x in (c.get("inspectors") or [])[:1]]   # the lead grown-up only
+    private_chores = {x.get("id") for x in c.get("chores") or [] if x.get("private")}
+    c["chores"] = [x for x in c.get("chores") or [] if x.get("id") not in private_chores]
+    for cid in private_chores:
+        (d.get("board") or {}).pop(cid, None)
+    d["history"] = [x for x in d.get("history") or [] if x.get("chore") not in private_chores]
     for ch in c.get("chores") or []:
         for k in ("note", "home_entity"):
             ch.pop(k, None)
@@ -2039,6 +2183,8 @@ def push_state_sensor(state=None, last_result=None):
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
              "records": state.get("records"), "personal_records": state.get("personal_records"), "paused": state.get("paused"),
+             "paused_all": state.get("paused_all"), "projects": state.get("projects"),
+             "project_contexts": state.get("project_contexts"),
              "expected": state.get("expected"), "personal_best": state.get("personal_best"),
              "achievements": state.get("achievements"), "streak": state.get("streak"), "chore_mode": state.get("chore_mode"),
              "pending_points": state["pending_points"], "board": state["board"], "history": hist,
@@ -2718,6 +2864,139 @@ class H(BaseHTTPRequestHandler):
             acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
+        if p == "/api/project/context_approve":
+            ch_ = chores.get(b.get("chore")) or {}
+            if b.get("by") not in insp or not stepped_jobs.definition(ch_):
+                return self.send(400, {"error": "unknown grown-up or project"})
+            ev_ = append({"type": "context_approve", "chore": ch_["id"], "by": b["by"], "until": time.time() + 1800})
+            after_change()
+            return self.send(200, {"ok": True, "event": ev_, "state": derive()})
+        if p == "/api/project/start":
+            with PROJECT_LOCK:
+                st = derive()
+                ch_ = chores.get(b.get("chore")) or {}
+                try:
+                    step_cfg_ = stepped_jobs.validate_definition(stepped_jobs.definition(ch_))
+                except (TypeError, ValueError) as ex:
+                    return self.send(400, {"error": "project configuration: " + str(ex)})
+                leader_ = b.get("kid")
+                team_ = list(dict.fromkeys([leader_] + list(b.get("team") or b.get("partners") or [])))
+                if leader_ not in kids or any(x not in kids for x in team_):
+                    return self.send(400, {"error": "unknown kid"})
+                if ch_.get("only") and any(x not in ch_["only"] for x in team_):
+                    return self.send(409, {"error": "That team is not eligible for this project."})
+                if any(not is_here(ch_, c, x) for x in team_):
+                    return self.send(409, {"error": "Everyone on the team must be at this house."})
+                if len(team_) < step_cfg_["min_team"]:
+                    return self.send(409, {"error": "Choose at least %d kids." % step_cfg_["min_team"]})
+                occupied_ = [x for x in team_ if x in st["active"] or any(
+                    p_.get("active_session") and x in p_["active_session"].get("team", []) for p_ in st.get("projects") or [])]
+                if occupied_:
+                    return self.send(409, {"error": "%s already has a job in progress." % occupied_[0]})
+                context_ = stepped_context(ch_, read_events())
+                if context_["state"] == "blocked":
+                    why_ = next((x["reason"] for x in context_["items"] if x["state"] == "blocked"), "not safe outside")
+                    return self.send(409, {"error": "Not now: %s." % why_, "context": context_})
+                if context_["state"] == "unknown":
+                    return self.send(409, {"error": "Ask a grown-up to confirm the weather is safe.",
+                                           "context": context_, "needs_adult": True})
+                raw_projects_ = stepped_jobs.derive(c["chores"], read_events())
+                project_ = stepped_jobs.find_open(raw_projects_, ch_["id"])
+                if project_ and project_["status"] != "held":
+                    return self.send(409, {"error": "This project is already active or waiting for final inspection.",
+                                           "project": stepped_jobs.public_project(project_)})
+                if not project_:
+                    instance_ = uuid.uuid4().hex[:12]
+                    append({"type": "project_start", "instance": instance_, "chore": ch_["id"],
+                            "definition_version": step_cfg_["version"], "kid": leader_})
+                else:
+                    instance_ = project_["instance"]
+                session_ = uuid.uuid4().hex[:12]
+                ev_ = append({"type": "project_session_start", "instance": instance_, "session": session_,
+                              "team": team_, "kid": leader_})
+                after_change()
+                ilog({"src": "project", "action": "session_start", "chore": ch_["id"],
+                      "instance": instance_, "session": session_, "team": team_})
+                return self.send(200, {"ok": True, "event": ev_, "state": derive()})
+        if p in ("/api/project/step", "/api/project/stop", "/api/project/award", "/api/project/abandon"):
+            with PROJECT_LOCK:
+                st = derive()
+                project_public_ = next((x for x in st.get("projects") or [] if x["instance"] == b.get("instance")), None)
+                raw_ = next((x for x in stepped_jobs.derive(c["chores"], read_events())
+                             if x["instance"] == b.get("instance")), None)
+                if not raw_ or not project_public_:
+                    return self.send(404, {"error": "project not found"})
+                try:
+                    stepped_jobs.require_revision(raw_, b.get("revision"))
+                except stepped_jobs.TransitionError as ex:
+                    return self.send(409, {"error": str(ex), "project": project_public_, "state": st})
+                ch_ = chores.get(raw_["chore"]) or {}
+                cfg_ = raw_.get("config")
+                if not cfg_:
+                    return self.send(409, {"error": "This project definition changed. A grown-up must migrate it deliberately."})
+                nxt_ = stepped_jobs.current(raw_)
+                session_ = raw_.get("active_session")
+                if p == "/api/project/abandon":
+                    if b.get("by") not in insp:
+                        return self.send(403, {"error": "grown-ups only"})
+                    ev_ = append({"type": "project_abandon", "instance": raw_["instance"], "by": b["by"]})
+                elif p == "/api/project/stop":
+                    if nxt_["kind"] != "work" or not session_ or b.get("kid") not in session_["team"]:
+                        return self.send(409, {"error": "The project is not at a work stop.", "project": project_public_})
+                    mode_ = b.get("mode") if b.get("mode") in ("pause", "finish") else "pause"
+                    ev_ = append({"type": "project_stop", "instance": raw_["instance"], "session": session_["id"],
+                                  "mode": mode_, "kid": b["kid"], "reason": b.get("reason") or "kid"})
+                elif p == "/api/project/step":
+                    if nxt_["kind"] != "step" or (nxt_["step"] or {}).get("id") != b.get("step"):
+                        return self.send(409, {"error": "That is not the current step.", "project": project_public_})
+                    step_ = nxt_["step"]
+                    if step_["actor"] == "adult":
+                        if b.get("by") not in insp or (step_.get("adult_role") == "lead" and b.get("by") != LEAD_ADULT):
+                            return self.send(403, {"error": "The designated grown-up must confirm this step."})
+                        actor_ = {"by": b["by"]}
+                    else:
+                        emergency_ = bool(step_.get("safety") and b.get("emergency") and b.get("by") in insp)
+                        if not emergency_ and (not session_ or b.get("kid") not in session_["team"]):
+                            return self.send(403, {"error": "A participating kid must confirm this step."})
+                        actor_ = ({"by": b["by"], "emergency": True} if emergency_ else {"kid": b["kid"]})
+                    ev_ = append({"type": "project_step", "instance": raw_["instance"],
+                                  "session": session_["id"] if session_ else None, "step": step_["id"],
+                                  "scope": step_["scope"], **actor_})
+                    raw_after_ = next(x for x in stepped_jobs.derive(c["chores"], read_events()) if x["instance"] == raw_["instance"])
+                    if stepped_jobs.current(raw_after_)["kind"] == "complete":
+                        append({"type": "project_complete", "instance": raw_["instance"], **actor_})
+                else:   # /api/project/award
+                    if b.get("by") not in insp or (cfg_.get("award_adult") == "lead" and b.get("by") != LEAD_ADULT):
+                        return self.send(403, {"error": "The designated grown-up awards this session."})
+                    if nxt_["kind"] != "award" or not session_:
+                        return self.send(409, {"error": "Finish every put-away step before awarding stars.",
+                                               "project": project_public_})
+                    try:
+                        awards_ = {k: int((b.get("awards") or {})[k]) for k in session_["team"]}
+                    except (KeyError, TypeError, ValueError):
+                        return self.send(400, {"error": "Choose stars separately for every participant."})
+                    if any(v < 0 or v > 50 for v in awards_.values()) or set(b.get("awards") or {}) != set(session_["team"]):
+                        return self.send(400, {"error": "Choose 0 to 50 stars separately for every participant."})
+                    ev_ = append({"type": "project_session_award", "instance": raw_["instance"],
+                                  "session": session_["id"], "awards": awards_, "by": b["by"]})
+                    for member_, points_ in awards_.items():
+                        report_ = append({"type": "report", "kid": member_, "chore": raw_["chore"],
+                                          "feeling": None, "points": points_, "project_instance": raw_["instance"],
+                                          "project_session": session_["id"]})
+                        append({"type": "inspect", "ref": report_["id"], "by": b["by"], "ok": True,
+                                "points": points_, "label": ch_.get("session_label") or ch_.get("name")})
+                    append({"type": "project_session_close", "instance": raw_["instance"],
+                            "session": session_["id"], "mode": nxt_["mode"], "by": b["by"]})
+                    raw_after_ = next(x for x in stepped_jobs.derive(c["chores"], read_events()) if x["instance"] == raw_["instance"])
+                    if stepped_jobs.current(raw_after_)["kind"] == "complete":
+                        append({"type": "project_complete", "instance": raw_["instance"], "by": b["by"]})
+                after_change()
+                ilog({"src": "project", "action": p.rsplit("/", 1)[1], "chore": raw_["chore"],
+                      "instance": raw_["instance"], "step": b.get("step"), "by": b.get("by") or b.get("kid")})
+                return self.send(200, {"ok": True, "event": ev_, "state": derive()})
+        if p in ("/api/start", "/api/report", "/api/team", "/api/pause") \
+                and stepped_jobs.definition(chores.get(b.get("chore"))):
+            return self.send(409, {"error": "Use this project's guided steps."})
         if p == "/api/paper_scan_start":
             kid_, kind_ = b.get("kid"), str(b.get("kind") or "")
             school_ = next((x for x in c["chores"] if x.get("document_review") and
@@ -3481,10 +3760,9 @@ class H(BaseHTTPRequestHandler):
             act = st["active"].get(b.get("kid"))
             if not act:
                 return self.send(400, {"error": "not doing a chore"})
-            from datetime import datetime, timedelta
-            eod = datetime.combine((datetime.now() + timedelta(days=PAUSE_DAYS)).date(), datetime.max.time()).timestamp()
             ev = append({"type": "pause", "kid": b["kid"], "chore": act["chore"], "elapsed": time.time() - act["ts"],
-                         "team": act.get("team") or [b["kid"]], "notimer": bool(act.get("notimer")), "until": eod})
+                         "team": act.get("team") or [b["kid"]], "notimer": bool(act.get("notimer")),
+                         "hold": "indefinite"})
         elif p == "/api/title":   # a kid names the job they're on (or one they saved for later)
             t = " ".join(str(b.get("title") or "").split())[:40]
             act = st["active"].get(b.get("kid")) or st["paused"].get(b.get("kid"))
@@ -3492,22 +3770,28 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "not doing a chore"})
             ev = append({"type": "title", "kid": b["kid"], "chore": act["chore"], "title": t})
         elif p == "/api/keep":   # a grown-up keeps a kid's saved job longer
-            if b.get("by") not in insp or b.get("kid") not in st["paused"]:
+            saved_ = next((z for z in st.get("paused_all") or [] if z["kid"] == b.get("kid")
+                           and (not b.get("chore") or z["chore"] == b["chore"])), None)
+            if b.get("by") not in insp or not saved_:
                 return self.send(400, {"error": "unknown inspector / nothing saved"})
-            ev = append({"type": "keep", "kid": b["kid"], "chore": b.get("chore") or st["paused"][b["kid"]]["chore"],
+            if saved_.get("indefinite"):
+                return self.send(200, {"ok": True, "already": True, "state": st})
+            ev = append({"type": "keep", "kid": b["kid"], "chore": saved_["chore"],
                          "until": float(b.get("until") or time.time() + PAUSE_DAYS * 86400), "by": b["by"]})
         elif p == "/api/resume":
-            pz = st["paused"].get(b.get("kid"))
+            pz = next((z for z in reversed(st.get("paused_all") or []) if z["kid"] == b.get("kid")
+                       and (not b.get("chore") or z["chore"] == b["chore"])
+                       and (not b.get("hold_id") or z.get("id") == b["hold_id"])), None)
             if not pz:
                 return self.send(400, {"error": "nothing saved"})
-            ev = append({"type": "resume", "kid": b["kid"]})
+            ev = append({"type": "resume", "kid": b["kid"], "chore": pz["chore"], "hold_id": pz.get("id")})
         elif p == "/api/abandon":   # an active job, or (paused: true, or nothing active) the one saved for later
             a_ = None if b.get("paused") else st["active"].get(b.get("kid"))
             if a_ and b.get("chore") and a_["chore"] != b["chore"]:
                 a_ = None
-            z_ = None if a_ else st["paused"].get(b.get("kid"))
-            if z_ and b.get("chore") and z_["chore"] != b["chore"]:
-                z_ = None
+            z_ = None if a_ else next((z for z in reversed(st.get("paused_all") or []) if z["kid"] == b.get("kid")
+                                       and (not b.get("chore") or z["chore"] == b["chore"])
+                                       and (not b.get("hold_id") or z.get("id") == b["hold_id"])), None)
             if b.get("by") not in insp or not (a_ or z_):
                 return self.send(400, {"error": "unknown inspector / no job to stop"})
             j_ = a_ or z_
@@ -3515,9 +3799,12 @@ class H(BaseHTTPRequestHandler):
                          "by": b["by"], **({"paused": True} if z_ else {}),
                          "minutes": round((time.time() - a_["ts"]) / 60 if a_ else z_.get("elapsed", 0) / 60)})
         elif p == "/api/release":
-            if b.get("by") not in insp or b.get("kid") not in st["paused"]:
+            z_ = next((z for z in reversed(st.get("paused_all") or []) if z["kid"] == b.get("kid")
+                       and (not b.get("chore") or z["chore"] == b["chore"])
+                       and (not b.get("hold_id") or z.get("id") == b["hold_id"])), None)
+            if b.get("by") not in insp or not z_:
                 return self.send(400, {"error": "unknown inspector / nothing saved"})
-            ev = append({"type": "release", "kid": b["kid"], "by": b["by"]})
+            ev = append({"type": "release", "kid": b["kid"], "chore": z_["chore"], "by": b["by"]})
         elif p == "/api/timer_pref":
             act = st["active"].get(b.get("kid"))
             if not act:
@@ -4991,7 +5278,8 @@ def watch_bright_rooms():
             except (OSError, ValueError):
                 saved = {}
             if time.time() - GUARD.get("sun_ts", 0) > 60:   # daylight-only chores (clean out the car)
-                GUARD["sun_up"] = ha_get(SUN, tok).get("state") != "below_horizon"
+                sun_state_ = ha_get(SUN, tok).get("state")
+                GUARD["sun_up"] = True if sun_state_ == "above_horizon" else False if sun_state_ == "below_horizon" else None
                 GUARD["sun_ts"] = time.time()
             st0 = derive()
             # a room reported done (waiting for inspection) stays bright too, in the inspecting adult's colour
@@ -5579,6 +5867,8 @@ def start_modules():
             go("launchers", watch_launchers)
         if CHORE_ROOMS or SIGNAL_BULBS:
             go("room-lights", watch_bright_rooms)
+        if any((stepped_jobs.definition(ch) or {}).get("contexts") for ch in cfg()["chores"]):
+            go("project-context", watch_project_context)   # outdoor safety independent of the room-light worker
         if MAE_DASH:
             go("dashboard-mirror", watch_mae_dashboard)
         if (HOUSE.get("mail_delivery") or {}).get("entity"):

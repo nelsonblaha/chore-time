@@ -199,6 +199,23 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('feedback:listValue("nyfb")', html)
         self.assertIn("if(draft)all.push(draft)", html)
 
+    def test_stepped_project_ui_keeps_safety_and_awards_explicit(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("Stop safely for now", kids)
+        self.assertIn("No sensor verifies this", grown)
+        self.assertIn("No amount is suggested", grown)
+        self.assertIn('data-paward="', grown)
+        self.assertIn('data-pemergency="', grown)
+
+    def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("S.paused_all||[]", kids)
+        self.assertIn("S.paused_all||[]", grown)
+        self.assertIn("held until completed or explicitly ended", grown)
+        self.assertNotIn("Keep 7 more days", grown)
+
 
 class Case(unittest.TestCase):
     config = None
@@ -2265,9 +2282,189 @@ class SavedJobsAndNames(Case):
         self.app.post("/api/pause", {"kid": "ava"})
         self.assertEqual(self.app.post("/api/title", {"kid": "ava", "title": "ROCKS"})[0], 200)
         until = time.time() + 30 * 86400
-        self.assertEqual(self.app.post("/api/keep", {"kid": "ava", "by": "jordan", "until": until})[0], 200)
+        code, kept = self.app.post("/api/keep", {"kid": "ava", "by": "jordan", "until": until})
+        self.assertEqual(code, 200)
+        self.assertTrue(kept.get("already"))
         z = self.app.state()["paused"]["ava"]
-        self.assertEqual((z["title"], round(z["until"])), ("ROCKS", round(until)))
+        self.assertEqual((z["title"], z["until"], z["indefinite"]), ("ROCKS", None, True))
+
+    def test_every_indefinite_hold_is_published_and_can_be_selected(self):
+        self.app.post("/api/start", {"kid": "ava", "chore": "organize"})
+        self.app.post("/api/pause", {"kid": "ava"})
+        self.app.post("/api/start", {"kid": "ava", "chore": "kitchen"})
+        self.app.post("/api/pause", {"kid": "ava"})
+        st = self.app.state()
+        self.assertEqual([x["chore"] for x in st["paused_all"]], ["organize", "kitchen"])
+        self.assertTrue(all(x["indefinite"] and x["until"] is None for x in st["paused_all"]))
+        self.assertEqual(self.app.post("/api/resume", {"kid": "ava", "chore": "organize"})[0], 200)
+        st = self.app.state()
+        self.assertEqual(st["active"]["ava"]["chore"], "organize")
+        self.assertEqual([x["chore"] for x in st["paused_all"]], ["kitchen"])
+
+    def test_expired_legacy_hold_does_not_resurrect_at_cutover(self):
+        self.app.post("/api/start", {"kid": "ava", "chore": "organize"})
+        self.app.event(type="pause", kid="ava", chore="organize", elapsed=10, team=["ava"],
+                       until=time.time() - 1)
+        self.assertEqual(self.app.state()["paused_all"], [])
+
+
+class SteppedProjectApi(unittest.TestCase):
+    def setUp(self):
+        c = base_config()
+        c["chores"].append({
+            "id": "yard_project", "name": "Move yard material", "icon": "1f6de", "points": None,
+            "shared": True, "household": "any", "session_label": "Yard project session",
+            "stepped": {
+                "version": "v1", "min_team": 2, "contexts": ["daylight", "dry"], "award_adult": "lead",
+                "steps": [
+                    {"id": "prepare", "phase": "session_start", "actor": "kid", "text": "Prepare the area"},
+                    {"id": "location", "phase": "session_start", "scope": "project", "actor": "adult",
+                     "adult_role": "lead", "text": "Show the destination"},
+                    {"id": "work", "phase": "work", "actor": "kid", "control": True, "text": "Move material"},
+                    {"id": "equipment", "phase": "session_stop", "actor": "kid", "safety": True,
+                     "text": "Return equipment"},
+                    {"id": "gate", "phase": "session_stop", "actor": "kid", "safety": True,
+                     "text": "Close the gate"},
+                    {"id": "inspect", "phase": "job_finish", "scope": "project", "actor": "adult",
+                     "adult_role": "lead", "text": "Final inspection"},
+                ],
+            },
+        })
+        self.app = App(c)
+        self.s = self.app.s
+        self.s.GUARD.update(sun_up=True, sun_ts=time.time(),
+                            outdoor_context={"state": "allowed", "reason": "dry", "checked_at": time.time()})
+
+    def tearDown(self):
+        self.app.close()
+
+    def project(self):
+        return self.app.state()["projects"][0]
+
+    def step(self, project, step, **actor):
+        return self.app.post("/api/project/step", {"instance": project["instance"], "revision": project["revision"],
+                                                    "step": step, **actor})
+
+    def test_full_multi_session_flow_and_per_kid_awards(self):
+        code, started = self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+        self.assertEqual(code, 200, started)
+        p = self.project()
+        self.assertEqual((p["status"], p["revision"], p["next"]["step"]["id"]), ("active", 1, "prepare"))
+        self.assertEqual(self.step(p, "prepare", kid="ava")[0], 200)
+        p = self.project()
+        self.assertEqual(self.step(p, "location", by="jordan")[0], 200)
+        p = self.project()
+        self.assertEqual(p["next"]["kind"], "work")
+        self.assertEqual(self.app.post("/api/project/stop", {"instance": p["instance"], "revision": p["revision"],
+                                                              "kid": "max", "mode": "pause"})[0], 200)
+        p = self.project()
+        self.assertEqual(self.step(p, "equipment", kid="max")[0], 200)
+        p = self.project()
+        self.assertEqual(self.step(p, "gate", kid="ava")[0], 200)
+        p = self.project()
+        self.assertEqual(p["next"]["kind"], "award")
+        code, awarded = self.app.post("/api/project/award", {"instance": p["instance"], "revision": p["revision"],
+                                                               "by": "jordan", "awards": {"ava": 2, "max": 4}})
+        self.assertEqual(code, 200, awarded)
+        st = self.app.state()
+        self.assertEqual((st["balance"]["ava"], st["balance"]["max"]), (2, 4))
+        p = st["projects"][0]
+        self.assertEqual(p["status"], "held")
+
+        # A different team resumes; the project-once adult step is not repeated.
+        self.assertEqual(self.app.post("/api/project/start", {"kid": "max", "chore": "yard_project", "team": ["zoe"]})[0], 200)
+        p = self.project()
+        self.assertEqual(self.step(p, "prepare", kid="zoe")[0], 200)
+        self.assertEqual(self.project()["next"]["kind"], "work")
+
+    def test_stale_hub_action_returns_authoritative_project(self):
+        self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+        p = self.project()
+        self.assertEqual(self.step(p, "prepare", kid="ava")[0], 200)
+        code, stale = self.step(p, "prepare", kid="ava")
+        self.assertEqual(code, 409)
+        self.assertGreater(stale["project"]["revision"], p["revision"])
+        self.assertEqual(stale["project"]["next"]["step"]["id"], "location")
+
+    def test_unknown_weather_needs_adult_approval_and_rain_blocks(self):
+        self.s.GUARD["outdoor_context"] = {"state": "unknown", "reason": "weather unavailable"}
+        code, unknown = self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+        self.assertEqual((code, unknown.get("needs_adult")), (409, True))
+        self.assertEqual(self.app.post("/api/project/context_approve", {"chore": "yard_project", "by": "jordan"})[0], 200)
+        self.assertEqual(self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})[0], 200)
+
+        other = App(base_config() | {"chores": base_config()["chores"] + [
+            next(x for x in self.app.s.cfg()["chores"] if x["id"] == "yard_project")]})
+        try:
+            other.s.GUARD.update(sun_up=True, sun_ts=time.time(),
+                                 outdoor_context={"state": "blocked", "reason": "rain"})
+            code, wet = other.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+            self.assertEqual(code, 409)
+            self.assertIn("rain", wet["error"])
+        finally:
+            other.close()
+
+    def test_context_loss_enters_unresolved_safety_stop(self):
+        self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+        p = self.project()
+        self.step(p, "prepare", kid="ava")
+        p = self.project()
+        self.step(p, "location", by="jordan")
+        self.s.GUARD["outdoor_context"] = {"state": "blocked", "reason": "rain"}
+        self.assertEqual(self.s.project_safety_stop("context"), 1)
+        p = self.project()
+        self.assertEqual((p["status"], p["active_session"]["stop_reason"], p["next"]["step"]["id"]),
+                         ("stopping", "context", "equipment"))
+
+    def test_final_session_needs_adult_inspection_before_completion(self):
+        self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+        for sid, actor in (("prepare", {"kid": "ava"}), ("location", {"by": "jordan"})):
+            p = self.project()
+            self.assertEqual(self.step(p, sid, **actor)[0], 200)
+        p = self.project()
+        self.app.post("/api/project/stop", {"instance": p["instance"], "revision": p["revision"],
+                                             "kid": "ava", "mode": "finish"})
+        for sid in ("equipment", "gate"):
+            p = self.project()
+            self.step(p, sid, kid="max")
+        p = self.project()
+        self.app.post("/api/project/award", {"instance": p["instance"], "revision": p["revision"],
+                                              "by": "jordan", "awards": {"ava": 1, "max": 1}})
+        p = self.project()
+        self.assertEqual((p["status"], p["next"]["step"]["id"]), ("finishing", "inspect"))
+        self.assertEqual(self.step(p, "inspect", by="jordan")[0], 200)
+        self.assertEqual(self.project()["status"], "complete")
+
+
+class OutdoorContext(unittest.TestCase):
+    def setUp(self):
+        self.app = App()
+        self.s = self.app.s
+        self.old = self.s.HOUSE.get("weather_context")
+        self.s.HOUSE["weather_context"] = {"max_age_s": 600, "weather": ["weather.home"],
+                                            "rain": ["sensor.rain"], "rain_threshold": 0}
+
+    def tearDown(self):
+        if self.old is None:
+            self.s.HOUSE.pop("weather_context", None)
+        else:
+            self.s.HOUSE["weather_context"] = self.old
+        self.app.close()
+
+    def test_stale_zero_rain_alone_is_unknown(self):
+        self.app.set("weather.home", "unavailable", ago=0)
+        self.app.set("sensor.rain", "0.0", ago=3600)
+        self.assertEqual(self.s.read_outdoor_context("test")["state"], "unknown")
+
+    def test_fresh_weather_can_establish_dry_despite_stale_numeric_sensor(self):
+        self.app.set("weather.home", "partlycloudy", ago=5)
+        self.app.set("sensor.rain", "0.0", ago=3600)
+        self.assertEqual(self.s.read_outdoor_context("test")["state"], "allowed")
+
+    def test_any_fresh_positive_rain_blocks(self):
+        self.app.set("weather.home", "sunny", ago=5)
+        self.app.set("sensor.rain", "0.2", ago=5)
+        self.assertEqual(self.s.read_outdoor_context("test")["state"], "blocked")
 
 
 class ServiceSchedule(unittest.TestCase):

@@ -269,6 +269,7 @@ html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{dis
     <div class="goalbtn" id="goalbtn"></div></div>
   <div class="barlbl" id="barlbl" style="display:none"></div>
   <div class="mustban" id="mustban"></div>
+  <div id="projectbox"></div>
   <div class="doing" id="doing" style="display:none"></div>
   <div class="body">
     <div class="chorewrap"><div class="chores" id="chores"></div>
@@ -614,6 +615,33 @@ function renderKidMenu(){
   if($("kmpin"))$("kmpin").onclick=function(){MENU=false;$("kmenu").classList.remove("on");changeKidPin(false)};
   if($("kmpacking"))$("kmpacking").onclick=function(){MENU=false;$("kmenu").classList.remove("on");packOpen()};
 }
+function projectChore(id){return S.config.chores.find(function(c){return c.id===id})||{id:id,name:id,icon:"1f6e0"}}
+function openProject(cid){return (S.projects||[]).filter(function(p){return p.chore===cid&&p.status!=="complete"&&p.status!=="abandoned"}).slice(-1)[0]}
+function projectSend(path,body){if(busy)return;busy=true;api(path,body).then(function(r){busy=false;if(r.state)S=r.state;if(!r.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+safeText(r.error||"That step changed")+'</div>');addOk()}renderKid()}).catch(function(){busy=false;modal('<div class="q">The chore screen did not answer. Try again.</div>');addOk()})}
+function startProject(c){var min=Math.max(1,+((c.stepped||{}).min_team||1));if(min<=1){projectSend("/api/project/start",{kid:kid,chore:c.id,team:[]});return}
+  pickHelpers("Who is doing "+c.name+" with you?",function(ps){if(ps.length+1<min)return;closeModal();projectSend("/api/project/start",{kid:kid,chore:c.id,team:ps})})}
+function renderProjects(){var rows=S.config.chores.filter(function(c){return c.stepped&&!c.hidden&&(!c.only||c.only.indexOf(kid)>=0)&&here(c)}),html="";
+  rows.forEach(function(c){var p=openProject(c.id),ctx=(S.project_contexts||{})[c.id]||{},next=p&&p.next,session=p&&p.active_session,team=session?session.team:[],mine=team.indexOf(kid)>=0;
+    var status=!p?"Ready to begin":p.status==="held"?"Saved for the next work session":p.status==="stopping"?"Stop safely before anyone leaves":p.status==="finishing"?"Waiting for final inspection":p.status==="active"?"Work session in progress":p.status;
+    html+='<div style="margin:8px 3vw;padding:12px 18px;border-radius:22px;border:5px solid '+(p&&p.status==="stopping"?'#c62828':'var(--kid)')+';background:'+(p&&p.status==="stopping"?'#ffebee':'#fff8e1')+';box-shadow:0 3px 10px #0002">'+
+      '<div style="display:flex;align-items:center;gap:14px"><span style="font-size:54px">'+E(c.icon)+'</span><div style="flex:1"><b style="font-size:29px">'+safeText(c.name)+'</b><div style="font-size:19px;font-weight:800;opacity:.75">'+safeText(status)+(team.length?' · '+teamIcons(team):'')+'</div></div></div>';
+    if(!p||p.status==="held"){
+      if(ctx.state==="blocked")html+='<div class="q" style="font-size:22px;color:#b71c1c">'+E("1f327")+' Not safe to start now: '+safeText(((ctx.items||[]).filter(function(x){return x.state==="blocked"})[0]||{}).reason||"outside conditions")+'</div>';
+      else if(ctx.state==="unknown")html+='<div class="q" style="font-size:22px">'+E("2753")+' A grown-up must confirm the weather first.</div><div class="faces"><div class="btn" data-projadult="1">'+E("1f9d1")+' Get a grown-up</div></div>';
+      else html+='<div class="faces"><div class="btn yes" data-projstart="'+c.id+'">'+E("1f465")+' Start a team session</div></div>';
+    }else if(session&&!mine){html+='<div class="q" style="font-size:22px">This team is working now. You can join a later session.</div>'}
+    else if(next&&next.kind==="step"){
+      var step=next.step||{},adult=step.actor==="adult";
+      html+='<div class="q" style="font-size:27px;'+(step.safety?'background:#ffcdd2;border-radius:16px;padding:8px':'')+'">'+(step.safety?E("26a0")+' ':'')+safeText(step.text||step.name||step.id)+'</div>'+
+        (adult?'<div class="faces"><div class="btn" data-projadult="1">'+E("1f9d1")+' Get a grown-up</div></div>':'<div class="faces"><div class="btn yes" data-projstep="'+step.id+'" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("2705")+' Done</div></div>');
+    }else if(next&&next.kind==="work")html+='<div class="q" style="font-size:27px">'+safeText((next.step||{}).text||"Keep working together")+'</div><div class="faces"><div class="btn" data-projstop="pause" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("23f8")+' Stop safely for now</div><div class="btn yes" data-projstop="finish" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("2705")+' The whole project is finished</div></div>';
+    else if(next&&next.kind==="award")html+='<div class="q" style="font-size:25px">'+E("1f9d1")+' Tell a grown-up. They will record stars for each kid before this session closes.</div><div class="faces"><div class="btn" data-projadult="1">Get a grown-up</div></div>';
+    html+='</div>'});
+  $("projectbox").innerHTML=html;
+  document.querySelectorAll("[data-projstart]").forEach(function(n){n.onclick=function(){startProject(projectChore(n.dataset.projstart))}});
+  document.querySelectorAll("[data-projstep]").forEach(function(n){n.onclick=function(){projectSend("/api/project/step",{instance:n.dataset.inst,revision:+n.dataset.rev,step:n.dataset.projstep,kid:kid})}});
+  document.querySelectorAll("[data-projstop]").forEach(function(n){n.onclick=function(){projectSend("/api/project/stop",{instance:n.dataset.inst,revision:+n.dataset.rev,mode:n.dataset.projstop,kid:kid})}});
+  document.querySelectorAll("[data-projadult]").forEach(function(n){n.onclick=adultRequest})}
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
   $("kface").innerHTML=E(k.icon);$("kname").innerHTML=k.name+" "+trophies(kid)+(houseName()?'<span style="font-size:.55em;opacity:.75;margin-left:8px">'+E("1f3e0")+' '+houseName()+'</span>':'');
@@ -626,6 +654,7 @@ function renderKid(){
   $("goalbtn").onclick=pickGoal;
   $("barlbl").innerHTML=(p?E("1f50d")+" +"+p+" waiting for inspection &nbsp; ":"")+(b<gc?(gc-b)+" more "+E("2b50")+" to "+E(G.r.icon)+" "+G.r.name:E("1f389")+" You have enough for "+E(G.r.icon)+" "+G.r.name+"! "+E("1f389"));
   renderKidMenu();
+  renderProjects();
   var MF=((S.must_do_first||{})[kid])||{};$("mustban").style.display=MF.rewards?"block":"none";$("mustban").innerHTML=MF.rewards?E("1f4da")+' '+safeText(MF.name)+' first! '+(MF.on?'Other chores come back at '+hm12(MF.until)+'. ':'')+'Rewards come back when it is done.':"";
   var A=(S.active||{})[kid];
   if(A){var ac=S.config.chores.find(function(x){return x.id===A.chore})||{name:A.chore,icon:"2b50"};
@@ -660,7 +689,7 @@ function renderKid(){
   var busyNow=!!(S.active||{})[kid];
   $("chores").classList.toggle("two",busyNow);$("barlbl").style.display="none";
   // don't show chores a kid can't do right now (presumed clean, someone else waiting on it, someone else's claim)
-  var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.hidden||(c.only&&c.only.indexOf(kid)<0)||!here(c))return false;
+  var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.stepped||c.hidden||(c.only&&c.only.indexOf(kid)<0)||!here(c))return false;
     if(bd.clean_until)return false;
     if((bd.pending_by||[]).length&&!c.shared&&bd.pending_by.indexOf(kid)<0)return false;
     if(c.slot&&bd.claimed_by&&bd.claimed_by!==kid)return false;
@@ -757,9 +786,9 @@ function renderKid(){
   var ordered=mine.filter(function(h){return h.status==="pending"}).concat(mine.filter(function(h){return h.status!=="pending"})).slice(0,40);
   var HPER=4,hpages=Math.max(1,Math.ceil(ordered.length/HPER));if(HP>=hpages)HP=hpages-1;
   var shown=ordered.slice(HP*HPER,HP*HPER+HPER);
-  var hh="",pzh="",PZ=(S.paused||{})[kid];
-  if(PZ){var pc=S.config.chores.find(function(x){return x.id===PZ.chore})||{icon:"2b50",name:PZ.chore};
-    pzh+='<div class="h" id="pzrow" style="background:#ede7f6"><span class="ic">'+E(pc.icon)+'</span><span style="font-size:16px;font-weight:800">'+E("23f8")+' '+jobName(PZ,pc)+' &middot; later</span><span class="s">'+E("25b6")+'</span></div>'}
+  var hh="",pzh="",PZS=(S.paused_all||[]).filter(function(z){return z.kid===kid});
+  PZS.forEach(function(PZ,i){var pc=S.config.chores.find(function(x){return x.id===PZ.chore})||{icon:"2b50",name:PZ.chore};
+    pzh+='<div class="h" data-pzrow="'+i+'" style="background:#ede7f6"><span class="ic">'+E(pc.icon)+'</span><span style="font-size:16px;font-weight:800">'+E("23f8")+' '+jobName(PZ,pc)+' &middot; held until finished</span><span class="s">'+E("25b6")+'</span></div>'});
   shown.forEach(function(r){
     if(r.type==="adjust"){hh+='<div class="h" data-h="'+r.id+'"><span class="ic">'+E(r.points<0?"1f6ab":"2b50")+'</span><span style="font-size:15px;font-weight:700;opacity:.7">'+(r.reason||"").replace(/^paper log: /,"")+'</span><span class="s">'+E(insp(r.by).icon)+' '+(r.points>0?"+":"")+r.points+'</span></div>';return}
     var s=r.status==="pending"&&r.inspecting?'<span class="s wait">'+E("1f50d")+E(insp(r.inspecting.by).icon)+'</span>':r.status==="pending"?'<span class="s wait">'+(r.priority?E("2b50"):"")+E("23f3")+'</span>':
@@ -776,7 +805,7 @@ function renderKid(){
   document.querySelectorAll("[data-pgm]").forEach(function(n){n.onclick=function(e){e.stopPropagation();var a=n.dataset.pgm.split(":"),d=+a[1];
     if(a[0]==="rw"){if(RWP+d<0||RWP+d>=rpages)return;RWP+=d}else{if(HP+d<0||HP+d>=hpages)return;HP+=d}L("page_"+a[0],{to:a[0]==="rw"?RWP:HP});renderKid()}});
   document.querySelectorAll("#hist [data-h]").forEach(function(n){n.onclick=function(){jobModal(n.dataset.h)}});
-  if($("pzrow"))$("pzrow").onclick=function(){resumeModal()};
+  document.querySelectorAll("[data-pzrow]").forEach(function(n){n.onclick=function(){resumeModal(PZS[+n.dataset.pzrow])}});
 }
 
 /* --- new-inspection reveal --- */
@@ -1063,6 +1092,7 @@ function envFlow(c,done){var EV=S.envelope,ks=S.config.kids,KK=function(id){retu
 /* attention: a Hub nobody is looking at chimes and flashes the cards of kids with something waiting */
 var ATTN={},lastMotion=null,prevFresh=null;
 function kidHas(k){var d=dressOf(k);if(d&&d!=="ready")return "dress";if(newInspections(k).length)return "inspected";
+  if((S.projects||[]).some(function(p){return p.active_session&&(p.active_session.team||[]).indexOf(k)>=0}))return "project";
   if((S.next_step||{})[k]||(S.active||{})[k]||(S.paused||{})[k])return "job";return null}
 function checkAttention(){if(!S)return;var now=Date.now(),list=[];
   var fresh={};S.config.kids.forEach(function(k){fresh[k.id]=newInspections(k.id).length});
@@ -1280,11 +1310,11 @@ function remindJob(k,lastUse){var PZ=(S.paused||{})[k],A=(S.active||{})[k],it=PZ
     api("/api/pause",{kid:k}).then(function(r){if(r.ok){S=r.state;renderKid()}go()})};
   return true}
 /* --- finish later --- */
-function resumeModal(){var PZ=(S.paused||{})[kid];if(!PZ)return;var pc=S.config.chores.find(function(x){return x.id===PZ.chore})||{icon:"2b50",name:PZ.chore};L("resume_open",{chore:PZ.chore});
+function resumeModal(PZ){PZ=PZ||(S.paused||{})[kid];if(!PZ)return;var pc=S.config.chores.find(function(x){return x.id===PZ.chore})||{icon:"2b50",name:PZ.chore};L("resume_open",{chore:PZ.chore});
   modal('<div class="big">'+E(pc.icon)+'</div><div class="q">'+jobName(PZ,pc)+'</div><div class="q" style="font-size:24px;opacity:.8">'+E("23f8")+' Saved for later'+(PZ.notimer?'':' &middot; '+E("23f1")+' '+fmtS(PZ.elapsed)+' so far')+'</div>'+
     '<div class="faces"><div class="btn yes" id="rgo">'+E("25b6")+'<span class="lbl">Finish it now</span></div><div class="btn" id="rkeep">'+E("23f8")+'<span class="lbl">Keep for later</span></div></div>');
   $("rkeep").onclick=function(){closeModal()};
-  $("rgo").onclick=function(){api("/api/resume",{kid:kid}).then(function(r){L("resume",{ok:r.ok});if(r.ok){S=r.state;renderKid()}closeModal()})}}
+  $("rgo").onclick=function(){api("/api/resume",{kid:kid,chore:PZ.chore,hold_id:PZ.id}).then(function(r){L("resume",{ok:r.ok});if(r.ok){S=r.state;renderKid()}closeModal()})}}
 /* --- team (split) chores --- */
 function KI2(k){return S.config.kids.find(function(x){return x.id===k})||{icon:"2753",name:k,color:"#888"}}
 function teamIcons(team){return (team||[]).map(function(k){return E(KI2(k).icon)}).join("+")}

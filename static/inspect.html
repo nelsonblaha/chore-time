@@ -140,6 +140,7 @@ body.hub{max-width:none;font-size:20px}body.hub button{font-size:20px;padding:10
 
 <div id="actbox"></div>
 <div id="pzbox"></div>
+<div id="projectbox"></div>
 <div id="housebox"></div>
 
 <details><summary>⭐ Points <span class="mute" id="balsum"></span></summary><div class="bal" id="bal"></div>
@@ -501,6 +502,25 @@ function chartBar(S,k,chore,since,team,big){var n=(team||[k]).length,key=n>1?cho
 function tickBars(){var now=Date.now()/1000;document.querySelectorAll(".pbar").forEach(function(b){var el=now-+b.dataset.since,tot=+b.dataset.tot,p=Math.min(100,el/tot*100);
   b.querySelector(".pf").style.width=p+"%";b.querySelector(".pr").style.left=p+"%";b.classList.toggle("over",el>+b.dataset.exp)})}
 setInterval(tickBars,1000);
+function renderProjectAdmin(){var html="",defs=S.config.chores.filter(function(c){return c.stepped&&!c.hidden});
+  defs.forEach(function(c){var p=(S.projects||[]).filter(function(x){return x.chore===c.id&&x.status!=="complete"&&x.status!=="abandoned"}).slice(-1)[0],ctx=(S.project_contexts||{})[c.id]||{},next=p&&p.next,ss=p&&p.active_session,done={};
+    (p&&p.completed_once||[]).forEach(function(x){done[x]=1});(ss&&ss.completed||[]).forEach(function(x){done[x]=1});
+    if(!p&&ctx.state!=="unknown")return;
+    html+='<div class="card" style="border:4px solid '+(p&&p.status==="stopping"?'#c62828':'#6a1b9a')+'"><div class="row"><span class="big">'+E(c.icon)+'</span><div style="flex:1"><b>'+esc(c.name)+'</b> <span class="tag '+(p&&p.status==="stopping"?'warn':'')+'">'+esc(p?p.status:"not started")+'</span>'+
+      '<div class="mute">'+(ss?'Session team: '+ss.team.map(function(k){return esc(kidOf(k).name)}).join(' + '):p?'Project is safely held between sessions':'Waiting for safe start conditions')+'</div></div></div>';
+    if(p)html+='<div style="margin-top:8px">'+(c.stepped.steps||[]).map(function(x){var current=next&&next.step&&next.step.id===x.id;return '<span class="tag '+(done[x.id]?'clean':current&&x.safety?'warn':'')+'" style="margin:2px">'+(done[x.id]?'✅ ':current?'➡️ ':'')+esc(x.text||x.name||x.id)+'</span>'}).join('')+'</div>';
+    if(ctx.state==="unknown"&&!ctx.manual)html+='<div class="row" style="margin-top:8px"><span class="tag warn">Weather data is unknown</span><button class="ok" data-ctxok="'+c.id+'">I checked: safe for 30 minutes</button></div>';
+    if(next&&next.kind==="step"&&next.step.actor==="adult")html+='<div class="row" style="margin-top:8px"><b style="flex:1">Next: '+esc(next.step.text||next.step.id)+'</b><button class="ok" data-pstep="'+next.step.id+'" data-inst="'+p.instance+'" data-rev="'+p.revision+'">✅ Confirm</button></div>';
+    else if(next&&next.kind==="step"&&next.step.safety)html+='<div class="row" style="margin-top:8px"><span style="flex:1"><b>Unresolved safety step:</b> '+esc(next.step.text||next.step.id)+'<div class="mute">No sensor verifies this. This button records that you physically did it.</div></span><button class="no" data-pemergency="'+next.step.id+'" data-inst="'+p.instance+'" data-rev="'+p.revision+'">I did this safety step</button></div>';
+    else if(next&&next.kind==="award")html+='<div style="margin-top:8px"><b>Award this work session separately</b><div class="mute">The project '+(next.mode==="finish"?'continues to final inspection':'stays available for another session')+'. No amount is suggested.</div><div class="row" style="margin-top:6px;flex-wrap:wrap">'+next.team.map(function(k){return '<label class="tag">'+E(kidOf(k).icon)+' '+esc(kidOf(k).name)+' <input type="number" min="0" max="50" inputmode="numeric" data-paward="'+k+'" style="width:70px"> ⭐</label>'}).join('')+'<button class="ok" data-pawardgo="'+p.instance+'" data-rev="'+p.revision+'">Save each award</button></div></div>';
+    if(p)html+='<div class="row" style="margin-top:8px;justify-content:flex-end"><button class="no" data-pabandon="'+p.instance+'" data-rev="'+p.revision+'">Abandon entire project</button></div>';
+    html+='</div>'});
+  $("projectbox").innerHTML=html?'<h2 class="h2b">🧭 Multi-session projects</h2>'+html:'';
+  document.querySelectorAll("[data-ctxok]").forEach(function(b){b.onclick=function(){post("/api/project/context_approve",{chore:b.dataset.ctxok},"Outdoor conditions approved for 30 minutes")}});
+  document.querySelectorAll("[data-pstep]").forEach(function(b){b.onclick=function(){post("/api/project/step",{instance:b.dataset.inst,revision:+b.dataset.rev,step:b.dataset.pstep},"Step confirmed")}});
+  document.querySelectorAll("[data-pemergency]").forEach(function(b){b.onclick=function(){if(confirm("Did you physically complete this safety step? The system cannot verify it."))post("/api/project/step",{instance:b.dataset.inst,revision:+b.dataset.rev,step:b.dataset.pemergency,emergency:true},"Safety step recorded by "+inspOf(me).name)}});
+  document.querySelectorAll("[data-pawardgo]").forEach(function(b){b.onclick=function(){var box=b.closest('.card'),aw={},missing=false;box.querySelectorAll('[data-paward]').forEach(function(i){if(i.value==="")missing=true;else aw[i.dataset.paward]=+i.value});if(missing){toast("Choose stars for every participant, including 0");return}post("/api/project/award",{instance:b.dataset.pawardgo,revision:+b.dataset.rev,awards:aw},"Session awards saved")}});
+  document.querySelectorAll("[data-pabandon]").forEach(function(b){b.onclick=function(){if(confirm("Abandon this entire project? Its sessions and awards remain in history, but it cannot resume."))post("/api/project/abandon",{instance:b.dataset.pabandon,revision:+b.dataset.rev},"Project abandoned")}})}
 function render(){
   var w="";if(!(HA_MODE&&haUserMe)){S.config.inspectors.forEach(function(i){w+='<button class="'+(me===i.id?"on":"")+'" data-i="'+i.id+'">'+E(i.icon)+' '+i.name+'</button>'})}
   $("who").innerHTML=w;$("hicon").innerHTML=me?E(inspOf(me).icon):E("1f50d");
@@ -511,6 +531,7 @@ function render(){
       '<div style="height:8px;background:#0002;border-radius:4px;overflow:hidden;margin:3px 0"><div style="height:100%;width:'+gp+'%;background:'+k.color+'"></div></div>'+
       '<div class="mute" style="font-size:12px">'+(G.auto?(G.fav?'auto (their favorite)':'auto (next one they can afford)'):'they chose it')+(gs?(G.auto?' · set to Auto ':' · picked ')+ago(gs):'')+'</div></div>'});
   $("bal").innerHTML=bl;$("balsum").textContent=S.config.kids.map(function(k){return k.name+" "+S.balance[k.id]}).join(" · ");
+  renderProjectAdmin();
   // pending
   var pend=S.history.filter(function(h){return h.type==="report"&&h.status==="pending"}).reverse();
   pend.sort(function(a,b){return (b.priority?1:0)-(a.priority?1:0)});
@@ -760,17 +781,16 @@ function render(){
     if(t===null)return;post("/api/request_answer",{ref:q.id,ok:false,text:t},"Told "+kidOf(q.kid).name+": not now")}});
   $("actbox").innerHTML=ah?'<h2 class="h2b">⏱ In progress</h2>'+ah:'';
   document.querySelectorAll("#actbox .actcard").forEach(function(n){n.onclick=function(){ACTJOB={kid:n.dataset.act};openPM("actjob")}});
-  var PZ=S.paused||{},pz="";
-  Object.keys(PZ).forEach(function(k){var z=PZ[k],c=choreOf(z.chore),tm=(z.team||[k]).map(function(x){return E(kidOf(x).icon)+" "+esc(kidOf(x).name)}).join(" + ");
-    pz+='<div class="card"><div class="row"><span class="big">'+E(c.icon)+'</span><div><b>'+tm+'</b> · '+esc(z.title||c.name)+' <span class="tag">⏸ partly done</span><div class="mute">saved '+ago(z.ts)+(z.notimer?'':' · worked '+Math.round(z.elapsed/60)+' min')+' · held until '+new Date(z.until*1000).toLocaleString([], {weekday:"short",hour:"numeric"})+'</div></div></div>'+
-      '<div class="row" style="margin-top:6px"><button data-pzp="'+k+'">Give partial points…</button><button data-pzk="'+k+'">Keep 7 more days</button><button data-pzr="'+k+'">Release (anyone can do it)</button>'.replace(/<button data-pzr.*$/,c.shared?'':'$&')+'<button class="no" data-pzx="'+k+'">🛑 They abandoned it</button></div></div>'});
+  var PZ=S.paused_all||[],pz="";
+  PZ.forEach(function(z,i){var k=z.kid,c=choreOf(z.chore),tm=(z.team||[k]).map(function(x){return E(kidOf(x).icon)+" "+esc(kidOf(x).name)}).join(" + ");
+    pz+='<div class="card"><div class="row"><span class="big">'+E(c.icon)+'</span><div><b>'+tm+'</b> · '+esc(z.title||c.name)+' <span class="tag">⏸ partly done</span><div class="mute">saved '+ago(z.ts)+(z.notimer?'':' · worked '+Math.round(z.elapsed/60)+' min')+' · held until completed or explicitly ended</div></div></div>'+
+      '<div class="row" style="margin-top:6px"><button data-pzp="'+i+'">Give partial points…</button><button data-pzr="'+i+'">Release (anyone can do it)</button>'.replace(/<button data-pzr.*$/,c.shared?'':'$&')+'<button class="no" data-pzx="'+i+'">🛑 They abandoned it</button></div></div>'});
   $("pzbox").innerHTML=pz?'<h2 class="h2b">⏸ Partly done — saved for later</h2>'+pz:'';
-  document.querySelectorAll("[data-pzr]").forEach(function(b){b.onclick=function(){if(confirm("Release it? Anyone can then do this chore."))post("/api/release",{kid:b.dataset.pzr},"Released")}});
-  document.querySelectorAll("[data-pzx]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzx,z=PZ[k];
+  document.querySelectorAll("[data-pzr]").forEach(function(b){b.onclick=function(){var z=PZ[+b.dataset.pzr];if(confirm("Release it? Anyone can then do this chore."))post("/api/release",{kid:z.kid,chore:z.chore,hold_id:z.id},"Released")}});
+  document.querySelectorAll("[data-pzx]").forEach(function(b){b.onclick=function(){var z=PZ[+b.dataset.pzx],k=z.kid;
     if(confirm("Cancel "+(z.title||choreOf(z.chore).name)+" for "+(z.team||[k]).map(function(m){return kidOf(m).name}).join(" + ")+"? No stars; it's gone from their screens."))
-      post("/api/abandon",{kid:k,chore:z.chore,paused:true},"Cancelled: abandoned")}});
-  document.querySelectorAll("[data-pzk]").forEach(function(b){b.onclick=function(){var z=PZ[b.dataset.pzk];post("/api/keep",{kid:b.dataset.pzk,chore:z.chore,until:Math.max(z.until,Date.now()/1000)+7*86400},"Kept 7 more days")}});
-  document.querySelectorAll("[data-pzp]").forEach(function(b){b.onclick=function(){var k=b.dataset.pzp,z=PZ[k],v=prompt("Partial points for "+kidOf(k).name+" ("+choreOf(z.chore).name+")?","1");if(!v)return;
+      post("/api/abandon",{kid:k,chore:z.chore,hold_id:z.id,paused:true},"Cancelled: abandoned")}});
+  document.querySelectorAll("[data-pzp]").forEach(function(b){b.onclick=function(){var z=PZ[+b.dataset.pzp],k=z.kid,v=prompt("Partial points for "+kidOf(k).name+" ("+choreOf(z.chore).name+")?","1");if(!v)return;
     post("/api/adjust",{kid:k,points:+v,reason:"partly did "+choreOf(z.chore).name},"+"+v+" for "+kidOf(k).name)}});
   // chart
   var ch="";S.config.chores.forEach(function(c){if(c.hidden)return;var bd=S.board[c.id]||{},odBusy=(bd.pending_by||[]).length||Object.values(S.active||{}).concat(Object.values(S.paused||{})).some(function(a){return a.chore===c.id});var tags=c.bundle?'<span class="tag">'+(c.only?c.only.join(", ")+' only · ':'')+'now '+(bd.price||0)+' pts = '+((bd.covers||[]).map(function(x){var cc=S.config.chores.find(function(y){return y.id===x})||{name:x};return esc(cc.name)+' '+((S.board[x]||{}).price||0)}).join(' + ')||'all tidy')+(bd.boost_pct?' +'+bd.boost_pct+'% big-job bonus ('+bd.boost_from+'→'+bd.price+')':'')+'</span> ':"";
