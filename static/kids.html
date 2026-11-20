@@ -816,7 +816,7 @@ function pinPad(who,title,sub,onDone,forgot){
           if(pin.length<3)return;
           onDone(pin,function(message){pin="";draw(message||"Try again.")});
           return;
-        }else if(pin.length<8)pin+=v;
+        }else if(pin.length<12)pin+=v;
         draw();
       };
     });
@@ -827,7 +827,7 @@ function kidPin(k){var who=S.config.kids.find(function(x){return x.id===k});pinP
   busy=true;api("/api/kid_unlock",{kid:k,pin:pin}).then(function(r){busy=false;if(r.ok){L("kid_pin",{to:k,ok:true});closeModal();openKid(k,true)}else{L("kid_pin",{to:k,ok:false});fail(r.error)}}).catch(function(){busy=false;fail("Try again.")})
 },function(){busy=true;api("/api/kid_pin_reset_request",{kid:k}).then(function(r){busy=false;modal('<div class="big">'+E("1f64b")+E("1f9d1")+'</div><div class="q">Asking a grown-up for a reset</div><div class="q" style="font-size:23px;opacity:.8">After they allow it, the first person back to this display can choose the new PIN.</div>');addOk()}).catch(function(){busy=false})})}
 function changeKidPin(reset,target){target=target||kid;var who=S.config.kids.find(function(x){return x.id===target}),current="";
-  function chooseNew(){pinPad(who,"Choose a new PIN","3 to 8 numbers",function(first,fail){pinPad(who,"Enter the new PIN again","Make sure both copies match",function(second,fail2){
+  function chooseNew(){pinPad(who,"Choose a new PIN","3 to 12 numbers",function(first,fail){pinPad(who,"Enter the new PIN again","Make sure both copies match",function(second,fail2){
       if(first!==second){fail2("Those did not match.");return}busy=true;api("/api/kid_pin_change",{kid:target,current_pin:current,new_pin:first}).then(function(r){busy=false;if(!r.ok){fail2(r.error);return}S=r.state;modal('<div class="big">'+E("2705")+E("1f512")+'</div><div class="q">Your new PIN is ready!</div>');addOk(function(){openKid(target,true)})}).catch(function(){busy=false;fail2("Try again.")})
     })})}
   if(reset){chooseNew();return}

@@ -1235,7 +1235,7 @@ def verify_kid_pin(kid, supplied):
     """Verify a private PBKDF2 value without ever placing the PIN in public state or logs."""
     try:
         scheme, rounds, salt, expected = str(kid.get("pin_hash") or "").split("$", 3)
-        if scheme != "pbkdf2_sha256" or not str(supplied).isdigit() or not 3 <= len(str(supplied)) <= 8:
+        if scheme != "pbkdf2_sha256" or not str(supplied).isdigit() or not 3 <= len(str(supplied)) <= 12:
             return False
         actual = hashlib.pbkdf2_hmac("sha256", str(supplied).encode(), bytes.fromhex(salt), int(rounds)).hex()
         return hmac.compare_digest(actual, expected)
@@ -1245,8 +1245,8 @@ def verify_kid_pin(kid, supplied):
 
 def make_kid_pin_hash(pin):
     pin = str(pin)
-    if not pin.isdigit() or not 3 <= len(pin) <= 8:
-        raise ValueError("Use 3 to 8 numbers.")
+    if not pin.isdigit() or not 3 <= len(pin) <= 12:
+        raise ValueError("Use 3 to 12 numbers.")
     rounds, salt = 120000, os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, rounds).hex()
     return f"pbkdf2_sha256${rounds}${salt.hex()}${digest}"

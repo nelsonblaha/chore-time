@@ -320,6 +320,18 @@ class SoundSettings(Case):
         self.assertEqual(self.app.post("/api/kid_unlock",{"kid":"ava","pin":"915"})[0],200)
         self.assertNotIn("ava",self.app.state()["pin_reset_open"])
 
+    def test_kid_pin_can_be_eleven_digits(self):
+        config=json.loads((self.app.dir/"chores.json").read_text())
+        config["kids"][0]["pin_hash"]=self.s.make_kid_pin_hash("915")
+        (self.app.dir/"chores.json").write_text(json.dumps(config))
+        changed=self.app.post("/api/kid_pin_change",{
+            "kid":"ava","current_pin":"915","new_pin":"12345678910"})
+        self.assertEqual(changed[0],200)
+        self.assertEqual(self.app.post("/api/kid_unlock",{
+            "kid":"ava","pin":"12345678910"})[0],200)
+        self.assertEqual(self.app.post("/api/kid_unlock",{
+            "kid":"ava","pin":"1234567891"})[0],403)
+
 
 class RewardBlockers(Case):
     DOOR = "binary_sensor.test_toilet_door"
