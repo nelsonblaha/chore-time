@@ -1053,6 +1053,12 @@ def dress_kids(c):
             and (not k.get("home_entity") or ha_get(k["home_entity"], tok).get("state") == "on")]
 
 
+def kid_uses_timer(c, kid, chore):
+    """A kid's standing opt-out wins even when an old client still sends Start."""
+    profile = next((k for k in c["kids"] if k["id"] == kid), {})
+    return chore not in (profile.get("untimed_chores") or [])
+
+
 def sound_enabled():
     """One house-wide gate for every sound initiated by the kids' chore system."""
     return HOUSE.get("sound_effects") is not False
@@ -1489,7 +1495,8 @@ def derive():
     for e in evs:
         if e["type"] == "start":
             unshelve(e["kid"], e["chore"])
-            active[e["kid"]] = {"chore": e["chore"], "ts": e["ts"], "team": [e["kid"]]}
+            active[e["kid"]] = {"chore": e["chore"], "ts": e["ts"], "team": [e["kid"]],
+                                **({"notimer": True} if e.get("notimer") else {})}
         elif e["type"] == "team":
             lead = next((m for m in e["members"] if active.get(m, {}).get("chore") == e["chore"]), None)
             ts = active[lead]["ts"] if lead else e["ts"]
@@ -1886,7 +1893,8 @@ def derive():
         if gate_.get("rewards") and gate_.get("chore") in board:
             board[gate_["chore"]]["clean_until"] = 0   # an unfinished carry-over stays visible until it is reported
     dress = dict(dress_state(evs, reports, GUARD.get("awake_ts")),
-                 started={k: a["ts"] for k, a in active.items() if a.get("chore") == "get_dressed"})
+                 started={k: a["ts"] for k, a in active.items()
+                          if a.get("chore") == "get_dressed" and not a.get("notimer")})
     laundry_chore = DRESS.get("laundry_chore")
     if dress.get("on") and laundry_chore and (board.get(laundry_chore) or {}).get("opened"):
         dress["laundry_hint"] = DRESS.get("laundry_message") or "A lot of your favorite clothes are in the laundry pile."
@@ -3234,7 +3242,8 @@ class H(BaseHTTPRequestHandler):
                     extra["team"] = [b["kid"]] + [m for m in act["team"] if m != b["kid"]]
                     if act.get("split"):
                         extra["split"] = act["split"]
-            if b["chore"] == "get_dressed" and (st.get("dress") or {}).get("on") and not st["dress"].get("school"):
+            if b["chore"] == "get_dressed" and kid_uses_timer(c, b["kid"], b["chore"]) \
+                    and (st.get("dress") or {}).get("on") and not st["dress"].get("school"):
                 # A manually enabled dress race is elapsed time. School mornings are judged by the report's absolute
                 # finish time, so they deliberately do not manufacture a race start.
                 extra["started"] = st["dress"]["since"]
@@ -3567,7 +3576,9 @@ class H(BaseHTTPRequestHandler):
                         [k for k, z in st["paused"].items() if z["chore"] == b["chore"] and b["kid"] not in z["team"]]
                 if busy_:
                     return self.send(409, {"error": "%s is doing it" % busy_[0]})
-            ev = append({"type": p.rsplit("/", 1)[1], "kid": b["kid"], "chore": b.get("chore")})
+            ev = append({"type": p.rsplit("/", 1)[1], "kid": b["kid"], "chore": b.get("chore"),
+                         **({"notimer": True} if p == "/api/start" and
+                            not kid_uses_timer(c, b["kid"], b["chore"]) else {})})
         elif p == "/api/awards_seen":
             if b.get("kid") not in kids:
                 return self.send(400, {"error": "unknown kid"})

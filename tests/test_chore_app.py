@@ -163,6 +163,12 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('$("mx").style.display="none"', html)
         self.assertNotIn("The clock starts when you press Start", html)
 
+    def test_untimed_dressing_has_an_explicit_timerless_screen(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn('function kidUntimed(k,chore)', html)
+        self.assertIn('No timer—just get dressed and tap when you are ready.', html)
+        self.assertIn('No personal timer. Your finish time still counts for the school-day award.', html)
+
     def test_parent_dashboard_has_an_explicit_mandatory_chore_done_action(self):
         html = (REPO / "static" / "inspect.html").read_text()
         self.assertIn("Finished — mark done", html)
@@ -1981,6 +1987,25 @@ class PutOnClothes(Case):
         self.assertTrue(self.app.state()["board"]["wash"]["opened"])
         self.assertEqual(self.app.post("/api/close_od", {"chore": "wash", "by": "jordan"})[0], 200)
         self.assertFalse(self.app.state()["board"]["wash"]["opened"])
+
+    def test_a_kids_standing_untimed_preference_wins_for_dressing(self):
+        c = self.s.cfg()
+        next(k for k in c["kids"] if k["id"] == "max")["untimed_chores"] = ["get_dressed"]
+        self.s.save_cfg(c)
+        self.app.post("/api/dress", {"by": "jordan", "on": True, "kids": ["ava", "max"]})
+
+        code, started = self.app.post("/api/start", {"kid": "max", "chore": "get_dressed"})
+        self.assertEqual(code, 200, started)
+        self.assertTrue(started["event"]["notimer"])
+        self.assertNotIn("max", self.app.state()["dress"]["started"])
+
+        code, report = self.app.post("/api/report", {"kid": "max", "chore": "get_dressed", "feeling": "ok"})
+        self.assertEqual(code, 200, report)
+        self.assertNotIn("started", report["event"])
+
+        code, timed = self.app.post("/api/report", {"kid": "ava", "chore": "get_dressed", "feeling": "ok"})
+        self.assertEqual(code, 200, timed)
+        self.assertIn("started", timed["event"])
 
 
 class SchoolMornings(Case):
