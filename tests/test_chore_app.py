@@ -177,6 +177,12 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("data-doc-pages", inspect)
         self.assertNotIn("drive.google.com/file/d/\"+encodeURIComponent", inspect)
 
+    def test_forgotten_pin_waits_on_screen_and_advances_after_approval(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn('id="pinresetwait"', html)
+        self.assertIn('api("/api/adult_status",{nonce:r.nonce})', html)
+        self.assertIn('changeKidPin(true,k)', html)
+
     def test_hand_back_includes_an_unadded_reason_draft(self):
         html = (REPO / "static" / "inspect.html").read_text()
         self.assertIn('feedback:listValue("nyfb")', html)
@@ -309,9 +315,15 @@ class SoundSettings(Case):
         self.assertEqual(code,200)
         nonce=requested["nonce"]
         self.assertEqual(next(q for q in requested["state"]["assist_requests"] if q["nonce"]==nonce)["purpose"],"pin_reset")
+        self.s.ADULT_REQ[nonce]["ts"]-=180
+        code,waiting=self.app.post("/api/adult_status",{"nonce":nonce})
+        self.assertEqual((code,waiting["status"]),(200,"pending"))
         code,allowed=self.app.post("/api/assist_answer",{"nonce":nonce,"ok":True,"by":"jordan"})
         self.assertEqual(code,200)
         self.assertIn("ava",allowed["state"]["pin_reset_open"])
+        code,ready=self.app.post("/api/adult_status",{"nonce":nonce})
+        self.assertEqual((code,ready["status"]),(200,"ok"))
+        self.assertIn("ava",ready["state"]["pin_reset_open"])
         before=allowed["state"]["pin_epoch"]
         changed=self.app.post("/api/kid_pin_change",{"kid":"ava","new_pin":"915"})
         self.assertEqual(changed[0],200)

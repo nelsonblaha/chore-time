@@ -3077,7 +3077,7 @@ class H(BaseHTTPRequestHandler):
             if not r:
                 return self.send(404, {"error": "unknown request"})
             timed_out_ = False
-            ttl_ = ADULT_REQUEST_TTL_S if r.get("purpose") in ("assist", "reward") else 120
+            ttl_ = ADULT_REQUEST_TTL_S if r.get("purpose") in ("assist", "reward", "pin_reset") else 120
             if r["status"] == "pending" and time.time() - r["ts"] > ttl_:
                 r["status"] = "timeout"
                 timed_out_ = True
@@ -3090,7 +3090,7 @@ class H(BaseHTTPRequestHandler):
                 threading.Thread(target=clear_adult_request, args=(b["nonce"], r["who"]), daemon=True).start()
             return self.send(200, {"ok": True, "status": r["status"],
                                    **({"state": derive(), "until": r.get("until")}
-                                      if r.get("purpose") in ("assist", "reward") else {})})
+                                      if r.get("purpose") in ("assist", "reward", "pin_reset") else {})})
         if p == "/api/news_seen":
             try:
                 seen = json.loads(NEWS_SEEN.read_text())
