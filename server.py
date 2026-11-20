@@ -87,6 +87,7 @@ LEDGER = DATA / "ledger.jsonl"
 ILOG = DATA / "interactions.jsonl"
 VACUUM_BUTTON_TOKEN_FILE = Path(os.environ.get("VACUUM_BUTTON_TOKEN_FILE", DATA / "vacuum-button.token")).expanduser()
 NEWS_SEEN = DATA / "news_seen.json"   # whats-new version acknowledged, per device IP   # every UI tap/screen + TV guard decision, for later study
+PAPER_SCAN_FILE = DATA / "paper_scans.json"   # short-lived kid claim for the next Brother-to-Drive scan
 
 
 def ilog(rec):
@@ -108,6 +109,23 @@ CONFIG = DATA / "chores.json"
 DATA.mkdir(parents=True, exist_ok=True)
 if not CONFIG.exists():
     CONFIG.write_text(SEED.read_text())
+
+
+def load_paper_scans():
+    try:
+        rows = json.loads(PAPER_SCAN_FILE.read_text())
+        return rows if isinstance(rows, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+PAPER_SCANS = load_paper_scans()
+
+
+def save_paper_scans():
+    tmp = PAPER_SCAN_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(PAPER_SCANS))
+    tmp.replace(PAPER_SCAN_FILE)
 
 
 JOB_MILESTONES = [1, 5, 10, 25, 50, 100]
@@ -1394,6 +1412,11 @@ def derive():
     chores = {x["id"]: x for x in c["chores"]}
     reports = {e["id"]: dict(e, status="pending") for e in evs if e["type"] == "report"}
     for e in evs:
+        if e["type"] == "document_host" and e.get("ref") in reports:
+            reports[e["ref"]]["document_pages"] = list(e.get("pages") or [])
+            reports[e["ref"]].pop("document_url", None)
+            if e.get("title"):
+                reports[e["ref"]]["document_title"] = e["title"]
         if e["type"] == "inspect_start" and e.get("ref") in reports:
             reports[e["ref"]]["inspecting"] = {"by": e["by"], "ts": e["ts"]}
         if e["type"] == "split" and e.get("ref") in reports:
@@ -1429,6 +1452,21 @@ def derive():
             if e.get("partial_pass"):
                 r["partial"] = True
                 r["leftover_note"] = e.get("leftover_note")
+    papers = {k["id"]: [] for k in c["kids"]}
+    for r in reports.values():
+        ch_ = chores.get(r.get("chore")) or {}
+        if ch_.get("document_review") and r.get("document_pages"):
+            papers.setdefault(r["kid"], []).append({"id": r["id"], "ts": r["ts"], "kind": "school",
+                                                     "title": r.get("document_title") or "School paper",
+                                                     "pages": r["document_pages"], "status": r["status"]})
+    for e in evs:
+        if e["type"] == "personal_paper" and e.get("kid") in papers and e.get("document_pages"):
+            papers[e["kid"]].append({"id": e["id"], "ts": e["ts"], "kind": "personal",
+                                      "title": e.get("document_title") or "Personal paper",
+                                      "pages": e["document_pages"], "status": "saved"})
+    for rows_ in papers.values():
+        rows_.sort(key=lambda x: x["ts"], reverse=True)
+        del rows_[20:]   # keep the HA state compact; Drive remains the long-term archive
     bal = {k["id"]: 0 for k in c["kids"]}
     pend = {k["id"]: 0 for k in c["kids"]}
     for r in reports.values():
@@ -1872,6 +1910,7 @@ def derive():
             "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
             "shower": shower, "evening_routine": evening_routine,
             "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
+            "papers": papers,
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
             "reward_block": reward_block_state(),
@@ -1987,7 +2026,7 @@ def push_state_sensor(state=None, last_result=None):
     keep = ("id", "ts", "type", "kid", "chore", "chore_name", "chore_icon", "status", "points", "awarded",
             "feeling", "inspected_by", "inspect_id", "reason", "by", "reward", "reward_name", "reward_icon", "cost", "tv",
             "toy", "toy_name", "label", "present", "old_name", "old_out", "opened", "priority", "note", "started", "team", "partial", "full_price", "worked", "split", "inspecting", "round", "feedback", "leftover_note", "ask", "delivered", "inspected_ts", "certified", "prank",
-            "document_url", "document_title")
+            "document_url", "document_title", "document_pages")
     hist = [{k: h[k] for k in keep if k in h} for h in state["history"][:40]]
     attrs = {"friendly_name": "Chore state", "config": state["config"], "balance": state["balance"],
              "earned": state.get("earned"), "active": state.get("active"), "typical": state.get("typical"),
@@ -2003,7 +2042,7 @@ def push_state_sensor(state=None, last_result=None):
              "households": state.get("households"), "kid_where": state.get("kid_where"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
              "music_block": state.get("music_block"),
-             "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
+             "calendar": state.get("calendar"), "packing_game": state.get("packing_game"), "papers": state.get("papers"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
              "assist_requests": state.get("assist_requests"), "envelope": state.get("envelope"),
              "adult_busy": state.get("adult_busy"), "adult_busy_until": state.get("adult_busy_until"),
@@ -2670,6 +2709,61 @@ class H(BaseHTTPRequestHandler):
             acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
+        if p == "/api/paper_scan_start":
+            kid_, kind_ = b.get("kid"), str(b.get("kind") or "")
+            school_ = next((x for x in c["chores"] if x.get("document_review") and
+                            (not x.get("only") or kid_ in x["only"])), None)
+            if kid_ not in kids or kind_ not in ("school", "personal") or not school_:
+                return self.send(400, {"error": "paper scanning is not available for this profile"})
+            scan_id_ = uuid.uuid4().hex[:12]
+            PAPER_SCANS[scan_id_] = {"id": scan_id_, "kid": kid_, "kind": kind_, "chore": school_["id"],
+                                     "ts": time.time(), "expires": time.time() + 20 * 60, "status": "waiting"}
+            save_paper_scans()
+            ilog({"src": "paper", "action": "waiting", "kid": kid_, "kind": kind_, "scan": scan_id_})
+            return self.send(200, {"ok": True, "scan": scan_id_, "status": "waiting"})
+        if p == "/api/paper_scan_status":
+            row_ = PAPER_SCANS.get(str(b.get("scan") or ""))
+            if not row_ or row_.get("kid") != b.get("kid"):
+                return self.send(404, {"error": "scan not found"})
+            if row_["status"] == "waiting" and row_["expires"] < time.time():
+                row_["status"] = "expired"
+                save_paper_scans()
+            return self.send(200, {"ok": True, "status": row_["status"], "ref": row_.get("ref"),
+                                   **({"state": derive()} if row_["status"] == "done" else {})})
+        if p in ("/api/paper_ingest", "/api/document_host"):
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                return self.send(403, {"error": "loopback only"})
+            pages_ = b.get("pages") if isinstance(b.get("pages"), list) else []
+            if not pages_ or len(pages_) > 30 or any(not re.fullmatch(r"/local/chore-papers/[a-zA-Z0-9_-]+\.jpg", str(x)) for x in pages_):
+                return self.send(400, {"error": "invalid hosted paper pages"})
+            if p == "/api/document_host":
+                ref_ = str(b.get("ref") or "")
+                report_ = next((x for x in st["history"] if x.get("id") == ref_ and x.get("type") == "report"), None)
+                if not report_:
+                    return self.send(404, {"error": "report not found"})
+                ev_ = append({"type": "document_host", "ref": ref_, "pages": pages_,
+                              "title": str(b.get("title") or "School paper")[:100]})
+                after_change()
+                return self.send(200, {"ok": True, "event": ev_, "state": derive()})
+            scan_ = PAPER_SCANS.get(str(b.get("scan") or ""))
+            if not scan_ or scan_["status"] != "waiting" or scan_["expires"] < time.time():
+                return self.send(409, {"error": "no kid is waiting for that scan"})
+            label_ = "School paper" if scan_["kind"] == "school" else "Personal paper"
+            stamp_ = time.strftime("%b %d, %I:%M %p", time.localtime()).replace(" 0", " ")
+            if scan_["kind"] == "school":
+                price_ = (st["board"].get(scan_["chore"]) or {}).get("price")
+                ev_ = append({"type": "report", "kid": scan_["kid"], "chore": scan_["chore"], "feeling": "ok",
+                              "points": price_, "document_pages": pages_, "document_title": label_ + " · " + stamp_})
+                threading.Thread(target=notify_report, args=(ev_, derive()), daemon=True).start()
+            else:
+                ev_ = append({"type": "personal_paper", "kid": scan_["kid"], "document_pages": pages_,
+                              "document_title": label_ + " · " + stamp_})
+            scan_["status"], scan_["ref"] = "done", ev_["id"]
+            save_paper_scans()
+            after_change()
+            ilog({"src": "paper", "action": "ingested", "kid": scan_["kid"], "kind": scan_["kind"],
+                  "scan": scan_["id"], "pages": len(pages_)})
+            return self.send(200, {"ok": True, "event": ev_, "state": derive()})
         if p == "/api/kid_unlock":
             kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid")), None)
             if not kid_:

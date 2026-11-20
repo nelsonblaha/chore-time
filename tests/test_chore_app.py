@@ -168,6 +168,15 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Finished — mark done", html)
         self.assertIn("done:true,items:F.items", html)
 
+    def test_paper_shelves_and_local_previews_are_wired_into_the_kid_menu(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        inspect = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("School Papers", kids)
+        self.assertIn("Personal Papers", kids)
+        self.assertIn("paper_scan_start", kids)
+        self.assertIn("data-doc-pages", inspect)
+        self.assertNotIn("drive.google.com/file/d/\"+encodeURIComponent", inspect)
+
     def test_hand_back_includes_an_unadded_reason_draft(self):
         html = (REPO / "static" / "inspect.html").read_text()
         self.assertIn('feedback:listValue("nyfb")', html)
@@ -255,6 +264,40 @@ class SoundSettings(Case):
         bad=self.app.post("/api/report",{"kid":"ava","chore":"scan","note":"Bad link",
                           "document_url":"https://example.com/not-drive"})
         self.assertNotIn("document_url",bad[1]["event"])
+
+    def test_neutral_hosted_school_and_personal_papers_need_no_google_login(self):
+        config=json.loads((self.app.dir/"chores.json").read_text())
+        config["chores"].append({"id":"scan","name":"Scan paper","icon":"1f4c4","points":1,
+                                  "cooldown_h":0,"only":["ava"],"multi_pending":True,"document_review":True})
+        (self.app.dir/"chores.json").write_text(json.dumps(config))
+        started=self.app.post("/api/paper_scan_start",{"kid":"ava","kind":"school"})
+        self.assertEqual(started[0],200)
+        done=self.app.post("/api/paper_ingest",{"scan":started[1]["scan"],
+                           "pages":["/local/chore-papers/abc123-1.jpg","/local/chore-papers/abc123-2.jpg"]})
+        self.assertEqual(done[0],200)
+        school=done[1]["state"]["papers"]["ava"][0]
+        self.assertEqual((school["kind"],len(school["pages"]),school["status"]),("school",2,"pending"))
+        self.assertTrue(school["title"].startswith("School paper · "))
+        report=next(r for r in done[1]["state"]["history"] if r["id"]==school["id"])
+        self.assertNotIn("document_url",report)
+        personal_start=self.app.post("/api/paper_scan_start",{"kid":"ava","kind":"personal"})[1]
+        personal=self.app.post("/api/paper_ingest",{"scan":personal_start["scan"],
+                              "pages":["/local/chore-papers/def456-1.jpg"]})
+        self.assertEqual(personal[0],200)
+        self.assertEqual(personal[1]["state"]["papers"]["ava"][0]["kind"],"personal")
+
+    def test_existing_drive_report_can_be_repointed_to_ha_images_without_rewriting_it(self):
+        config=json.loads((self.app.dir/"chores.json").read_text())
+        config["chores"].append({"id":"scan","name":"Scan paper","icon":"1f4c4","points":1,
+                                  "cooldown_h":0,"only":["ava"],"multi_pending":True,"document_review":True})
+        (self.app.dir/"chores.json").write_text(json.dumps(config))
+        report=self.app.post("/api/report",{"kid":"ava","chore":"scan","document_url":"https://drive.google.com/file/d/abc/view"})[1]["event"]
+        hosted=self.app.post("/api/document_host",{"ref":report["id"],"title":"School paper",
+                             "pages":["/local/chore-papers/abc-1.jpg"]})
+        self.assertEqual(hosted[0],200)
+        row=next(r for r in hosted[1]["state"]["history"] if r["id"]==report["id"])
+        self.assertNotIn("document_url",row)
+        self.assertEqual(row["document_pages"],["/local/chore-papers/abc-1.jpg"])
 
     def test_grownup_can_open_first_come_forgotten_pin_reset(self):
         salt="00112233445566778899aabbccddeeff";rounds=120000

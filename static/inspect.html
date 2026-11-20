@@ -55,7 +55,8 @@ summary{font-weight:700;cursor:pointer;padding:4px 0}
 .docpreview.on{display:flex}.docpreview .docbar{display:flex;align-items:center;gap:12px;min-height:58px;padding:8px 12px;background:#171717;border-bottom:1px solid #444}
 .docpreview .doctitle{flex:1;min-width:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .docpreview .dochelp{color:#ccc;font-size:13px;white-space:nowrap}.docpreview button{background:#fff;color:#111;border:0;font-weight:800;min-width:74px}
-.docpreview iframe{display:block;width:100%;height:100%;min-height:0;flex:1;border:0;background:#333;touch-action:pinch-zoom}
+.docpreview .docpages{width:100%;min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;padding:12px;touch-action:pan-x pan-y pinch-zoom;text-align:center}
+.docpreview .docpages img{display:block;max-width:100%;height:auto;margin:0 auto 14px;background:#fff;box-shadow:0 2px 16px #000}
 @media(max-width:600px){.docpreview .dochelp{display:none}.docpreview .docbar{gap:8px}.docpreview .docbar a{font-size:13px}}
 details.cgrp{margin:6px 0;padding:4px 10px}
 .pbar{position:relative;height:22px;background:#e9ecef;border-radius:12px;margin:34px 6px 22px;min-width:200px}
@@ -160,8 +161,8 @@ body.hub{max-width:none;font-size:20px}body.hub button{font-size:20px;padding:10
 
 <div class="pmodal" id="pm"><div class="pbox"><div class="px" id="pmx">&times;</div><div id="pmbody"></div></div></div>
 <div class="docpreview" id="docpreview" role="dialog" aria-modal="true" aria-labelledby="doctitle">
-  <div class="docbar"><div class="doctitle" id="doctitle">Scanned paper</div><div class="dochelp">Pinch to zoom</div><a id="docopen" href="#" target="_blank" rel="noopener">Open in Drive ↗</a><button id="docclose" type="button">Close</button></div>
-  <iframe id="docframe" title="Scanned paper preview" src="about:blank" allowfullscreen></iframe>
+  <div class="docbar"><div class="doctitle" id="doctitle">Scanned paper</div><div class="dochelp">Scroll pages · pinch to zoom</div><button id="docclose" type="button">Close</button></div>
+  <div class="docpages" id="docpages"></div>
 </div>
 <div id="toast"></div>
 
@@ -182,11 +183,10 @@ var NO_CDN=/[?&]sandbox=/.test(location.search);   // a visitor's demo: emoji as
 function E(c){if(c&&CUSTOM_ICONS[c])return '<img class="e" src="'+CUSTOM_ICONS[c]+'" alt="">';if(c&&NO_CDN)return '<span class="e">'+cp(c)+'</span>';return c?'<img class="e" src="'+TW+c+'.svg" alt="'+cp(c)+'" onerror="this.outerHTML=this.alt">':""}
 function $(i){return document.getElementById(i)}
 function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
-function driveFileId(url){var m=String(url||"").match(/^https:\/\/drive\.google\.com\/file\/d\/([^/?#]+)/);return m?m[1]:null}
-function openDocumentPreview(url,title){var id=driveFileId(url);if(!id){toast("This paper does not have a previewable Drive link");return}
-  $("doctitle").textContent=title||"Scanned paper";$("docopen").href=url;$("docframe").src="https://drive.google.com/file/d/"+encodeURIComponent(id)+"/preview";
-  $("docpreview").classList.add("on");document.body.style.overflow="hidden"}
-function closeDocumentPreview(){$("docpreview").classList.remove("on");$("docframe").src="about:blank";document.body.style.overflow=""}
+function openDocumentPreview(pages,title){pages=(pages||[]).filter(function(x){return /^\/local\/chore-papers\/[a-zA-Z0-9_-]+\.jpg$/.test(x)});if(!pages.length){toast("This paper is still being prepared");return}
+  $("doctitle").textContent=title||"Scanned paper";$("docpages").innerHTML=pages.map(function(src,i){return '<img src="'+esc(src)+'" alt="Page '+(i+1)+'">'}).join("");
+  $("docpreview").classList.add("on");$("docpages").scrollTop=0;document.body.style.overflow="hidden"}
+function closeDocumentPreview(){$("docpreview").classList.remove("on");$("docpages").innerHTML="";document.body.style.overflow=""}
 var S=null,me=null,adjKid=null,adjPts=null,TSEL={};   // TSEL: per-kid stars picked on a team job, kept across refreshes
 try{me=localStorage.getItem("inspector")}catch(e){}
 function api(p,b){return fetch(p,{method:b?"POST":"GET",headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
@@ -532,7 +532,7 @@ function render(){
     ph+='<div class="card" data-r="'+r.id+'"'+(r.priority?' style="border:3px solid #f5b400"':'')+'><div class="row"><span class="big">'+(team?team.map(function(x){return E(kidOf(x).icon)}).join(""):E(k.icon))+E(r.chore_icon)+'</span><div><b>'+esc(tn)+'</b>'+split+' · '+esc(r.chore_name)+' '+feel(r.feeling)+(r.priority?' <span class="tag bonus">⭐ check this first</span>':'')+'<div class="mute">'+ago(r.ts)+took+(fixed?' · worth '+r.points:' · you set the points')+'</div></div></div>'+
       (other?'<div class="row" style="margin-top:8px"><input class="lbl" placeholder="What did they do?" value="'+esc(r.note?r.note.charAt(0)+r.note.slice(1).toLowerCase():"")+'" style="flex:1"></div>':'')+
       (S.envelope&&S.envelope.chores.indexOf(r.chore)>=0?'<div class="tag '+(r.delivered?'clean':'warn')+'" style="margin-top:6px">'+(r.delivered?'📬 Kid says the loose letter and printed, stamped envelope were brought for inspection. Keep them separate until you approve.':'✉️ The loose letter and printed, stamped envelope have not been brought for inspection yet.')+'</div>':'')+
-      (r.document_url?'<div class="card" style="margin-top:8px;background:#e3f2fd"><b>📄 Verify this is a useful school paper</b><div class="mute">'+esc(r.document_title||r.note||"Scanned document")+'</div><div class="row" style="margin-top:8px"><button class="ok" type="button" data-doc-url="'+esc(r.document_url)+'" data-doc-title="'+esc(r.document_title||r.note||"Scanned paper")+'">Preview</button><a href="'+esc(r.document_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open in Drive ↗</a></div></div>':'')+
+      (r.document_pages?'<div class="card" style="margin-top:8px;background:#e3f2fd"><b>📄 Verify this is a useful school paper</b><div class="mute">'+esc(r.document_title||"School paper")+' · '+r.document_pages.length+' page'+(r.document_pages.length===1?'':'s')+'</div><div class="row" style="margin-top:8px"><button class="ok" type="button" data-doc-pages="'+esc(JSON.stringify(r.document_pages))+'" data-doc-title="'+esc(r.document_title||"School paper")+'">Preview</button></div></div>':'')+
       photosHtml(r)+
       (r.ask!=null?'<div class="mute" style="margin-top:4px">🙋 asks <b>'+r.ask+' ⭐</b> — go look, then settle</div>':'')+
       (AG?'<div class="'+(agWarn?'tag warn':'mute')+'" style="margin-top:6px;display:inline-block">'+(agWarn?'⚠️ This was a team job: ':'🤝 Last agreed: ')+
@@ -559,7 +559,7 @@ function render(){
   $("pcount").textContent=pend.length+cert.length;$("pendwrap").style.display=pend.length+cert.length?"":"none";
   $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
   fillPhotos();
-  document.querySelectorAll("[data-doc-url]").forEach(function(b){b.onclick=function(e){e.stopPropagation();openDocumentPreview(b.dataset.docUrl,b.dataset.docTitle)}});
+  document.querySelectorAll("[data-doc-pages]").forEach(function(b){b.onclick=function(e){e.stopPropagation();var pages=[];try{pages=JSON.parse(b.dataset.docPages)}catch(x){}openDocumentPreview(pages,b.dataset.docTitle)}});
   document.querySelectorAll("[data-cert]").forEach(function(b){b.onclick=function(){var ok=b.dataset.ok==="1";
     post("/api/certify",{chore:b.dataset.cert,ok:ok},ok?"Stars given":"Marked as not done")}});
   document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
