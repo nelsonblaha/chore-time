@@ -183,6 +183,11 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('api("/api/adult_status",{nonce:r.nonce})', html)
         self.assertIn('changeKidPin(true,k)', html)
 
+    def test_pending_non_room_chore_does_not_run_the_completion_flow_twice(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("if(mineWaiting&&!envelopeWaiting)", html)
+        self.assertIn("You do not need to do it again.", html)
+
     def test_hand_back_includes_an_unadded_reason_draft(self):
         html = (REPO / "static" / "inspect.html").read_text()
         self.assertIn('feedback:listValue("nyfb")', html)
