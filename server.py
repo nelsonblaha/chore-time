@@ -4136,9 +4136,11 @@ class H(BaseHTTPRequestHandler):
                 extra["started"] = st["dress"]["since"]
             if ch_.get("together") and not set(ch_.get("only") or []) <= set(extra.get("team") or [b["kid"]]):
                 return self.send(409, {"error": "do it together: team up first"})
+            opened_ = next((event_ for event_ in reversed(read_events()) if event_.get("type") == "reopen"
+                            and event_.get("chore") == b["chore"]), {})
             physical_ = vacuum_help.report_verification(
                 HOUSE.get("vacuum_help") or {}, b["chore"],
-                extra.get("started") or (act or {}).get("ts") or time.time(),
+                extra.get("started") or (act or {}).get("ts") or opened_.get("ts") or time.time(),
                 lambda entity_: ha_get(entity_, ha_token()) or {})
             if physical_ and physical_.get("error"):
                 return self.send(409, {"error": physical_["error"]})

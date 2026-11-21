@@ -148,12 +148,17 @@ class RobotHeroJobs(Case):
         self.assertEqual((done["status"], done["awarded"], done["inspected_by"]), ("inspected", 3, "vacuum"))
         self.assertEqual(st["balance"]["max"], before + 3)
 
-    def test_done_after_docking_is_immediately_auto_inspected(self):
+    def test_done_after_docking_is_immediately_auto_inspected_even_without_start(self):
         self.app.set(ERR, "robot_trapped", ago=60)
         self.app.set("vacuum.down", "error", ago=60)
         self.tick()
         before = self.app.state()["balance"]["max"]
-        report = self.physically_finish("max", "help_rescue_down")
+        time.sleep(0.02)
+        self.app.set(ERR, "none")
+        self.app.set("vacuum.down", "docked")
+        code, result = self.app.post("/api/report", {"kid": "max", "chore": "help_rescue_down", "feeling": "ok"})
+        self.assertEqual(code, 200, result)
+        report = result["event"]
         done = next(h for h in self.app.state()["history"] if h.get("id") == report["id"])
         self.assertEqual((done["status"], done["awarded"], done["inspected_by"]), ("inspected", 3, "vacuum"))
         self.assertEqual(self.app.state()["balance"]["max"], before + 3)
