@@ -303,6 +303,48 @@ class Pilot:
         direct = OCC.get("request_clearance") or {}
         if direct:
             return direct.get("segments") if isinstance(direct.get("segments"), dict) else direct
+        compiled = OCC.get("request_clearance_file")
+        if compiled:
+            try:
+                path = Path(compiled).expanduser()
+                stamp = path.stat().st_mtime_ns
+                cache_key = ("compiled", stamp, OCC.get("request_clearance_key"))
+                cached = getattr(self, "_passage_cache", None)
+                if cached and cached[0] == cache_key:
+                    self._passage_error = None
+                    return cached[1]
+                payload = json.loads(path.read_text())
+                section = payload.get(OCC.get("request_clearance_key") or "") or {}
+                specs = section.get("segments")
+                if not isinstance(specs, dict) or set(specs) != set(SEGMENTS):
+                    raise ValueError("robot segments do not exactly match the compiled clearance graph")
+                aliases = {}
+                if OCC.get("passage_graph"):
+                    aliases = json.loads(Path(OCC["passage_graph"]).expanduser().read_text()).get("aliases") or {}
+                normal = lambda room: aliases.get(room, room)
+                for seg, spec in specs.items():
+                    if not isinstance(spec, dict) or spec.get("complete") is not True:
+                        raise ValueError("unvalidated segment " + seg)
+                    rooms = spec.get("rooms") or []
+                    if {normal(room) for room in SEG_ROOMS.get(seg, [])} != set(rooms):
+                        raise ValueError("tracker rooms differ for " + seg)
+                    if any(route not in specs for route in spec.get("route_segments") or []):
+                        raise ValueError("unknown route segment for " + seg)
+                    for passage in spec.get("passages") or []:
+                        if not isinstance(passage, dict) or not isinstance(passage.get("room"), str):
+                            raise ValueError("ambiguous passage for " + seg)
+                        openings = passage.get("openings")
+                        if not isinstance(openings, list) or not openings:
+                            raise ValueError("passage has no physical openings for " + seg)
+                        if any(not isinstance(opening, dict) or opening.get("from_room") not in rooms
+                               for opening in openings):
+                            raise ValueError("passage origin does not match " + seg)
+                self._passage_cache = (cache_key, specs)
+                self._passage_error = None
+                return specs
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as ex:
+                self._passage_error = "compiled clearance graph invalid: " + str(ex)
+                return {}
         source = OCC.get("passage_graph")
         if not source:
             self._passage_error = "room passage topology is unavailable"
@@ -311,7 +353,7 @@ class Pilot:
             path = Path(source).expanduser()
             stamp = path.stat().st_mtime_ns
             cached = getattr(self, "_passage_cache", None)
-            if cached and cached[0] == stamp:
+            if cached and cached[0] == ("graph", stamp):
                 self._passage_error = None
                 return cached[1]
             data = json.loads(path.read_text())
@@ -367,14 +409,31 @@ class Pilot:
                               "route_segments": list(TRANSIT.get(seg) or []),
                               "passages": [{"room": room, "openings": openings}
                                            for room, openings in sorted(grouped.items())]}
-            self._passage_cache = (stamp, specs)
+            self._passage_cache = (("graph", stamp), specs)
             self._passage_error = None
             return specs
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as ex:
             self._passage_error = "passage graph invalid: " + str(ex)
             return {}
 
-    def request_clearance(self, segments, now=None):
+    def observed_clear_since(self, room, info, now):
+        """Source clear time, or a restart-local consecutive observation timer when HA has no historical `since`."""
+        cache = getattr(self, "_request_clear_observed", None)
+        if cache is None:
+            cache = self._request_clear_observed = {}
+        if info.get("state") != "clear" or info.get("people"):
+            cache.pop(room, None)
+            return None
+        since = info.get("since")
+        if type(since) in (int, float) and 0 < since <= now:
+            cache[room] = {"first": float(since), "last": now}
+            return float(since)
+        previous = cache.get(room)
+        first = previous["first"] if previous and 0 <= now - previous["last"] <= 45 else now
+        cache[room] = {"first": first, "last": now}
+        return first
+
+    def request_clearance(self, segments, now=None, route_only=()):
         """Room-level vacancy for an explicit Clean-when-vacant request.
 
         This is deliberately narrower than ordinary autopilot admission. HA supplies and validates the private
@@ -396,11 +455,15 @@ class Pilot:
         except (TypeError, ValueError):
             fresh = False
         if not fresh:
+            self._request_clear_observed = {}
             return {"allowed": False, "quiet_s": 0, "why": "presence tracker is stale or incomplete"}
         floor = (attrs.get("floors") or {}).get(OCC.get("floor")) or {}
         if floor.get("state") not in ("vacant", "occupied"):
+            self._request_clear_observed = {}
             return {"allowed": False, "quiet_s": 0, "why": "floor placement is ambiguous"}
         room_info = attrs.get("rooms") or {}
+        full = set(segments)
+        routes = set(route_only) - full
         needed = []
         for seg in dict.fromkeys(segments):
             spec = specs.get(seg)
@@ -411,6 +474,10 @@ class Pilot:
             for route in spec.get("route_segments") or []:
                 if route not in needed:
                     needed.append(route)
+                    routes.add(route)
+        for route in route_only:
+            if route not in needed:
+                needed.append(route)
 
         safe_since = []
         checked_rooms = set()
@@ -426,10 +493,12 @@ class Pilot:
                 info = room_info.get(room)
                 if not isinstance(info, dict) or info.get("state") != "clear" or info.get("people"):
                     return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
-                since = info.get("since")
-                if type(since) not in (int, float) or not 0 < since <= now:
-                    return {"allowed": False, "quiet_s": 0, "why": "%s clear time is ambiguous" % room}
-                safe_since.append(float(since)); checked_rooms.add(room)
+                since = self.observed_clear_since(room, info, now)
+                if since is None:
+                    return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
+                safe_since.append(since); checked_rooms.add(room)
+            if seg in routes and seg not in full:
+                continue                         # route rooms must be clear; their neighbours do not widen the target zone
             for passage in spec.get("passages") or []:
                 if not isinstance(passage, dict) or not isinstance(passage.get("room"), str):
                     return {"allowed": False, "quiet_s": 0, "why": "%s has ambiguous adjacency" % seg}
@@ -438,11 +507,11 @@ class Pilot:
                 if not isinstance(info, dict):
                     return {"allowed": False, "quiet_s": 0, "why": "%s adjacency is unknown" % room}
                 state, people = info.get("state"), info.get("people") or []
-                since = info.get("since")
                 if state == "clear" and not people:
-                    if type(since) not in (int, float) or not 0 < since <= now:
-                        return {"allowed": False, "quiet_s": 0, "why": "%s clear time is ambiguous" % room}
-                    safe_since.append(float(since)); checked_rooms.add(room)
+                    since = self.observed_clear_since(room, info, now)
+                    if since is None:
+                        return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
+                    safe_since.append(since); checked_rooms.add(room)
                     continue
                 if state not in ("occupied", "still"):
                     return {"allowed": False, "quiet_s": 0, "why": "%s adjacency is %s" % (room, state or "unknown")}
@@ -461,6 +530,19 @@ class Pilot:
                     if contact_state.get("state") != "off":
                         return {"allowed": False, "quiet_s": 0,
                                 "why": "%s passage to %s is open or unavailable" % (seg, room)}
+                    if opening.get("from_room"):
+                        evidence = (attrs.get("door_contacts") or {}).get(contact)
+                        expected_rooms = {opening["from_room"], room}
+                        if (not isinstance(evidence, dict) or evidence.get("trusted_closed") is not True or
+                                evidence.get("state") != "off" or set(evidence.get("rooms") or []) != expected_rooms):
+                            return {"allowed": False, "quiet_s": 0,
+                                    "why": "%s passage contact lacks trusted closure" % seg}
+                        changed = epoch(contact_state) or now
+                        operation = evidence.get("last_operation")
+                        if type(operation) in (int, float) and 0 < operation <= now:
+                            changed = max(changed, float(operation))
+                        safe_since.append(changed)
+                        continue
                     if healthy:
                         health_state = self.get(healthy)
                         if health_state.get("state") != "on":
@@ -495,18 +577,29 @@ class Pilot:
                 "why": "requested rooms and direct passages clear for %d of %d minutes" %
                        (quiet // 60, START_QUIET_S // 60)}
 
+    def request_entry_risk(self, now):
+        """Keep the existing floor-entry/approach guard without treating a remote resident as an intrusion."""
+        risk = self.immediate_presence_risk(now, include_path=False)
+        return risk if risk and risk.get("reason_code") in {
+            "approach_motion", "approach_sensor_unavailable", "entry_door", "approach_room"} else None
+
     def requested_run_risk(self, now):
         """Current target/route intrusion for a room-cleared explicit request run."""
+        entry = self.request_entry_risk(now)
+        if entry:
+            return entry
         groups = self.D.get("groups") or []
         i = min(int(self.D.get("gi") or 0), max(0, len(groups) - 1))
         rooms = (groups[i] if groups else {}).get("rooms") or []
         current = self.get(ROOM_SENSOR).get("state")
         if current in SEGMENTS and current not in rooms:
-            rooms = list(rooms) + [current]       # the live route becomes relevant as soon as the robot reports it
+            route_only = [current]               # live route must be clear; its own neighbours do not widen the target
         elif self.get(VAC).get("state") in ("cleaning", "paused") and current not in SEGMENTS:
             return {"reason_code": "request_route_unknown", "reason": "robot route room is unknown",
                     "sensor": ROOM_SENSOR, "observed_at": now}
-        clearance = self.request_clearance(rooms, now)
+        else:
+            route_only = []
+        clearance = self.request_clearance(rooms, now, route_only=route_only)
         if clearance.get("allowed"):
             return None
         return {"reason_code": "request_zone_intrusion", "reason": clearance["why"],
@@ -1600,7 +1693,9 @@ class Pilot:
                 remote_wait = None
                 if rooms and (q is None or q < START_QUIET_S):
                     requested = [seg for seg in rooms if seg in reqs]
-                    clearances = [(seg, self.request_clearance([seg], now)) for seg in requested]
+                    entry_risk = self.request_entry_risk(now) if requested else None
+                    clearances = [] if entry_risk else [
+                        (seg, self.request_clearance([seg], now)) for seg in requested]
                     ready = [seg for seg, clearance in clearances
                              if clearance.get("allowed") and clearance.get("quiet_s", 0) >= START_QUIET_S]
                     if ready:
@@ -1612,6 +1707,8 @@ class Pilot:
                     elif clearances:
                         remote_wait = next((clearance["why"] for _, clearance in clearances
                                             if not clearance.get("allowed")), clearances[0][1]["why"])
+                    elif entry_risk:
+                        remote_wait = entry_risk["reason"]
                 # after failed starts, wait (2 h, 4 h, 8 h, then daily); a room pressed since the failure still goes
                 held = now < D.get("backoff_until", 0) and not any(t > D.get("failed_at", 0) for t in reqs.values())
                 hm = lambda t: datetime.fromtimestamp(t).strftime("%H:%M")

@@ -3,6 +3,7 @@
     python3 -m unittest discover -s tests -v        (from the repo root)
 """
 import importlib.util
+import copy
 import shutil
 import sys
 import tempfile
@@ -55,7 +56,7 @@ def load_copy():
 class Upstairs(unittest.TestCase):
     def setUp(self):
         self.va = load_copy()
-        self.va.configure(UP)
+        self.va.configure(copy.deepcopy(UP))
         self.now = [datetime(2026, 11, 18, 10, 0).timestamp()]
         self.va.time = type("T", (), {"time": staticmethod(lambda: self.now[0]), "sleep": staticmethod(lambda s: None)})
         self.H, self.calls, self.tidy, self.posts = {}, [], {}, []
@@ -329,6 +330,50 @@ class Upstairs(unittest.TestCase):
         self.S("binary_sensor.bath_hall_b", "off", ago=1201)
         launch, _ = self.run_until_start()
         self.assertEqual(launch["rooms"], ["Bath"])
+
+    def test_tracker_trusted_closure_must_match_both_rooms_and_live_contact(self):
+        self.va.OCC["request_clearance"]["Bath"]["passages"][0]["openings"] = [
+            {"contact": "binary_sensor.bath_hall_a", "from_room": "bath"}]
+        self.occ({"hall": "occupied"})
+        self.S("binary_sensor.bath_hall_a", "off", ago=3600)
+        attrs = self.H[OCC]["attributes"]
+        attrs["door_contacts"] = {"binary_sensor.bath_hall_a": {
+            "rooms": ["bath", "hall"], "state": "off", "trusted_closed": True,
+            "last_operation": self.now[0] - 3600}}
+        self.assertTrue(self.p.request_clearance(["Bath"])["allowed"])
+        attrs["door_contacts"]["binary_sensor.bath_hall_a"]["rooms"] = ["bath", "bedroom"]
+        self.assertFalse(self.p.request_clearance(["Bath"])["allowed"])
+
+    def test_null_source_since_uses_consecutive_local_observations_and_resets_on_gap(self):
+        self.occ({"bedroom": "occupied"})
+        self.H[OCC]["attributes"]["rooms"]["bath"]["since"] = None
+        first = self.p.request_clearance(["Bath"])
+        self.assertTrue(first["allowed"])
+        self.assertEqual(first["quiet_s"], 0)
+        for _ in range(40):
+            self.now[0] += 30
+            self.H[OCC]["attributes"]["valid_until"] = self.now[0] + 90
+            result = self.p.request_clearance(["Bath"])
+        self.assertGreaterEqual(result["quiet_s"], self.va.START_QUIET_S)
+        self.now[0] += 46
+        self.H[OCC]["attributes"]["valid_until"] = self.now[0] + 90
+        self.assertEqual(self.p.request_clearance(["Bath"])["quiet_s"], 0)
+
+    def test_route_room_must_be_clear_but_its_neighbours_do_not_expand_target_adjacency(self):
+        self.va.OCC["request_clearance"]["Bath"]["route_segments"] = ["Hall"]
+        self.va.OCC["request_clearance"]["Hall"] = {"complete": True, "rooms": ["hall"], "passages": [
+            {"room": "bedroom", "openings": [{"contact": None}]}]}
+        self.occ({"bedroom": "occupied"})
+        self.assertTrue(self.p.request_clearance(["Bath"])["allowed"])
+        self.occ({"hall": "occupied", "bedroom": "occupied"})
+        self.assertFalse(self.p.request_clearance(["Bath"])["allowed"])
+
+    def test_entry_approach_guard_still_blocks_a_room_cleared_request(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.occ({"bedroom": "occupied"})
+        self.button(rooms=["Bath"], request_id="approach-bath")
+        self.S("binary_sensor.stairs_motion", "on")
+        self.assertIsNone(self.run_until_start()[0])
 
     def test_stale_tracker_or_ambiguous_target_never_grants_room_level_clearance(self):
         self.S("input_boolean.up_autopilot", "off")
