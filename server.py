@@ -123,6 +123,7 @@ HA_TOKEN_FILE = house_path(os.environ.get("HA_TOKEN_FILE") or HA.get("token_file
 LOCK = threading.Lock()
 PROJECT_LOCK = threading.Lock()
 SHARED_REWARD_LOCK = threading.Lock()
+TV_REWARD_LOCK = threading.Lock()
 CT_SWITCH = HA.get("chore_time_switch", "input_boolean.chore_time")      # mirrors chore time in HA
 CT_HOURS = HA.get("chore_time_hours", "input_number.chore_time_hours")
 RELAY_TEXT = HA.get("relay_text", "input_text.chore_action")              # HA dashboards post actions here
@@ -2230,6 +2231,15 @@ def derive():
     tvs = {k: {"name": v["name"], "short": v.get("short") or v["name"].replace(" TV", ""), "icon": v.get("icon", "1f4fa"), **GUARD["status"].get(k, {})} for k, v in TVS.items()} if "TVS" in globals() else {}
     if "TVS" in globals():
         try:
+            kid_order_ = {kid_["id"]: i for i, kid_ in enumerate(c["kids"])}
+            for saved_ in saved_tv_rewards(evs):
+                if saved_["tv"] in tvs:
+                    saved_["kids"].sort(key=lambda kid_: kid_order_.get(kid_, len(kid_order_)))
+                    public_saved_ = {k: v for k, v in saved_.items() if k != "playback"}
+                    public_saved_["position_saved"] = bool(saved_.get("playback"))
+                    tvs[saved_["tv"]].setdefault("saved_rewards", []).append(public_saved_)
+                    # The TV lock page reads this exact row to explain why playback stopped.
+                    tvs[saved_["tv"]]["paused_reward"] = public_saved_
             for tid, us in active_unlocks_raw(evs).items():
                 if tid in tvs and us:
                     tvs[tid]["unlocked_until"] = max(u["until"] for u in us)
@@ -2239,7 +2249,6 @@ def derive():
                     # this exact reward session. Waiting purchases are published but are not active monitoring
                     # windows; a watch-together group has one session id and one expected-kids set.
                     audience_ = {}
-                    kid_order_ = {kid_["id"]: i for i, kid_ in enumerate(c["kids"])}
                     for u in us:
                         if u.get("what") not in ("show", "movie", "games") or not u.get("kid"):
                             continue
@@ -3232,6 +3241,15 @@ def after_change():
     threading.Thread(target=lambda: (push_ha(derive()), push_state_sensor()), daemon=True).start()
 
 
+def verified_ha_adult(headers, claimed):
+    """Bind sensitive parent controls to the HA account that created the relay context."""
+    user = str(headers.get("X-HA-User") or "")
+    allowed = (HA.get("user_adults") or {}).get(user)
+    if isinstance(allowed, str):
+        allowed = [allowed]
+    return bool(user and claimed and claimed in (allowed or []))
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):
         print("%s %s" % (self.address_string(), fmt % a), flush=True)
@@ -3413,6 +3431,70 @@ class H(BaseHTTPRequestHandler):
             acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
+        if p in ("/api/tv/reward_pause", "/api/tv/reward_resume"):
+            if not verified_ha_adult(self.headers, b.get("by")):
+                return self.send(403, {"error": "Use the signed-in grown-up Chore dashboard."})
+            session_ = str(b.get("session_id") or "")
+            tv_ = str(b.get("tv") or "")
+            if not session_ or tv_ not in TVS:
+                return self.send(400, {"error": "unknown reward session / TV"})
+            with TV_REWARD_LOCK:
+                raw_ = read_events()
+                saved_ = next((x for x in saved_tv_rewards(raw_) if x["session_id"] == session_ and x["tv"] == tv_), None)
+                live_ = [x for x in tv_grants(raw_).get(tv_, []) if (x.get("group") or x["id"]) == session_
+                         and x.get("what") in ("show", "movie", "games")]
+                if p.endswith("reward_pause"):
+                    if saved_:   # a lost HA relay response / repeat press is a read-only success
+                        return self.send(200, {"ok": True, "already": True, "saved_reward": saved_, "state": derive()})
+                    live_ = [x for x in live_ if not x.get("armed")]
+                    if not live_:
+                        return self.send(409, {"error": "That reward is not actively playing, or its time already ended."})
+                    now_ = time.time()
+                    remaining_ = max(0.0, max(x["until"] for x in live_) - now_)
+                    if remaining_ < 1:
+                        return self.send(409, {"error": "That reward time has already ended."})
+                    try:
+                        playback_ = playing_item(TVS[tv_], ha_token())
+                        if playback_:
+                            playback_["app"] = app_of(TVS[tv_], ha_token())
+                    except Exception:  # preserving the time never depends on a player's optional metadata
+                        playback_ = None
+                    ev_ = append({"type": "tv_reward_pause", "session": session_, "tv": tv_,
+                                  "remaining_s": remaining_, "reward": live_[0]["what"],
+                                  "kids": sorted({x["kid"] for x in live_ if x.get("kid")}),
+                                  "playback": playback_, "by": b["by"]})
+                    GUARD.setdefault("hard_lock", {})[tv_] = now_
+                    GUARD.setdefault("finish", {}).pop(tv_, None)
+                    GUARD.setdefault("grace", {}).pop(tv_, None)
+                    queue_tv_reward_pause(tv_, playback_)
+                    after_change()
+                    saved_ = next(x for x in saved_tv_rewards(read_events()) if x["session_id"] == session_)
+                    ilog({"src": "tv_reward", "action": "pause", "tv": tv_, "session": session_,
+                          "remaining_s": round(remaining_), "by": b["by"], "position_saved": bool(playback_)})
+                    return self.send(200, {"ok": True, "event": ev_, "saved_reward": saved_,
+                                           "lock_requested": True, "state": derive()})
+                if not saved_:
+                    if live_:   # repeat Resume after the first response was lost
+                        return self.send(200, {"ok": True, "already": True, "state": derive()})
+                    return self.send(409, {"error": "That saved reward is no longer available."})
+                competing_ = [x for x in tv_grants(raw_).get(tv_, [])
+                              if (x.get("group") or x["id"]) != session_ and x.get("what") != "vr"]
+                if competing_:
+                    return self.send(409, {"error": "Another reward is using or waiting for this TV. The saved time is still safe."})
+                now_ = time.time()
+                remaining_ = float(saved_["remaining_s"])
+                ev_ = append({"type": "tv_reward_resume", "session": session_, "tv": tv_,
+                              "remaining_s": remaining_, "until": now_ + remaining_,
+                              "playback": saved_.get("playback"), "by": b["by"]})
+                GUARD.setdefault("hard_lock", {}).pop(tv_, None)
+                GUARD.setdefault("standby", {})[tv_] = False
+                queue_tv_reward_resume(tv_, saved_.get("playback"))
+                after_change()
+                ilog({"src": "tv_reward", "action": "resume", "tv": tv_, "session": session_,
+                      "remaining_s": round(remaining_), "by": b["by"],
+                      "position_restore_requested": bool(saved_.get("playback"))})
+                return self.send(200, {"ok": True, "event": ev_, "remaining_s": remaining_,
+                                       "position_restore_requested": bool(saved_.get("playback")), "state": derive()})
         if p == "/api/project/context_approve":
             ch_ = chores.get(b.get("chore")) or {}
             if b.get("by") not in insp or not stepped_jobs.definition(ch_):
@@ -5000,6 +5082,47 @@ def cast(ip, path):
         print("cast failed", ip, ex, flush=True)
 
 
+def pause_and_lock_tv_reward(tvid, playback, tok=None):
+    """Synchronous physical path, split out so a fixture can verify it without touching a household TV."""
+    t, tok = TVS[tvid], tok or ha_token()
+    targets = [playback.get("player")] if playback and playback.get("player") else list(t.get("players") or [])
+    for player in targets:
+        ha_call("media_player.media_pause", {"entity_id": player}, tok)
+    GUARD.setdefault("last_cast", {})[t["ip"]] = time.time()
+    cast(t["ip"], "/tv?paused_reward=1")
+
+
+def queue_tv_reward_pause(tvid, playback):
+    """Pause the receiver first, then replace it with the durable child-facing lock page."""
+    threading.Thread(target=pause_and_lock_tv_reward, args=(tvid, playback),
+                     name="tv-reward-pause-" + tvid, daemon=True).start()
+
+
+def queue_tv_reward_resume(tvid, playback):
+    """Release the lock page and restore the captured position only if the same player still supports it."""
+    t, tok = TVS[tvid], ha_token()
+
+    def go():
+        try:
+            subprocess.run([CATT, "-d", t["ip"], "stop"], timeout=30,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as ex:  # noqa: BLE001
+            print("TV reward unlock failed", tvid, ex, flush=True)
+        if not playback or not playback.get("player") or playback.get("pos") is None:
+            return
+        state = ha_get(playback["player"], tok)
+        attrs = state.get("attributes") or {}
+        same = ((playback.get("content_id") and attrs.get("media_content_id") == playback["content_id"]) or
+                (playback.get("title") and attrs.get("media_title") == playback["title"]))
+        if not same:
+            return   # the service/app can still offer its own Continue Watching position
+        ha_call("media_player.media_seek", {"entity_id": playback["player"],
+                                            "seek_position": max(0, float(playback["pos"]))}, tok)
+        ha_call("media_player.media_play", {"entity_id": playback["player"]}, tok)
+
+    threading.Thread(target=go, name="tv-reward-resume-" + tvid, daemon=True).start()
+
+
 def watch_launchers():
     try:
         tok = ha_token()
@@ -5204,7 +5327,8 @@ def playing_item(t, tok):
         except ValueError:
             pass
         return {"title": a.get("media_title") or a.get("media_content_id") or "?", "series": a.get("media_series_title"),
-                "pos": pos, "dur": dur, "left": max(0, dur - pos), "player": p}
+                "content_id": a.get("media_content_id"), "pos": pos, "dur": dur,
+                "left": max(0, dur - pos), "player": p}
     return None
 
 
@@ -5516,12 +5640,22 @@ def tv_adult_presence(t, tok, now=None):
             "observed_at": observed}
 
 
-def tv_grants(evs, now=None):
+def tv_reward_lifecycle(evs):
+    """Newest durable pause/resume transition for each purchased reward session."""
+    state = {}
+    undone = {e["ref"] for e in evs if e["type"] == "undo"}
+    for e in evs:
+        if e["id"] not in undone and e["type"] in ("tv_reward_pause", "tv_reward_resume") and e.get("session"):
+            state[e["session"]] = e
+    return state
+
+
+def _tv_grants(evs, now=None, reward_lifecycle=True):
     """Per TV: active unlocks [{id, until, kinds, kid, what, by, maxdur, ts}] after adult adjustments."""
     now = now or time.time()
     undone = {e["ref"] for e in evs if e["type"] == "undo"}
     g = {t: [] for t in TVS}
-    started, mins_override, moved = {}, {}, {}
+    started, mins_override, moved, adjustments = {}, {}, {}, []
     for e in evs:
         if e["type"] == "tv_move" and e["id"] not in {x["ref"] for x in evs if x["type"] == "undo"}:
             moved[e["ref"]] = e["tv"]
@@ -5529,6 +5663,8 @@ def tv_grants(evs, now=None):
             started[e["ref"]] = e.get("at") or e["ts"]   # "at": backdated start (watching began before we noticed)
         if e["type"] == "grant_minutes":
             mins_override[e["ref"]] = e["minutes"]
+        if e["type"] == "tv_set_until" and e["id"] not in undone:
+            adjustments.append(e)
     for e in evs:
         if e["id"] in undone:
             continue
@@ -5564,12 +5700,52 @@ def tv_grants(evs, now=None):
                 g[tid].append({"id": e["id"], "ts": e["ts"], "until": e["until"], "start": e["ts"],
                                "kinds": e.get("kinds") or ["stream", "cast", "hdmi"], "kid": e.get("kid"),
                                "what": e.get("what") or "other", "by": e["by"], "maxdur": None})
-        elif e["type"] == "tv_set_until":
-            for tid in (list(TVS) if e["tv"] == "*" else [e["tv"]]):
-                for x in g.get(tid, []):
-                    if x["ts"] < e["ts"] and x["until"] > e["ts"]:
-                        x["until"] = e["until"]
+    if reward_lifecycle:
+        lifecycle = tv_reward_lifecycle(evs)
+        for tid, rows in g.items():
+            kept = []
+            for x in rows:
+                transition = lifecycle.get(x.get("group") or x["id"])
+                if transition and transition.get("tv") in (None, tid):
+                    if transition["type"] == "tv_reward_pause":
+                        continue
+                    x["until"] = float(transition.get("until") or
+                                       (transition["ts"] + float(transition.get("remaining_s") or 0)))
+                    x["start"], x["armed"] = transition["ts"], False
+                kept.append(x)
+            g[tid] = kept
+    # Adjustments are applied last so +10/-10/Lock after a resumed reward operate on its new clock.
+    for e in adjustments:
+        for tid in (list(TVS) if e["tv"] == "*" else [e["tv"]]):
+            for x in g.get(tid, []):
+                if x["ts"] < e["ts"] and x["until"] > e["ts"]:
+                    x["until"] = e["until"]
     return {t: [x for x in xs if x["until"] > now] for t, xs in g.items()}
+
+
+def tv_grants(evs, now=None):
+    return _tv_grants(evs, now, reward_lifecycle=True)
+
+
+def saved_tv_rewards(evs, now=None):
+    """Paused purchased-time balances. They are ledger state, not media-player timelines."""
+    now = time.time() if now is None else float(now)
+    lifecycle = tv_reward_lifecycle(evs)
+    original = _tv_grants(evs, now=0.000001, reward_lifecycle=False)
+    by_session = {}
+    for tid, rows in original.items():
+        for row in rows:
+            session = row.get("group") or row["id"]
+            transition = lifecycle.get(session)
+            if not transition or transition["type"] != "tv_reward_pause" or transition.get("tv") not in (None, tid):
+                continue
+            saved = by_session.setdefault(session, {"session_id": session, "tv": tid, "reward": row["what"],
+                                                     "kids": [], "remaining_s": float(transition["remaining_s"]),
+                                                     "paused_at": transition["ts"], "paused_by": transition.get("by"),
+                                                     "playback": transition.get("playback")})
+            if row.get("kid") and row["kid"] not in saved["kids"]:
+                saved["kids"].append(row["kid"])
+    return sorted(by_session.values(), key=lambda x: x["paused_at"], reverse=True)
 
 
 def active_unlocks(now=None):

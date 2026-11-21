@@ -710,8 +710,9 @@ function render(){
   var choreOn=S.tv&&S.tv.lock_until>S.now;
   var WHAT={show:"📺 Show",movie:"🎬 Movie",games:"🎮 Games",vr:"🥽 VR casting",other:"✨ Other"};
   // one combined card: the TVs are locked or unlocked together from your side
-  var allG=[],ends=[];Object.keys(tvs).forEach(function(id){(tvs[id].grants||[]).forEach(function(g){g._tv=tvs[id].name;allG.push(g)});if(tvs[id].unlocked_until)ends.push(tvs[id].unlocked_until)});
-  var seenG={},grants=allG.filter(function(g){var k=g.kid+g.what+Math.round(g.until);if(seenG[k]){seenG[k].tvs.push(g._tv);return false}g.tvs=[g._tv];seenG[k]=g;return true});
+  var allG=[],allSaved=[],ends=[];Object.keys(tvs).forEach(function(id){(tvs[id].grants||[]).forEach(function(g){g._tv=tvs[id].name;g._tvId=id;allG.push(g)});(tvs[id].saved_rewards||[]).forEach(function(r){r._tv=tvs[id].name;r._tvId=id;allSaved.push(r)});if(tvs[id].unlocked_until)ends.push(tvs[id].unlocked_until)});
+  var seenG={},grants=allG.filter(function(g){var k=(g.group||g.id)+":"+g.what;if(seenG[k]){seenG[k].tvs.push(g._tv);seenG[k].tvIds.push(g._tvId);return false}g.tvs=[g._tv];g.tvIds=[g._tvId];seenG[k]=g;return true});
+  var seenS={},saved=allSaved.filter(function(r){if(seenS[r.session_id])return false;seenS[r.session_id]=1;return true});
   // when each TV actually locks: running clocks + queued purchases back to back, or the end of the show it's finishing
   var fmtT=function(t){return new Date(t*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})};
   var tvRows=[],nexts=[],waiting=false;
@@ -728,7 +729,8 @@ function render(){
   tb+='<div class="tvcard t-'+tone+'" style="background:'+bg+';color:#fff;border-radius:14px;padding:10px 12px;margin:6px 0">'+
     '<div class="row"><b class="tvh" style="font-size:18px">📺 TVs</b><span class="tvs" style="margin-left:auto;font-size:22px;font-weight:800">'+(!choreOn?"free (chore time off)":last?'<span class="cd" data-until="'+last+'"></span>':waiting?"🔓 waiting to start":"🔒 LOCKED")+'</span></div>'+
     (choreOn?tvRows.join(""):'')+
-    (grants.length?'<div class="tvg" style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null;return '<div style="opacity:.9;font-size:14px">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</div>'}).join("")+'</div>':'')+
+    (grants.length?'<div class="tvg" style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:4px">'+grants.map(function(g){var k=g.kid?kidOf(g.kid):null,sid=g.group||g.id;return '<div class="row" style="opacity:.95;font-size:14px;margin:3px 0"><span style="flex:1">'+(k?E(k.icon)+" "+esc(k.name)+" · ":"")+(WHAT[g.what]||g.what)+' · '+esc(g.tvs.join(" + "))+(g.armed?' · '+(g.mins||"")+' min, starts when they watch':' · until '+fmtT(g.until))+'</span>'+(!g.armed&&g.kid&&["show","movie","games"].indexOf(g.what)>=0?'<button style="background:#fff;color:#3f2b7a" data-tvp="'+esc(g.tvIds[0]+":"+sid)+'">⏸ Pause &amp; save</button>':'')+'</div>'}).join("")+'</div>':'')+
+    (saved.length?'<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:6px;padding-top:5px">'+saved.map(function(r){var names=(r.kids||[]).map(function(k){return kidOf(k).name}).join(" + ");return '<div class="row" style="font-size:14px;margin:3px 0"><span style="flex:1">⏸ Saved · '+esc(names)+' · '+(WHAT[r.reward]||r.reward)+' · '+esc(r._tv)+' · '+Math.max(1,Math.ceil(r.remaining_s/60))+' min left</span><button style="background:#fff;color:#1b5e20" data-tvr="'+esc(r._tvId+":"+r.session_id)+'">▶ Resume</button></div>'}).join("")+'</div>':'')+
     (choreOn&&open?'<div class="row" style="margin-top:8px"><button data-ta="*:five">⏱️ 5-min countdown</button><button data-ta="*:minus">−10</button><button data-ta="*:plus">+10</button><button class="no" style="background:#fff" data-ta="*:lock">🔒 Lock now</button></div>':'')+'</div>';
   // Policy switches. On-demand chores such as laundry stay with the ordinary chore cards below.
   var DR=S.dress||{},MB=S.music_block||{},tg=function(id,on,icon,label,sub,attr){return '<label class="tgl'+(on?' on':'')+'" '+attr+'><span class="sw"><span></span></span><span>'+icon+' <b>'+label+'</b>'+(sub?'<br><span class="mute">'+sub+'</span>':'')+'</span></label>'};
@@ -751,6 +753,8 @@ function render(){
   if($("bedbtn"))$("bedbtn").onclick=function(){post("/api/bedtime",{on:!(S.bedtime||{}).on},(S.bedtime||{}).on?"Bedtime ended":"Bedtime! Screens are sending them to bed")};
   document.querySelectorAll("[data-ta]").forEach(function(b){b.onclick=function(){var a=b.dataset.ta.split(":");
     post("/api/tv/adjust",{tv:a[0],action:a[1]},{five:"5-minute countdown started",plus:"+10 min",minus:"−10 min",lock:"Locked"}[a[1]])}});
+  document.querySelectorAll("[data-tvp]").forEach(function(b){b.onclick=function(){var a=b.dataset.tvp.split(":");if(confirm("Pause this reward now, lock the TV, and save all unused time?"))post("/api/tv/reward_pause",{tv:a.shift(),session_id:a.join(":")},"Movie paused; unused time saved")}});
+  document.querySelectorAll("[data-tvr]").forEach(function(b){b.onclick=function(){var a=b.dataset.tvr.split(":");post("/api/tv/reward_resume",{tv:a.shift(),session_id:a.join(":")},"Saved movie time resumed")}});
   document.querySelectorAll("[data-tdn]").forEach(function(b){b.onclick=function(){post("/api/timer_done",{ref:b.dataset.tdn},"VR timer cleared")}});
   document.querySelectorAll("[data-tre]").forEach(function(b){b.onclick=function(){post("/api/timer_restart",{ref:b.dataset.tre},"VR timer restarted")}});
   document.querySelectorAll("[data-un]").forEach(function(b){b.onclick=function(){var m=+b.dataset.un;post("/api/tv/unlock",{tv:"*",minutes:m},m?"TVs unlocked for "+m+" min":"TVs locked again")}});

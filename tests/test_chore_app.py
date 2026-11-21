@@ -105,9 +105,10 @@ class App:
     def set(self, ent, state, ago=0, **attrs):
         self.states[ent] = {"state": state, "attributes": attrs, "last_changed": iso(time.time() - ago)}
 
-    def post(self, path, body):
+    def post(self, path, body, headers=None):
+        request_headers = {"Content-Type": "application/json", **(headers or {})}
         req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), method="POST",
-                                     headers={"Content-Type": "application/json"})
+                                     headers=request_headers)
         try:
             r = urllib.request.urlopen(req, timeout=10)
             return r.status, json.loads(r.read())
@@ -210,6 +211,15 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Joining adds no time.", html)
         self.assertIn("The original end time did not change.", html)
         self.assertIn('data-join="', html)
+
+    def test_parent_can_pause_and_resume_saved_tv_time_and_lock_page_explains_it(self):
+        grown = (REPO / "static" / "inspect.html").read_text()
+        locked = (REPO / "static" / "tvlock.html").read_text()
+        self.assertIn("/api/tv/reward_pause", grown)
+        self.assertIn("/api/tv/reward_resume", grown)
+        self.assertIn("Pause &amp; save", grown)
+        self.assertIn("Your movie is paused.", locked)
+        self.assertIn("You’ll get the rest of your movie time later.", locked)
 
     def test_login_coin_flip_is_separate_visual_spoken_celebration(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -847,6 +857,98 @@ class TvClocks(Case):
         self.app.event(type="tv_started", ref=ev["id"], tv="livingroom", what="hdmi", at=started)
         brk = self.app.state()["screen_break"]["max"]
         self.assertAlmostEqual(brk, started + 60 * 60 + 3600, delta=2)
+
+
+class TvRewardPauseAndSave(Case):
+    def setUp(self):
+        super().setUp()
+        self.s.HA["user_adults"] = {"jordan-ha": "jordan"}
+        self.physical = []
+        self.s.queue_tv_reward_pause = lambda tv, playback: self.physical.append(("pause", tv, playback))
+        self.s.queue_tv_reward_resume = lambda tv, playback: self.physical.append(("resume", tv, playback))
+        self.app.event(type="adjust", kid="ava", points=50, by="jordan", reason="test")
+        code, bought = self.app.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom"})
+        self.assertEqual(code, 200, bought)
+        self.purchase = bought["event"]
+        self.began = time.time() - 300
+        self.app.event(type="tv_started", ref=self.purchase["id"], tv="livingroom", what="stream", at=self.began)
+        player = self.s.TVS["livingroom"]["players"][0]
+        self.app.set(player, "playing", media_duration=7200, media_position=1200,
+                     media_position_updated_at=iso(time.time()), media_title="Fixture Movie",
+                     media_content_id="fixture://movie")
+
+    def action(self, path, **body):
+        return self.app.post(path, {"by": "jordan", "tv": "livingroom",
+                                    "session_id": self.purchase["id"], **body},
+                             {"X-HA-User": "jordan-ha"})
+
+    def test_pause_is_authorized_idempotent_and_restores_exact_unspent_balance(self):
+        before = self.app.state()
+        grant = before["tv"]["tvs"]["livingroom"]["grants"][0]
+        remaining = grant["until"] - time.time()
+        balance = before["balance"]["ava"]
+
+        denied = self.app.post("/api/tv/reward_pause", {"by": "jordan", "tv": "livingroom",
+                                                         "session_id": self.purchase["id"]})
+        self.assertEqual(denied[0], 403)
+        code, paused = self.action("/api/tv/reward_pause")
+        self.assertEqual(code, 200, paused)
+        self.assertTrue(paused["lock_requested"])
+        self.assertAlmostEqual(paused["saved_reward"]["remaining_s"], remaining, delta=2)
+        tv = paused["state"]["tv"]["tvs"]["livingroom"]
+        self.assertNotIn("reward_audiences", tv)
+        self.assertEqual(tv["paused_reward"]["session_id"], self.purchase["id"])
+        self.assertEqual(paused["state"]["balance"]["ava"], balance)
+        self.assertEqual(self.physical[0][0:2], ("pause", "livingroom"))
+        self.assertEqual(self.physical[0][2]["title"], "Fixture Movie")
+
+        again = self.action("/api/tv/reward_pause")
+        self.assertEqual((again[0], again[1].get("already")), (200, True))
+        self.assertEqual(len([e for e in self.s.read_events() if e["type"] == "tv_reward_pause"]), 1)
+        self.assertEqual(len(self.physical), 1)
+        # The ledger alone survives a process/app restart; no GUARD entry is needed to recover the credit.
+        self.s.GUARD["status"] = {}
+        self.assertEqual(self.s.derive()["tv"]["tvs"]["livingroom"]["paused_reward"]["session_id"],
+                         self.purchase["id"])
+
+        time.sleep(.01)
+        code, resumed = self.action("/api/tv/reward_resume")
+        self.assertEqual(code, 200, resumed)
+        live = resumed["state"]["tv"]["tvs"]["livingroom"]
+        self.assertNotIn("paused_reward", live)
+        audience = live["reward_audiences"][0]
+        self.assertEqual((audience["session_id"], audience["state"]), (self.purchase["id"], "active"))
+        self.assertAlmostEqual(audience["valid_until"] - time.time(), remaining, delta=2)
+        self.assertEqual(resumed["state"]["balance"]["ava"], balance)
+        self.assertEqual(self.physical[-1][0:2], ("resume", "livingroom"))
+        again = self.action("/api/tv/reward_resume")
+        self.assertEqual((again[0], again[1].get("already")), (200, True))
+        self.assertEqual(len([e for e in self.s.read_events() if e["type"] == "tv_reward_resume"]), 1)
+
+    def test_expired_pause_rejects(self):
+        self.app.event(type="tv_set_until", tv="livingroom", until=time.time() - 1,
+                       by="jordan", action="lock")
+        code, expired = self.action("/api/tv/reward_pause")
+        self.assertEqual(code, 409, expired)
+
+    def test_competing_grant_does_not_consume_saved_time(self):
+        self.assertEqual(self.action("/api/tv/reward_pause")[0], 200)
+        self.app.event(type="tv_unlock", tv="livingroom", by="jordan", minutes=10,
+                       until=time.time() + 600, kinds=["stream"], what="other")
+        code, blocked = self.action("/api/tv/reward_resume")
+        self.assertEqual(code, 409, blocked)
+        self.assertIn("saved time is still safe", blocked["error"])
+        self.assertEqual(self.app.state()["tv"]["tvs"]["livingroom"]["paused_reward"]["session_id"],
+                         self.purchase["id"])
+
+    def test_isolated_physical_lock_path_pauses_player_then_casts_explanation(self):
+        calls = []
+        self.s.cast = lambda ip, path: calls.append(("cast", ip, path))
+        playback = {"player": self.s.TVS["livingroom"]["players"][0], "pos": 1200,
+                    "title": "Fixture Movie"}
+        self.s.pause_and_lock_tv_reward("livingroom", playback, tok="fixture-token")
+        self.assertIn(("media_player.media_pause", {"entity_id": playback["player"]}), self.app.calls)
+        self.assertEqual(calls, [("cast", self.s.TVS["livingroom"]["ip"], "/tv?paused_reward=1")])
 
 
 class SonyInputs(Case):

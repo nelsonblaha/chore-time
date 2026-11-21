@@ -8,6 +8,9 @@
     "chore_time_hours": "input_number.chore_time_hours",
     "relay_text": "input_text.chore_action",
     "sun": "sun.sun",
+    "user_adults": {
+      "home-assistant-user-id": "jordan"
+    },
     "announce": {
       "tts": "tts.home_assistant_cloud",
       "speaker": "media_player.family_room_speaker"

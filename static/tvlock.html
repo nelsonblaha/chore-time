@@ -64,7 +64,13 @@ h1{font-size:5.5vh;margin:0}
 #dress .row{display:flex;gap:4vw;font-size:5vh;font-weight:800}#dress .row div{text-align:center}
 #dress .who{display:flex;gap:3vw;font-size:5vh;font-weight:900}#dress .who div{background:rgba(255,255,255,.15);border-radius:3vh;padding:1.5vh 2.5vw}
 #dress .rec{font-size:3.4vh;font-weight:800;opacity:.9}
+#rewardpause{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;text-align:center;
+  background:radial-gradient(circle at 50% 35%,#5b3fa3,#17113f 72%);padding:7vh 8vw;box-sizing:border-box}
+#rewardpause.on{display:flex}#rewardpause .box{max-width:85vw}#rewardpause .ico{font-size:15vh}
+#rewardpause h1{font-size:8vh;line-height:1.05;margin:2vh 0}#rewardpause .msg{font-size:5vh;font-weight:800;line-height:1.25}
+#rewardpause .left{font-size:4vh;margin-top:3vh;opacity:.85}
 </style></head><body>
+<div id="rewardpause"></div>
 <div id="dress"></div>
 <div class="wrap">
   <div class="top">
@@ -138,9 +144,15 @@ function drawDress(S){var D=S.dress||{},el=document.getElementById("dress");DRS=
   el.className="on";tickDress()}
 function tickDress(){var c=document.getElementById("dclk");if(!c||!DRS)return;var t=Math.max(0,Math.round(Date.now()/1000-DRS));c.textContent=Math.floor(t/60)+":"+("0"+t%60).slice(-2)}
 setInterval(tickDress,1000);
+function drawRewardPause(S){var el=document.getElementById("rewardpause"),id=S.display&&S.display.kind==="tv"?S.display.id:null,T=id&&S.tv&&S.tv.tvs&&S.tv.tvs[id],r=T&&T.paused_reward;
+  if(!r&&location.search.indexOf("paused_reward=1")>=0&&S.tv)Object.keys(S.tv.tvs||{}).some(function(k){if(S.tv.tvs[k].paused_reward){r=S.tv.tvs[k].paused_reward;return true}});
+  if(!r){el.className="";el.innerHTML="";return}
+  var names=(r.kids||[]).map(function(id){var k=S.config.kids.find(function(x){return x.id===id});return k?k.name:id}).join(" + ");
+  el.innerHTML='<div class="box"><div class="ico">⏸️</div><h1>Your movie is paused.</h1><div class="msg">You’ll get the rest of your movie time later.</div><div class="left">'+(names?names+' · ':'')+Math.max(1,Math.ceil((r.remaining_s||0)/60))+' minutes saved</div></div>';el.className="on"}
 function load(){fetch("/api/state").then(function(r){return r.json()}).then(function(S){
   if(S.music_interruption){location.replace("/music-block?back="+encodeURIComponent(location.pathname+location.search));return}
   if(S.ver_tv){if(VER0===null)VER0=S.ver_tv;else if(S.ver_tv!==VER0){location.replace(location.pathname+"?v="+Date.now());return}}
+  drawRewardPause(S);
   drawDress(S);
   var h="",ear=S.earned||{},top=Math.max.apply(null,S.config.kids.map(function(k){return S.balance[k.id]})),tope=Math.max.apply(null,S.config.kids.map(function(k){return ear[k.id]||0}));
   S.config.kids.forEach(function(k){var b=S.balance[k.id],p=(S.pending_points||{})[k.id]||0,G=goalOf(S,k.id),gc=G.cost;
