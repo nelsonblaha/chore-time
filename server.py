@@ -2996,6 +2996,12 @@ def watch_ha_events():
                     await ws.recv()
                     await ws.send(json.dumps({"type": "auth", "access_token": tok}))
                     await ws.recv()
+                    # REST-created sensors disappear across an HA restart. A
+                    # fresh event socket proves HA is back, so republish one
+                    # complete revision even when the chore data did not change.
+                    GUARD.pop("state_sig", None)
+                    GUARD.pop("demo_sig", None)
+                    threading.Thread(target=push_state_sensor, daemon=True).start()
                     await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "mobile_app_notification_action"}))
                     if entry_doors:
                         await ws.send(json.dumps({"id": 2, "type": "subscribe_events", "event_type": "state_changed"}))
