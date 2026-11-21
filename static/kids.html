@@ -772,6 +772,11 @@ function renderKid(){
   var RR=(S.reward_ready||{})[kid]||{},RF=((S.refundable||{})[kid]||[]);
   var rfh=RF.map(function(x){var left=Math.max(0,Math.ceil(x.ts+120-Date.now()/1000));return '<div class="rw" style="background:#fff3e0;border:3px solid #ff9800"><div class="ic">'+E(x.reward_icon||"21a9")+'</div><div style="flex:1;font-size:18px;font-weight:900">'+safeText(x.reward_name||x.reward)+'<br><span style="font-size:15px">Undo for <span class="cdk" data-ready="'+(x.ts+120)+'">'+Math.floor(left/60)+':'+('0'+left%60).slice(-2)+'</span></span></div><div class="btn" data-refund="'+x.id+'" style="font-size:20px;font-weight:900;padding:8px 12px;background:#ffe0b2">'+E("21a9")+' Refund</div></div>'}).join("");
   var myTv=[];Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(tid){((S.tv.tvs[tid].grants)||[]).forEach(function(g){if(g.kid===kid&&g.what!=="vr")myTv.push({tid:tid,g:g})})});
+  var joinh="";Object.keys((S.tv&&S.tv.tvs)||{}).forEach(function(tid){((S.tv.tvs[tid].reward_audiences)||[]).forEach(function(a){
+    if(a.state!=="active"||(a.expected_kids||[]).indexOf(kid)>=0||["show","movie","games"].indexOf(a.reward)<0)return;
+    var r=S.config.rewards.find(function(x){return x.id===a.reward});if(!r)return;var names=(a.expected_kids||[]).map(function(k){return KI2(k).name}).join(" + ");
+    joinh+='<div class="rw" style="background:#e3f2fd;border:3px solid #1e88e5"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.2">Join '+safeText(names)+'<br><span style="font-size:15px">'+safeText(tvShort(tid))+' &middot; same end time</span></div><div class="btn" data-join="'+safeText(a.session_id)+'" data-jtv="'+safeText(tid)+'" style="font-size:20px;font-weight:900;padding:8px 12px;background:#bbdefb">'+E("1f465")+' Join</div></div>';
+  })});
   var tvh="";myTv.forEach(function(m){var nm=tvShort(m.tid);
     tvh+='<div class="rw" style="background:#e8f5e9;border:3px solid #43a047"><div class="ic">'+E("1f4fa")+'</div><div style="flex:1;font-size:18px;font-weight:900;line-height:1.2">'+nm+' TV<br>'+
       (m.g.armed?'<span style="font-size:15px">starts when you watch</span>':(function(){var tot=Math.max(60,m.g.until-(m.g.start||m.g.until-1800)),lft=Math.max(0,m.g.until-Date.now()/1000);
@@ -792,8 +797,9 @@ function renderKid(){
   if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
   var RWL=rw.split("\u0001").filter(Boolean),RPER=tvh?3:4,rpages=Math.max(1,Math.ceil(RWL.length/RPER));if(RWP>=rpages)RWP=rpages-1;
   var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&!pastCutoff(r.before,r.before_from)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
-  $("tvnow").innerHTML=rfh+tvh;
+  $("tvnow").innerHTML=rfh+joinh+tvh;
   document.querySelectorAll("[data-refund]").forEach(function(n){n.onclick=function(e){e.stopPropagation();refundAsk(n.dataset.refund)}});
+  document.querySelectorAll("[data-join]").forEach(function(n){n.onclick=function(e){e.stopPropagation();joinReward(n.dataset.join,n.dataset.jtv)}});
   setTimeout(function(){if($("cfban"))$("cfban").onclick=function(e){e.stopPropagation();if(RFIRST.chore)askChore(RFIRST.chore);else cleanupModal()}},0);   // TV time running stays in sight even when Buy is folded
   $("rewards").innerHTML=banner+RWL.slice(RWP*RPER,RWP*RPER+RPER).join("");$("rwpg").innerHTML=pagerSm("rw",RWP,rpages);
   $("buybody").style.display=FOLD.buy?"":"none";$("buychev").innerHTML=FOLD.buy?"&#9650;":"&#9660;";
@@ -1607,31 +1613,49 @@ function askSpend(rid){L("ask_spend",{reward:rid,balance:S&&kid?S.balance[kid]:n
   $("sn").onclick=closeModal;
   $("sy").onclick=function(){buy(r,null)};
 }
+// Shared rewards are a small consent ceremony: every child enters their own PIN on this Hub.
+// Only the resulting short-lived session tokens reach the spend/join endpoint; PINs are never retained.
+function sharedRewardPins(participants,done){
+  if(HA_MODE){modal('<div class="big">'+E("1f4fa")+E("1f512")+'</div><div class="q">Use a Nest Hub to share</div><div class="q" style="font-size:25px">Both kids need to enter their own PINs on the same screen.</div>');addOk();return}
+  var tokens={},at=0;
+  function next(){if(at>=participants.length){done(tokens);return}var id=participants[at++],who=KI2(id),sub="Child "+at+" of "+participants.length+" — hand the screen to "+who.name;
+    function unlock(pin,fail){busy=true;api("/api/kid_unlock",{kid:id,pin:pin||undefined}).then(function(r){busy=false;if(!r.ok){fail(r.error);return}tokens[id]=r.kid_session;next()}).catch(function(){busy=false;fail("Try again.")})}
+    if(who.pin_required)pinPad(who,who.name+"'s PIN",sub,unlock);
+    else{modal('<div class="big">'+E(who.icon)+E("1f91d")+'</div><div class="q">'+safeText(who.name)+' confirms sharing</div><div class="faces"><div class="btn yes" id="shareconfirm">'+E("2705")+' I agree</div></div>');$("shareconfirm").onclick=function(){unlock(null,function(){})}}
+  }
+  next()
+}
+function joinReward(session,tv){
+  var a=(((S.tv||{}).tvs||{})[tv]||{}).reward_audiences||[];a=a.find(function(x){return x.session_id===session});if(!a)return;
+  var r=S.config.rewards.find(function(x){return x.id===a.reward});if(!r)return;var participants=(a.expected_kids||[]).concat([kid]),each=costFor(r,participants.length),remaining=Math.max(1,Math.ceil((a.valid_until-S.now)/60));
+  modal('<div class="big">'+E(r.icon)+E("1f465")+'</div><div class="q">Join '+safeText((a.expected_kids||[]).map(function(k){return KI2(k).name}).join(" + "))+'?</div><div class="q" style="font-size:26px">Everyone enters their own PIN. You pay '+each+' '+E("2b50")+'. Existing buyers automatically get any shared-price difference back.</div><div class="q" style="font-size:24px;opacity:.8">'+E("23f1")+' About '+remaining+' minutes remain. Joining adds no time.</div><div class="faces"><div class="btn yes" id="joingo">'+E("1f465")+' Use everyone\'s PINs</div><div class="btn no" id="joinno">Cancel</div></div>');
+  $("joinno").onclick=closeModal;$("joingo").onclick=function(){sharedRewardPins(participants,function(tokens){busy=true;modal('<div class="big">'+E(r.icon)+E("23f3")+'</div><div class="q">Joining the same '+safeText(r.name.toLowerCase())+'…</div>');api("/api/reward_join",{kid:kid,session_id:session,kid_sessions:tokens}).then(function(res){busy=false;if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+safeText(res.error||"Could not join")+'</div>');addOk();return}S=res.state;var refunds=Object.keys(res.refunds||{}).filter(function(k){return res.refunds[k]>0}).map(function(k){return KI2(k).name+' got '+res.refunds[k]+' '+E("2b50")+' back'}).join("<br>");modal('<div class="celebrate"><div class="big">'+E(r.icon)+E("1f465")+'</div><div class="q">Now sharing!</div><div class="q" style="font-size:27px">'+participants.map(function(k){return E(KI2(k).icon)+' '+safeText(KI2(k).name)}).join(" + ")+'</div>'+(refunds?'<div class="q" style="font-size:24px">'+refunds+'</div>':'')+'<div class="q" style="font-size:22px;opacity:.8">The original end time did not change.</div></div>');confetti(260);addOk(function(){renderKid();syncTimers()})}).catch(function(){busy=false;modal('<div class="big">'+E("1f6ab")+'</div><div class="q">Could not join. Try again.</div>');addOk()})})}
+}
 // be honest about who is watching. Together = everyone watching pays, one shared clock.
 // Separate shows on the same TV run one after the other.
 function whoWatches(r,tv){L("who_watches_open",{reward:r.id,tv:tv});
-  var others=S.config.kids.filter(function(k){return k.id!==kid}),sel={};
-  modal('<div class="big">'+E(r.icon)+'</div><div class="q">Who is watching?</div>'+
+  var home=S.present_kids||[],others=S.config.kids.filter(function(k){return k.id!==kid&&(!home.length||home.indexOf(k.id)>=0)}),sel={},verb=r.id==="games"?"playing":"watching",go=r.id==="games"?"Play":"Watch";
+  modal('<div class="big">'+E(r.icon)+'</div><div class="q">Who is '+verb+'?</div>'+
     '<div class="faces"><div class="btn" id="wme" style="font-size:34px;font-weight:900;padding:12px 24px'+((S.balance[kid]||0)<r.cost?';opacity:.4':'')+'">'+E(KI2(kid).icon)+'<span class="lbl">Just me'+((S.balance[kid]||0)<r.cost?'<br><span style="font-size:18px">needs '+r.cost+' '+E("2b50")+'</span>':'')+'</span></div>'+
     '<div class="btn" id="wtog" style="font-size:34px;font-weight:900;padding:12px 24px;background:#e3f2fd;border:5px solid #64b5f6">'+E("1f465")+'<span class="lbl">Together</span></div></div>'+
-    '<div class="q" style="font-size:22px;opacity:.75">'+E("1f440")+' Watching together? '+togetherLine(r)+'</div>');
+    '<div class="q" style="font-size:22px;opacity:.75">'+E("1f440")+' Together? '+togetherLine(r)+'</div>');
   $("wme").onclick=function(){if((S.balance[kid]||0)<r.cost){wobble();return}L("who_watches",{who:"me"});buy(r,tv)};
   $("wtog").onclick=function(){L("who_watches",{who:"together"});
     function draw(){var n=1+Object.keys(sel).length,each=costFor(r,Math.max(2,n));
-      modal('<div class="q">'+E("1f465")+' Who is watching with you?</div><div class="toygrid">'+others.map(function(k){
+      modal('<div class="q">'+E("1f465")+' Who is '+verb+' with you?</div><div class="toygrid">'+others.map(function(k){
         var bal=S.balance[k.id]||0,rr=((S.reward_ready||{})[k.id]||{})[r.id],need=costFor(r,sel[k.id]?n:n+1),why=((S.must_do_first||{})[k.id]||{}).rewards?E("1f4da")+" homework first":((S.chores_first||{})[k.id]||{}).on?E("1f9f9")+" chores first":bal<need?"needs "+(need-bal)+" more "+E("2b50"):(rr&&rr>S.now)?E("1f634")+" break":"";
         return '<div class="toyb" data-w="'+k.id+'" style="'+(sel[k.id]?"border:6px solid "+k.color+";background:#fff":"")+(why?";opacity:.45":"")+'">'+E(k.icon)+'<span class="lbl">'+k.name+(sel[k.id]?" "+E("2705"):"")+(why?'<br><span style="font-size:18px">'+why+'</span>':'')+'</span></div>'}).join("")+'</div>'+
       '<div class="q" style="font-size:24px">'+[kid].concat(Object.keys(sel)).map(function(m){return E(KI2(m).icon)+' '+each+E("2b50")}).join(" &nbsp; ")+'</div>'+
-      '<div class="faces"><div class="btn yes" id="wgo" style="font-size:36px;font-weight:900;padding:12px 26px'+(Object.keys(sel).length?'':';opacity:.4')+'">'+E("25b6")+' Watch together</div></div>');
+      '<div class="faces"><div class="btn yes" id="wgo" style="font-size:36px;font-weight:900;padding:12px 26px'+(Object.keys(sel).length?'':';opacity:.4')+'">'+E("25b6")+' '+go+' together</div></div>');
       document.querySelectorAll("#mbox [data-w]").forEach(function(n){n.onclick=function(){var k=n.dataset.w,bal=S.balance[k]||0,rr=((S.reward_ready||{})[k]||{})[r.id];
-        if((!sel[k]&&bal<costFor(r,n+1))||(rr&&rr>S.now)||((S.chores_first||{})[k]||{}).on){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
-      $("wgo").onclick=function(){var ks=Object.keys(sel),c_=costFor(r,1+ks.length);if(!ks.length||[kid].concat(ks).some(function(m){return (S.balance[m]||0)<c_})){wobble();return}buy(r,tv,ks)}}
+        var count=1+Object.keys(sel).length+(sel[k]?0:1);if((!sel[k]&&bal<costFor(r,count))||(rr&&rr>S.now)||((S.chores_first||{})[k]||{}).on){wobble();return}if(sel[k])delete sel[k];else sel[k]=1;draw()}});
+      $("wgo").onclick=function(){var ks=Object.keys(sel),c_=costFor(r,1+ks.length);if(!ks.length||[kid].concat(ks).some(function(m){return (S.balance[m]||0)<c_})){wobble();return}sharedRewardPins([kid].concat(ks),function(tokens){buy(r,tv,ks,null,tokens)})}}
     draw()}}
 function requestRewardConsent(r){if(busy)return;busy=true;modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">Sending your request…</div>');api("/api/reward_consent_request",{kid:kid,reward:r.id}).then(function(res){busy=false;
   if(!res.ok){modal('<div class="big">'+E("23f3")+'</div><div class="q">'+safeText(res.error||"Ask later")+'</div>');addOk();return}
   modal('<div class="big">'+E(r.icon)+E("1f9d1")+'</div><div class="q">Waiting for a grown-up</div><div class="q" style="font-size:25px">Your stars have not been spent. They have up to 10 minutes to answer.</div><div class="faces"><div class="btn no" id="vrcancel" style="font-size:26px;padding:8px 16px">Cancel request</div></div>');var stopped=false,cancel=function(){if(stopped)return;stopped=true;api("/api/adult_request_cancel",{kid:kid,nonce:res.nonce}).then(function(){closeModal()})};$("mx").onclick=cancel;$("vrcancel").onclick=cancel;
   (function poll(){if(stopped)return;setTimeout(function(){api("/api/adult_status",{nonce:res.nonce}).then(function(x){if(stopped)return;if(x.status==="pending")return poll();if(x.state)S=x.state;if(x.status==="ok"){modal('<div class="big">'+E("2705")+E(r.icon)+'</div><div class="q">A grown-up said yes!</div><div class="q" style="font-size:26px">Tap below to spend '+r.cost+' '+E("2b50")+'.</div><div class="faces"><div class="btn yes" id="vrbuy">Buy '+r.name+'</div></div>');$("vrbuy").onclick=function(){buy(r,null,[],res.nonce)}}else if(x.status==="timeout"){modal('<div class="big">'+E("23f3")+'</div><div class="q">No grown-up answered yet</div><div class="q" style="font-size:25px">Your stars are still yours. You can ask again.</div>');addOk()}else if((S.adult_busy_until||0)<=S.now){modal('<div class="big">'+E("23f3")+'</div><div class="q">That grown-up is busy</div><div class="q" style="font-size:25px">Your stars are still yours. You can ask another grown-up now.</div><div class="faces"><div class="btn yes" id="vragain">Ask another</div></div>');$("vragain").onclick=function(){requestRewardConsent(r)}}else{modal('<div class="big">'+E("23f3")+'</div><div class="q">Every grown-up is busy</div><div class="q" style="font-size:25px">Requests come back when someone is available. Your stars are still yours.</div>');addOk()}})},1500)})()}).catch(function(){busy=false;modal('<div class="big">'+E("26a0")+'</div><div class="q">The request did not send</div><div class="q" style="font-size:25px">Your stars are still yours. Try again.</div>');addOk()})}
-function buy(r,tv,withKids,consent){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[],consent:consent||undefined}).then(function(res){busy=false;
+function buy(r,tv,withKids,consent,kidSessions){L("buy",{reward:r.id,tv:tv,with:withKids||[]});{if(busy)return;busy=true;api("/api/spend",{kid:kid,reward:r.id,tv:tv,"with":withKids||[],consent:consent||undefined,kid_sessions:kidSessions||undefined}).then(function(res){busy=false;
     if(!res.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(res.error||"Can't buy that")+'</div>');addOk();return}S=res.state;boughtHere[res.event.id]=1;
     if(res.event.await_ok){confetti(120);modal('<div class="big">'+E(r.icon)+E("1f64b")+'</div><div class="q">'+r.name+' is yours! Go get a grown-up to help you set it up.</div><div class="q" style="font-size:26px;opacity:.85">'+E("23f1")+' Your '+(r.minutes||"")+' minutes start when they say go.</div>');offerRefund(res.event.id);addOk(function(){renderKid()});return}
     var tog=(withKids||[]).length?'<div class="q" style="font-size:28px">'+E("1f465")+' '+[kid].concat(withKids).map(function(m){return E(KI2(m).icon)+' '+KI2(m).name}).join(" + ")+'</div>':'';

@@ -122,6 +122,7 @@ HA_URL = os.environ.get("HA_URL", HA.get("url", ""))
 HA_TOKEN_FILE = house_path(os.environ.get("HA_TOKEN_FILE") or HA.get("token_file")) or (DATA / "ha-token")
 LOCK = threading.Lock()
 PROJECT_LOCK = threading.Lock()
+SHARED_REWARD_LOCK = threading.Lock()
 CT_SWITCH = HA.get("chore_time_switch", "input_boolean.chore_time")      # mirrors chore time in HA
 CT_HOURS = HA.get("chore_time_hours", "input_number.chore_time_hours")
 RELAY_TEXT = HA.get("relay_text", "input_text.chore_action")              # HA dashboards post actions here
@@ -1535,6 +1536,13 @@ def valid_kid_session(token, kid, ip, now=None):
     return row.get("kid") == kid and row.get("ip") == ip and float(row.get("until") or 0) > now
 
 
+def valid_shared_reward_sessions(body, participants, ip):
+    """Require a fresh, display-bound identity session for every child being charged."""
+    supplied = body.get("kid_sessions") or {}
+    return isinstance(supplied, dict) and all(valid_kid_session(supplied.get(kid), kid, ip)
+                                               for kid in participants)
+
+
 def active_peer_pin_reset(now=None):
     now = time.time() if now is None else float(now)
     for nonce, row in list(PEER_PIN_RESETS.items()):
@@ -1788,7 +1796,8 @@ def derive():
     undone = {e["ref"] for e in raw_evs if e["type"] == "undo"}
     refundable = {k["id"]: [] for k in c["kids"]}
     for e in raw_evs:
-        if e["type"] == "spend" and e["id"] not in undone and not e.get("with_buyer") and time.time() - e["ts"] <= 120:
+        if e["type"] == "spend" and e["id"] not in undone and not e.get("with_buyer") \
+                and e.get("by") != "share_join" and time.time() - e["ts"] <= 120:
             refundable.setdefault(e["kid"], []).append({k: e.get(k) for k in ("id", "ts", "reward", "reward_name", "reward_icon", "cost", "tv", "group")})
     evs = [e for e in raw_evs if e["id"] not in undone]
     chores = {x["id"]: x for x in c["chores"]}
@@ -2198,7 +2207,7 @@ def derive():
         row, prev_end, brk = 0, 0, 0
         for e in sorted([e for e in evs if e["type"] == "spend" and e.get("kid") == k and e.get("reward") in ("show", "movie", "games")],
                         key=lambda e: e["ts"]):
-            st0 = started_.get(e["id"]) or e["ts"]
+            st0 = started_.get(e["id"]) or e.get("started_at") or e["ts"]
             mins = mins_ov.get(e["id"]) or e.get("minutes") or rwmap.get(e["reward"], {}).get("tv_minutes") or 30
             end = st0 + mins * 60
             if e["ts"] - prev_end >= 3600 or (brk and e["ts"] >= brk):
@@ -4216,6 +4225,13 @@ class H(BaseHTTPRequestHandler):
             # "Watching together": everyone watching pays, and they share one clock
             with_ = [k for k in dict.fromkeys(b.get("with") or []) if k in kids and k != b["kid"]] \
                 if b["reward"] in ("show", "movie", "games") else []
+            participants_ = [b["kid"]] + with_
+            if with_ and not valid_shared_reward_sessions(b, participants_, self.client_address[0]):
+                return self.send(403, {"error": "Everyone watching or playing together must enter their own PIN."})
+            if with_ and any(not is_here(rewards[b["reward"]], c, wk) for wk in participants_):
+                return self.send(409, {"error": "Everyone sharing this reward must be at this house."})
+            if with_ and st.get("present_kids") and any(wk not in st["present_kids"] for wk in participants_):
+                return self.send(409, {"error": "Everyone sharing this reward must be home."})
             cost = reward_cost(rewards[b["reward"]], 1 + len(with_))
             kname = {k["id"]: k["name"] for k in c["kids"]}
             for wk in [b["kid"]] + with_:
@@ -4254,6 +4270,85 @@ class H(BaseHTTPRequestHandler):
                 append({"type": "spend", "kid": wk, "reward": b["reward"], "cost": cost, **tvx, **grp, "with_buyer": b["kid"],
                         "reward_name": rewards[b["reward"]]["name"], "reward_icon": rewards[b["reward"]]["icon"]})
             ev = dict(ev, queued=queued)
+        elif p == "/api/reward_join":
+            joiner_ = b.get("kid")
+            if joiner_ not in kids:
+                return self.send(400, {"error": "unknown kid"})
+            with SHARED_REWARD_LOCK:
+                # Re-read inside the join lock so two simultaneous taps cannot both replace the same session.
+                raw_ = read_events()
+                live_ = [(tid_, u_) for tid_, rows_ in active_unlocks_raw(raw_).items() for u_ in rows_
+                         if (u_.get("group") or u_["id"]) == b.get("session_id")]
+                if not live_:
+                    return self.send(409, {"error": "That reward is no longer playing."})
+                tids_ = {tid_ for tid_, _ in live_}
+                reward_ids_ = {u_["what"] for _, u_ in live_}
+                if len(tids_) != 1 or len(reward_ids_) != 1 or not reward_ids_ <= {"show", "movie", "games"}:
+                    return self.send(409, {"error": "That reward cannot be joined."})
+                if any(u_.get("armed") for _, u_ in live_):
+                    return self.send(409, {"error": "Wait until it starts playing, then join."})
+                current_ = list(dict.fromkeys(u_["kid"] for _, u_ in live_))
+                if joiner_ in current_:
+                    return self.send(409, {"error": "You are already sharing this reward."})
+                participants_ = current_ + [joiner_]
+                if not valid_shared_reward_sessions(b, participants_, self.client_address[0]):
+                    return self.send(403, {"error": "Everyone sharing must enter their own PIN."})
+                reward_id_ = next(iter(reward_ids_))
+                reward_ = rewards.get(reward_id_)
+                fresh_ = derive()
+                if not reward_ or not is_here(reward_, c, joiner_):
+                    return self.send(409, {"error": "That reward is at the other house."})
+                if fresh_.get("present_kids") and joiner_ not in fresh_["present_kids"]:
+                    return self.send(409, {"error": "You must be home to join."})
+                reward_block_ = reward_block_state(fresh=True)
+                if reward_block_["on"]:
+                    return self.send(409, {"error": reward_block_["items"][0]["message"]})
+                if fresh_["bedtime"]["on"] or reward_closed(reward_):
+                    return self.send(409, {"error": "That reward is not available now."})
+                if (fresh_.get("dress") or {}).get("on") and (fresh_["dress"]["kids"].get(joiner_) or "ready") != "ready":
+                    return self.send(409, {"error": "Put on your clothes first!"})
+                if ((fresh_.get("must_do_first") or {}).get(joiner_) or {}).get("rewards"):
+                    return self.send(409, {"error": "Finish your mandatory chore before joining."})
+                if ((fresh_.get("chores_first") or {}).get(joiner_) or {}).get("on"):
+                    return self.send(409, {"error": "Finish your chores-first job before joining."})
+                ready_ = (fresh_.get("reward_ready") or {}).get(joiner_, {}).get(reward_id_, 0)
+                if ready_ > time.time():
+                    return self.send(409, {"error": "You need a screen break before joining.", "ready_at": ready_})
+
+                spend_by_id_ = {e_["id"]: e_ for e_ in raw_ if e_.get("type") == "spend"}
+                old_spends_ = [spend_by_id_[u_["id"]] for _, u_ in live_ if u_["id"] in spend_by_id_]
+                old_spends_ = list({e_["id"]: e_ for e_ in old_spends_}.values())
+                if len(old_spends_) != len(current_):
+                    return self.send(409, {"error": "That reward changed. Refresh and try again."})
+                new_cost_ = reward_cost(reward_, len(participants_))
+                old_costs_ = {e_["kid"]: int(e_["cost"]) for e_ in old_spends_}
+                for wk_ in participants_:
+                    adjustment_ = new_cost_ - old_costs_.get(wk_, 0)
+                    if fresh_["balance"].get(wk_, 0) < adjustment_:
+                        name_ = next((x_["name"] for x_ in c["kids"] if x_["id"] == wk_), wk_)
+                        return self.send(409, {"error": name_ + " does not have enough points to share."})
+
+                started_at_ = min(u_.get("start") or u_["ts"] for _, u_ in live_)
+                until_ = min(u_["until"] for _, u_ in live_)
+                tv_ = next(iter(tids_))
+                new_group_ = uuid.uuid4().hex[:12]
+                primary_ = current_[0]
+                for old_ in old_spends_:
+                    append({"type": "undo", "ref": old_["id"], "by": "share_join"})
+                made_ = []
+                for wk_ in participants_:
+                    made_.append(append({"type": "spend", "kid": wk_, "reward": reward_id_, "cost": new_cost_,
+                                         "tv": tv_, "until": until_, "minutes": reward_.get("tv_minutes"),
+                                         "started_at": started_at_, "group": new_group_, "together": participants_,
+                                         "by": "share_join", **({"with_buyer": primary_} if wk_ != primary_ else {}),
+                                         "reward_name": reward_["name"], "reward_icon": reward_["icon"]}))
+                refunds_ = {wk_: max(0, old_costs_.get(wk_, 0) - new_cost_) for wk_ in current_}
+                ev = made_[-1]
+                after_change()
+                ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev,
+                      "session": b.get("session_id"), "participants": participants_})
+                return self.send(200, {"ok": True, "event": ev, "state": derive(), "refunds": refunds_,
+                                       "cost_each": new_cost_, "valid_until": until_, "participants": participants_})
         elif p == "/api/inspect":
             reps = {r["id"]: r for r in st["history"] if r.get("type") == "report"}
             r = reps.get(b.get("ref"))
@@ -5455,7 +5550,7 @@ def tv_grants(evs, now=None):
             for tid in (list(TVS) if tvsel == "*" or (e["reward"] == "vr" and tvsel not in TVS) else [tvsel]):
                 if tid in g:
                     g[tid].append({"id": e["id"], "ts": e["ts"], "until": until, "kinds": sorted(kinds), "kid": e["kid"],
-                                   "start": started.get(e["id"]) or e["ts"],
+                                   "start": started.get(e["id"]) or e.get("started_at") or e["ts"],
                                    "what": e["reward"], "by": e.get("by") or e["kid"], "armed": armed, "group": e.get("group"), "mins": m,
                                    "maxdur": None if e.get("minutes") else maxdur})
         elif e["type"] == "tv_unlock":

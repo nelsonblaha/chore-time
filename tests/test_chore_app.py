@@ -130,6 +130,15 @@ class App:
     def event(self, **ev):
         return self.s.append(ev)
 
+    def kid_sessions(self, *kids, pins=None):
+        """Fresh, same-display identity tokens for shared reward tests."""
+        out = {}
+        for kid in kids:
+            code, reply = self.post("/api/kid_unlock", {"kid": kid, **({"pin": pins[kid]} if pins else {})})
+            assert code == 200, (code, reply)
+            out[kid] = reply["kid_session"]
+        return out
+
     def pass_report(self, kid, chore, points=3, **extra):
         code, r = self.post("/api/report", {"kid": kid, "chore": chore, "feeling": "ok", **extra})
         assert code == 200, (code, r)
@@ -193,6 +202,14 @@ class StaticUiRegressions(unittest.TestCase):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Choose TV &amp; viewers", html)
         self.assertIn("Choose the TV and everyone who will watch. No points are spent yet.", html)
+
+    def test_shared_screen_rewards_require_every_pin_and_can_join_without_more_time(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("sharedRewardPins([kid].concat(ks)", html)
+        self.assertIn('api("/api/reward_join"', html)
+        self.assertIn("Joining adds no time.", html)
+        self.assertIn("The original end time did not change.", html)
+        self.assertIn('data-join="', html)
 
     def test_login_coin_flip_is_separate_visual_spoken_celebration(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -800,7 +817,7 @@ class TvClocks(Case):
         for kid in ("ava", "max", "zoe"):
             a.event(type="adjust", kid=kid, points=50, by="jordan", reason="test")
         code, bought = a.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom",
-                                             "with": ["max"]})
+                                             "with": ["max"], "kid_sessions": a.kid_sessions("ava", "max")})
         self.assertEqual(code, 200, bought)
         code, queued = a.post("/api/spend", {"kid": "zoe", "reward": "show", "tv": "livingroom"})
         self.assertEqual(code, 200, queued)
@@ -3407,13 +3424,76 @@ class WatchingTogether(Case):
         for k in ("ava", "max", "zoe"):
             a.event(type="adjust", kid=k, points=12, reason="test")
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "movie"})[0], 409)   # alone: 15
-        code, r = a.post("/api/spend", {"kid": "ava", "reward": "movie", "with": ["max"]})
+        code, r = a.post("/api/spend", {"kid": "ava", "reward": "movie", "with": ["max"],
+                                               "kid_sessions": a.kid_sessions("ava", "max")})
         self.assertEqual(code, 200, r)
         b = a.state()["balance"]
         self.assertEqual((b["ava"], b["max"], b["zoe"]), (0, 0, 12))
         self.assertEqual(a.s.reward_cost(c["rewards"][1], 3), 10)
         self.assertEqual(a.s.reward_cost(c["rewards"][1], 4), 10)
         self.assertEqual(a.s.reward_cost(c["rewards"][1], 1), 15)
+
+    def test_shared_purchase_requires_every_kids_pin_session(self):
+        c = base_config()
+        next(k for k in c["kids"] if k["id"] == "ava")["pin_hash"] = self.s.make_kid_pin_hash("1111")
+        next(k for k in c["kids"] if k["id"] == "max")["pin_hash"] = self.s.make_kid_pin_hash("2222")
+        next(r for r in c["rewards"] if r["id"] == "movie")["together_cost"] = {"2": 12}
+        a = App(c)
+        self.addCleanup(a.close)
+        for kid in ("ava", "max"):
+            a.event(type="adjust", kid=kid, points=20, reason="test")
+        ava_only = a.kid_sessions("ava", pins={"ava": "1111"})
+        blocked = a.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom",
+                                                "with": ["max"], "kid_sessions": ava_only})
+        self.assertEqual(blocked[0], 403)
+        both = a.kid_sessions("ava", "max", pins={"ava": "1111", "max": "2222"})
+        bought = a.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom",
+                                               "with": ["max"], "kid_sessions": both})
+        self.assertEqual(bought[0], 200, bought[1])
+        self.assertEqual((bought[1]["state"]["balance"]["ava"], bought[1]["state"]["balance"]["max"]), (8, 8))
+
+    def test_joining_running_movie_reprices_everyone_without_extending_clock(self):
+        c = base_config()
+        next(k for k in c["kids"] if k["id"] == "ava")["pin_hash"] = self.s.make_kid_pin_hash("1111")
+        next(k for k in c["kids"] if k["id"] == "max")["pin_hash"] = self.s.make_kid_pin_hash("2222")
+        next(r for r in c["rewards"] if r["id"] == "movie")["together_cost"] = {"2": 12}
+        a = App(c)
+        self.addCleanup(a.close)
+        for kid in ("ava", "max"):
+            a.event(type="adjust", kid=kid, points=30, reason="test")
+        bought = a.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom"})[1]["event"]
+        began = time.time() - 300
+        a.event(type="tv_started", ref=bought["id"], tv="livingroom", what="stream", at=began)
+        before = next(x for x in a.state()["tv"]["tvs"]["livingroom"]["reward_audiences"]
+                      if x["session_id"] == bought["id"])
+        tokens = a.kid_sessions("ava", "max", pins={"ava": "1111", "max": "2222"})
+        code, joined = a.post("/api/reward_join", {"kid": "max", "session_id": bought["id"],
+                                                    "kid_sessions": tokens})
+        self.assertEqual(code, 200, joined)
+        self.assertEqual((joined["state"]["balance"]["ava"], joined["state"]["balance"]["max"]), (18, 18))
+        self.assertEqual(joined["refunds"], {"ava": 3})
+        audience = joined["state"]["tv"]["tvs"]["livingroom"]["reward_audiences"][0]
+        self.assertEqual(audience["expected_kids"], ["ava", "max"])
+        self.assertEqual(audience["state"], "active")
+        self.assertAlmostEqual(audience["valid_until"], before["valid_until"], delta=1)
+        self.assertAlmostEqual(audience["started_at"], began, delta=1)
+        self.assertEqual(joined["state"]["refundable"]["ava"], [])
+
+    def test_join_rejects_waiting_reward_and_missing_second_pin(self):
+        c = base_config()
+        next(k for k in c["kids"] if k["id"] == "ava")["pin_hash"] = self.s.make_kid_pin_hash("1111")
+        next(k for k in c["kids"] if k["id"] == "max")["pin_hash"] = self.s.make_kid_pin_hash("2222")
+        a = App(c)
+        self.addCleanup(a.close)
+        for kid in ("ava", "max"):
+            a.event(type="adjust", kid=kid, points=30, reason="test")
+        bought = a.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom"})[1]["event"]
+        tokens = a.kid_sessions("ava", "max", pins={"ava": "1111", "max": "2222"})
+        self.assertEqual(a.post("/api/reward_join", {"kid": "max", "session_id": bought["id"],
+                                                      "kid_sessions": tokens})[0], 409)
+        a.event(type="tv_started", ref=bought["id"], tv="livingroom", what="stream")
+        self.assertEqual(a.post("/api/reward_join", {"kid": "max", "session_id": bought["id"],
+                                                      "kid_sessions": {"max": tokens["max"]}})[0], 403)
 
 
 class AbandonedJob(Case):
