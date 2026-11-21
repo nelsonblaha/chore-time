@@ -22,7 +22,8 @@ UP = {
     "enable": "input_boolean.up_autopilot", "active": "input_boolean.up_autopilot_active", "map_flag": 1,
     "room_requests": "input_text.up_requests", "map_select": "select.up_map", "map_name": "Upstairs", "publish": "sensor.up_autopilot", "log_src": "vac_up", "tvs": [], "smart_mode": "always", "untidy_blocks": True,
     "segments": {"Hall": {"rooms": ["hall"], "mop": True}, "Bedroom": {"rooms": ["bedroom"], "chore": "bedroom"},
-                 "Bath": {"rooms": ["bath"], "mop": True}, "Study": {"rooms": ["study"]}, "Study Closet": {"rooms": ["study_closet"]}},
+                 "Bath": {"rooms": ["bath"], "mop": True}, "Study": {"rooms": ["study"]},
+                 "Study Closet": {"rooms": ["study_closet"], "access_through": ["Study"]}},
     "guest_switches": {"Bedroom": "input_boolean.bedroom_guest"},
     "approach_sensors": ["binary_sensor.stairs_motion", "binary_sensor.landing_motion"],
     "approach_rooms": ["stairs", "stairs_down"],
@@ -230,6 +231,32 @@ class Upstairs(unittest.TestCase):
         st = self.p.segment_status()
         self.assertEqual(st["Bedroom"]["why"], "a guest is staying here")
         self.assertIn("marked untidy", st["Bath"]["why"])
+
+    def test_room_behind_an_untidy_room_is_blocked_even_when_incomplete(self):
+        self.tidy["study"] = {"state": "untidy"}
+        self.p.D["incomplete"] = ["Study Closet"]
+        launch, _ = self.run_until_start()
+        self.assertNotIn("Study", launch["rooms"])
+        self.assertNotIn("Study Closet", launch["rooms"])
+        st = self.p.segment_status()
+        self.assertEqual(st["Study Closet"]["block_kind"], "transit")
+        self.assertEqual(st["Study Closet"]["blocked_by"], "Study")
+        self.assertEqual(st["Study Closet"]["why"], "behind Study, which is marked untidy")
+        self.assertFalse(st["Study Closet"]["eligible"])
+
+    def test_room_behind_a_guest_room_inherits_the_guest_block(self):
+        self.va.TRANSIT["Bath"] = ["Bedroom"]
+        self.S("input_boolean.bedroom_guest", "on")
+        st = self.p.segment_status()
+        self.assertEqual(st["Bath"]["block_kind"], "transit")
+        self.assertEqual(st["Bath"]["why"], "behind Bedroom, which has a guest staying there")
+
+    def test_untidy_dock_hub_does_not_block_the_rest_of_the_floor(self):
+        self.tidy["hall"] = {"state": "untidy"}
+        launch, _ = self.run_until_start()
+        self.assertNotIn("Hall", launch["rooms"])
+        self.assertIn("Study", launch["rooms"])
+        self.assertIn("Study Closet", launch["rooms"])
 
     def test_on_another_map_it_still_starts_and_the_clean_script_switches_maps(self):
         # the robot is switched to the right map automatically: the clean script loads map_flag's map first

@@ -226,6 +226,9 @@
         "mop": true,
         "rooms": [
           "front_hall"
+        ],
+        "access_through": [
+          "Hall"
         ]
       },
       "Hall": {

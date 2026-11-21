@@ -16,6 +16,8 @@ More robots: each gets its own copy (server loads this module once per house.jso
   guest_switches  {segment: switch}: skip a room while a guest stays there
   sleep_protection {segment: entity}: hold a room while the sleep guard is on or unavailable
   untidy_blocks   true: a room marked untidy waits until it's tidy
+  segments.<name>.access_through [segment, ...]: rooms that every route from the dock to this segment crosses;
+                  if one is blocked, the segment behind it is blocked too. Do not list the dock/hub segment.
   smart_mode      "always" | "day": the robot's own automatic mode (it picks vacuum or mop per room)
   tvs             which TVs count as someone here ([] = none on this floor)
 """
@@ -40,6 +42,7 @@ EXPLORE = {}
 SEGMENTS = []
 SEG_ROOMS = {}   # segment -> floor-plan room ids it covers (house.json segments.<seg>.rooms)
 SEG_CHORE = {}   # robot segment name -> chore whose passed tidy makes it eligible (others: never automatic)
+TRANSIT = {}     # segment -> robot rooms every route from the dock to it must cross
 MOP = set()      # segments that get vacuum + mop; the rest vacuum only
 SENSORS = {}     # person-evidence sensor -> the segment it sits in (the robot trips its own room's sensors)
 HELD = set()     # of those, sensors whose On holds for many minutes (a thermostat's motion): only the turn-on counts
@@ -56,7 +59,7 @@ SMART = None     # "always" | "day": the robot's own automatic mode (it picks va
 def configure(v):
     """v = house.json "vacuum" section."""
     global VAC, ROOM_SENSOR, STATUS, BATTERY, ERROR, IN_CLEAN, MODE_SEL, ENABLE, ACTIVE, UPSTAIRS, CLEAN_SCRIPT, MAP_FLAG
-    global SEG_CHORE, MOP, SENSORS
+    global SEG_CHORE, TRANSIT, MOP, SENSORS
     VAC, ROOM_SENSOR, STATUS = v["vacuum"], v["room_sensor"], v.get("status")
     BATTERY, ERROR, IN_CLEAN, MODE_SEL = v.get("battery"), v.get("error"), v["cleaning"], v["mode_select"]
     ENABLE, ACTIVE = v["enable"], v["active"]
@@ -72,6 +75,8 @@ def configure(v):
     SEGMENTS = list(v.get("segments") or {})   # every robot room gets the every_h goal
     global SEG_ROOMS
     SEG_ROOMS = {seg: list(x["rooms"]) for seg, x in (v.get("segments") or {}).items() if x.get("rooms")}
+    TRANSIT = {seg: list(x.get("access_through") or []) for seg, x in (v.get("segments") or {}).items()
+               if x.get("access_through")}
     MOP = {seg for seg, x in (v.get("segments") or {}).items() if x.get("mop")}
     SENSORS = dict(v.get("sensors") or {})
     global HELD
@@ -736,6 +741,36 @@ class Pilot:
                 d["explore"] = True   # untidy, and not held back for any other reason
                 d["why"] += " · the robot may explore it to check tidiness while the kids are home"
             out[seg] = d
+
+        # A target can be tidy itself yet physically unreachable without crossing another blocked robot room.
+        # `access_through` names only unavoidable transit rooms; alternate routes therefore stay usable. Propagate
+        # transit blocks so a closet behind a blocked room behind another blocked room is also held. The dock/hub
+        # room is deliberately not implicit: it should simply be omitted from access_through.
+        for _ in range(len(out)):
+            changed = False
+            for seg, through in TRANSIT.items():
+                if seg not in out or out[seg].get("blocked"):
+                    continue
+                blocker = next((name for name in through if (out.get(name) or {}).get("blocked")), None)
+                if not blocker:
+                    continue
+                source = out[blocker]
+                root = source.get("transit_root") or blocker
+                kind = source.get("transit_block_kind") or source.get("block_kind")
+                detail = {
+                    "untidy": "is marked untidy",
+                    "guest": "has a guest staying there",
+                    "sleep": "is protected for sleep",
+                    "chore": "has a kid's job in progress or waiting for a check",
+                }.get(kind, "is blocked")
+                row = out[seg]
+                row.update(eligible=False, blocked=True, block_kind="transit", blocked_by=blocker,
+                           transit_root=root, transit_block_kind=kind,
+                           why="behind %s, which %s" % (root, detail))
+                row.pop("explore", None)
+                changed = True
+            if not changed:
+                break
         return out
 
     def nightly_ref(self, after):
