@@ -6,7 +6,9 @@ import importlib.util
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -67,6 +69,7 @@ class Upstairs(unittest.TestCase):
         p = self.va.Pilot.__new__(self.va.Pilot)
         p.g, p.path, p.tok, p.last_pub = g, self.tmp / "v.json", "x", None
         p.D = {"visits": {}, "phase": "idle", "runs": []}
+        p.lock = threading.RLock()
         self.p = p
 
     def tearDown(self):
@@ -286,6 +289,12 @@ class Upstairs(unittest.TestCase):
     def button(self, gesture="single", rooms=None, request_id="press-1"):
         return self.p.button_request({"gesture": gesture, "rooms": rooms or [], "request_id": request_id})
 
+    def clean_now(self, gesture="single", rooms=None, request_id="press-1"):
+        """Two distinct physical events: first marks vacancy, second promotes to immediate work."""
+        first = self.button(gesture, rooms, request_id + "-vacant")
+        self.assertEqual(first["action"], "queued_when_vacant")
+        return self.button(gesture, rooms, request_id)
+
     def finish_manual_clean(self):
         self.S("vacuum.up", "cleaning")
         self.S("binary_sensor.up_cleaning", "on")
@@ -298,50 +307,59 @@ class Upstairs(unittest.TestCase):
         self.tick(10)
         self.tick(61)                                                # one minute docked confirms completion
 
-    def test_physical_button_fifo_is_durable_idempotent_and_runs_in_order(self):
+    def test_physical_button_first_marks_vacancy_retry_is_idempotent_and_second_event_promotes(self):
         one = self.button(rooms=["Bath"], request_id="one")
-        two = self.button("double", ["Hall"], "two")
-        self.assertTrue(one["ok"] and two["ok"])
-        self.assertEqual(self.button(rooms=["Bedroom"], request_id="one")["why"], "already queued")
-        self.assertEqual([x["id"] for x in self.p.D["manual_queue"]], ["one", "two"])
+        self.assertEqual(one["action"], "queued_when_vacant")
+        self.assertEqual(self.button(rooms=["Bedroom"], request_id="one"), one)
+        self.assertEqual(self.p.D["manual_queue"], [])
+        two = self.button(rooms=["Bath"], request_id="two")
+        self.assertEqual(two["action"], "clean_now_queued")
+        self.assertEqual([x["id"] for x in self.p.D["manual_queue"]], ["two"])
         self.p.save()
-        self.assertEqual([x["id"] for x in __import__("json").loads(self.p.path.read_text())["manual_queue"]], ["one", "two"])
+        saved = __import__("json").loads(self.p.path.read_text())
+        self.assertEqual([x["id"] for x in saved["manual_queue"]], ["two"])
+        self.assertEqual(saved["manual_seen"]["one"]["response"], one)
 
         calls = self.tick()
         launch = next(d for svc, d in calls if svc == "script.vacuum_clean_rooms")
         self.assertEqual(launch["rooms"], ["Bath"])
-        self.assertEqual(self.p.D["manual_active"], "one")
-        self.finish_manual_clean()
-        self.assertEqual([x["id"] for x in self.p.D["manual_queue"]], ["two"])
-        launch = next(d for svc, d in self.tick() if svc == "script.vacuum_clean_rooms")
-        self.assertEqual(launch["rooms"], ["Hall"])
+        self.assertEqual(self.p.D["manual_active"], "two")
 
-    def test_button_deduplicates_rooms_already_active_or_queued(self):
+    def test_button_merges_vacancy_rooms_then_promotes_only_when_all_are_already_flagged(self):
         self.button(rooms=["Bath"], request_id="one")
         result = self.button("double", ["Bath", "Hall"], "two")
-        self.assertEqual(result["rooms"], ["Bath", "Hall"])
-        self.assertIn("already pending Bath", result["why"])
-        self.assertEqual([x["rooms"] for x in self.p.D["manual_queue"]], [["Bath"], ["Hall"]])
-        again = self.button(rooms=["Bath"], request_id="three")
-        self.assertEqual(again["rooms"], ["Bath"])
-        self.assertEqual(again["why"], "already pending: Bath")
-        self.assertEqual(len(self.p.D["manual_queue"]), 2)
+        self.assertEqual(result["action"], "queued_when_vacant")
+        self.assertEqual(set(self.p.room_requests()), {"Bath", "Hall"})
+        promoted = self.button("double", ["Bath", "Hall"], "three")
+        self.assertEqual(promoted["action"], "clean_now_queued")
+        self.assertEqual([x["rooms"] for x in self.p.D["manual_queue"]], [["Bath", "Hall"]])
 
-    def test_fifo_never_preempts_another_clean_pause_return_or_dock_break(self):
-        self.button(rooms=["Bath"])
-        for state, cleaning in (("cleaning", "on"), ("paused", "on"), ("returning", "on"), ("docked", "on")):
-            self.S("vacuum.up", state)
-            self.S("binary_sensor.up_cleaning", cleaning)
-            calls = self.tick()
-            self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
-            self.assertNotIn("vacuum.return_to_base", [svc for svc, _ in calls])
-        self.S("binary_sensor.up_cleaning", "off")
-        calls = self.tick()
-        self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
+    def test_two_simultaneous_distinct_events_are_atomic_and_retry_replays_first_result(self):
+        gate = threading.Barrier(2)
+        def press(request_id):
+            gate.wait()
+            with self.p.lock:
+                return request_id, self.button(rooms=["Bath"], request_id=request_id)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = dict(pool.map(press, ("race-a", "race-b")))
+        self.assertEqual({r["action"] for r in results.values()}, {"queued_when_vacant", "clean_now_queued"})
+        first_id = next(k for k, r in results.items() if r["action"] == "queued_when_vacant")
+        calls_before = list(self.calls)
+        with self.p.lock:
+            self.assertEqual(self.button(rooms=["Bedroom"], request_id=first_id), results[first_id])
+        self.assertEqual(self.calls, calls_before)
+
+    def test_busy_robot_precedence_cancels_and_docks_instead_of_marking_or_promoting(self):
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        result = self.button(rooms=["Bath"])
+        self.assertEqual(result["action"], "cancelled_and_docking")
+        self.assertEqual(self.p.room_requests(), {})
+        self.assertIn(("vacuum.return_to_base", {"entity_id": "vacuum.up"}), self.calls)
 
     def test_failed_manual_launch_stays_at_fifo_head_and_retries(self):
         self.H[OCC]["attributes"]["floors"]["upstairs"]["since"] = self.now[0] - self.va.START_QUIET_S
-        self.button(rooms=["Bath"])
+        self.clean_now(rooms=["Bath"])
         self.tick()
         self.tick(301)                                               # never entered cleaning
         head = self.p.D["manual_queue"][0]
@@ -352,7 +370,7 @@ class Upstairs(unittest.TestCase):
         self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in calls])
 
     def test_acknowledged_long_dock_preparation_never_requeues(self):
-        self.button(rooms=["Bath"])
+        self.clean_now(rooms=["Bath"])
         self.tick()
         self.S("binary_sensor.up_cleaning", "on")
         self.tick(180)
@@ -365,7 +383,7 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(self.p.D["phase"], "idle")
 
     def test_retry_of_explicit_room_does_not_require_floor_vacancy(self):
-        self.button(rooms=["Bath"])
+        self.clean_now(rooms=["Bath"])
         self.tick()
         self.tick(301)
         self.occ({"bedroom": "occupied"})
@@ -376,7 +394,7 @@ class Upstairs(unittest.TestCase):
         self.tidy["study"] = {"state": "untidy"}
         self.occ({"study": "occupied"})
         self.S("binary_sensor.resting", "on")
-        self.button(rooms=["Study"])
+        self.clean_now(rooms=["Study"])
         self.assertIn("sleep protection", self.p.manual_wait("docked", "off", self.now[0]))
         self.S("binary_sensor.resting", "off")
         self.S("binary_sensor.study_hall_door", "off")
@@ -389,51 +407,47 @@ class Upstairs(unittest.TestCase):
     def test_long_press_skips_a_protected_sleeper(self):
         self.va.SLEEP_PROTECTION = {"Bedroom": "binary_sensor.resting"}
         self.S("binary_sensor.resting", "on")
-        self.assertNotIn("Bedroom", self.button("long", [])["rooms"])
+        self.assertNotIn("Bedroom", self.clean_now("long", [], "sleeper")["rooms"])
         self.assertFalse(self.p.D["manual_queue"][0]["whole_floor"])
 
-    def test_interrupted_manual_job_is_retired_after_return_to_dock(self):
-        self.button(rooms=["Bath"], request_id="original")
+    def test_press_during_active_manual_job_cancels_it_and_does_not_retry(self):
+        self.clean_now(rooms=["Bath"], request_id="original")
         self.tick()
         self.S("vacuum.up", "cleaning")
         self.tick(10)
         self.S("vacuum.up", "error")
         self.tick(80)
-        self.button(rooms=["Bath"], request_id="second-press")
+        stopped = self.button(rooms=["Bath"], request_id="second-press")
+        self.assertEqual(stopped["action"], "cancelled_and_docking")
         self.S("vacuum.up", "docked")
         self.tick(10)
-        self.tick(61)
         self.assertEqual(self.p.D["manual_queue"], [])
-        self.assertIn("error", self.p.D["runs"][-1]["why"])
+        self.assertIn("physical Clean button", self.p.D["runs"][-1]["why"])
 
-    def test_cancel_clears_active_and_pending_jobs_once_even_across_reload(self):
+    def test_explicit_cancel_clears_future_flags_once_even_across_reload(self):
         self.button(rooms=["Bath"])
-        self.tick()
         self.button(rooms=["Hall"], request_id="later")
         got = self.button("cancel", request_id="clear")
         self.assertEqual(got["rooms"], ["Bath", "Hall"])
-        self.assertEqual(self.p.D["phase"], "cancelled")
+        self.assertEqual(got["action"], "cancelled_and_docking")
+        self.assertEqual(self.p.D["phase"], "idle")
+        self.assertEqual(self.p.room_requests(), {})
         self.p.D = __import__("json").loads(self.p.path.read_text())
-        self.button(rooms=["Study"], request_id="fresh")
-        self.assertEqual(self.button("cancel", request_id="clear")["why"], "already cancelled")
-        self.S("vacuum.up", "returning")
-        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(300)])
-        self.S("vacuum.up", "docked")
-        self.tick()
-        self.assertEqual([job["rooms"] for job in self.p.D["manual_queue"]], [["Study"]])
-        self.assertEqual(self.p.D["runs"][-1]["why"], "manual jobs cancelled")
+        self.assertEqual(self.button("cancel", request_id="clear"), got)
+        self.assertEqual(self.p.D["manual_queue"], [])
 
-    def test_cancel_before_launch_does_not_start_or_dock_robot(self):
+    def test_cancel_of_future_preference_docks_but_never_starts_robot(self):
         self.button(rooms=["Bath"])
         self.assertTrue(self.button("cancel", request_id="clear")["ok"])
         self.assertEqual(self.p.D["manual_queue"], [])
         self.assertEqual(self.p.D["phase"], "idle")
-        self.assertEqual(self.calls, [])
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.calls])
+        self.assertIn(("vacuum.return_to_base", {"entity_id": "vacuum.up"}), self.calls)
 
     def test_long_press_skips_accessible_untidy_and_other_blocked_rooms(self):
         self.tidy["bath"] = {"state": "untidy"}
         self.S("input_boolean.bedroom_guest", "on")
-        result = self.button("long", [], "whole-1")
+        result = self.clean_now("long", [], "whole-1")
         self.assertTrue(result["ok"])
         self.assertEqual(result["rooms"], ["Hall", "Study", "Study Closet"])
         self.assertIn("Bath (untidy)", result["why"])
@@ -444,7 +458,7 @@ class Upstairs(unittest.TestCase):
         self.assertEqual([g["rooms"] for g in self.p.D["groups"]], [["Hall"], ["Study"], ["Study Closet"]])
 
     def test_queued_native_floor_rechecks_untidy_rooms_at_launch(self):
-        result = self.button("long", [], "whole-later")
+        result = self.clean_now("long", [], "whole-later")
         self.assertEqual(result["rooms"], ["Hall", "Bedroom", "Bath", "Study", "Study Closet"])
         self.assertTrue(self.p.D["manual_queue"][0]["whole_floor"])
         self.tidy["bath"] = {"state": "untidy"}
@@ -459,7 +473,7 @@ class Upstairs(unittest.TestCase):
         self.tidy["study"] = {"state": "untidy"}
         self.S("binary_sensor.study_hall_door", "off")
         self.S("binary_sensor.study_bath_door", "off")
-        result = self.button("long", [], "whole-2")
+        result = self.clean_now("long", [], "whole-2")
         self.assertTrue(result["ok"])
         self.assertEqual(result["rooms"], ["Hall", "Bedroom", "Bath"])
         self.assertTrue(self.p.D["manual_queue"][0]["whole_floor"])
@@ -469,7 +483,7 @@ class Upstairs(unittest.TestCase):
 
     def test_long_press_segments_around_an_accessible_standing_exclusion(self):
         self.S("input_boolean.bedroom_guest", "on")
-        result = self.button("long", [], "whole-blocked")
+        result = self.clean_now("long", [], "whole-blocked")
         self.assertTrue(result["ok"])
         self.assertFalse(self.p.D["manual_queue"][0]["whole_floor"])
         self.assertEqual(result["rooms"], ["Hall", "Bath", "Study", "Study Closet"])

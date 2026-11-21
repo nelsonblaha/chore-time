@@ -1154,6 +1154,24 @@ class Vacuum(unittest.TestCase):
         self.S("binary_sensor.kitchen_motion", "off", 1300)
         self.assertIn("script.vacuum_clean_rooms", self.tick())
 
+    def test_downstairs_physical_clean_marks_vacancy_then_promotes_on_a_new_event(self):
+        first = self.p.button_request({"gesture": "single", "rooms": ["Kitchen"], "request_id": "down-1"})
+        self.assertEqual(first["action"], "queued_when_vacant")
+        self.assertEqual(self.p.button_request(
+            {"gesture": "single", "rooms": ["Living Room"], "request_id": "down-1"}), first)
+        second = self.p.button_request({"gesture": "single", "rooms": ["Kitchen"], "request_id": "down-2"})
+        self.assertEqual(second["action"], "clean_now_queued")
+        self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Kitchen"])
+
+    def test_downstairs_busy_robot_press_has_cancel_and_dock_precedence(self):
+        self.S(self.va.VAC, "cleaning")
+        self.S(self.va.IN_CLEAN, "on")
+        result = self.p.button_request({"gesture": "double", "rooms": ["Kitchen", "Hall"],
+                                        "request_id": "down-stop"})
+        self.assertEqual(result["action"], "cancelled_and_docking")
+        self.assertIn(("vacuum.return_to_base", {"entity_id": self.va.VAC}), self.calls)
+        self.assertEqual(self.p.D.get("manual_queue", []), [])
+
     def test_vacuum_rooms_before_mop_rooms_and_suction_by_who_is_home(self):
         self.tick()
         g = self.p.D["groups"]

@@ -344,8 +344,88 @@ class Pilot:
                 rooms.append(seg)
         return rooms, False, skipped
 
+    def _remember_button_result(self, request_id, result, now=None):
+        """Persist the complete reply so delivery retries cannot change a press into another action."""
+        seen = self.D.setdefault("manual_seen", {})
+        seen[request_id] = {"rooms": list(result.get("rooms") or []), "ts": now or time.time(),
+                            "cancel": result.get("action") == "cancelled_and_docking",
+                            "response": result}
+        for old, _ in sorted(seen.items(), key=lambda x: x[1].get("ts", 0))[:-200]:
+            seen.pop(old, None)
+
+    def _button_work(self, vs, incl, now):
+        """Committed/preparing work beats every Clean-button selection.
+
+        A room merely requested for a future vacancy is deliberately absent here. A durable immediate FIFO item,
+        one of our active phases, or device evidence of a real/manual/preparing clean is committed work.
+        """
+        D = self.D
+        if D.get("phase", "idle") != "idle":
+            return "planner phase " + D["phase"]
+        if D.get("manual_queue"):
+            return "an immediate clean is queued"
+        if vs in ("cleaning", "paused", "returning"):
+            return "robot is " + vs
+        if incl == "on" and not self.leftover(vs, incl, now):
+            return "robot has accepted or is preparing a task"
+        return None
+
+    def _stored_room_requests(self):
+        if not REQUESTS:
+            return {}
+        try:
+            values = json.loads(self.get(REQUESTS).get("state") or "{}")
+        except (TypeError, ValueError):
+            values = {}
+        if not isinstance(values, dict):
+            values = {}
+        values = {seg: ts for seg, ts in values.items() if seg in SEGMENTS
+                  and type(ts) in (int, float) and 0 < ts <= time.time() + 5}
+        # A just-written HA input_text may not have propagated to the state reader yet. Keep the local mirror so a
+        # second physical event a few milliseconds later is still atomic and sees the first press.
+        for seg, ts in (self.D.get("button_vacancy_requests") or {}).items():
+            if seg in SEGMENTS and type(ts) in (int, float) and 0 < ts <= time.time() + 5:
+                values[seg] = max(ts, values.get(seg, 0))
+        return values
+
+    def _write_room_requests(self, rooms, add, now):
+        """Update the same HA input_text consumed by map Clean-when-vacant, preserving other live requests."""
+        if not REQUESTS:
+            return False
+        values = {seg: ts for seg, ts in self._stored_room_requests().items()
+                  if not self.request_serviced(seg, ts)}
+        for seg in rooms:
+            if add:
+                values[seg] = int(now)
+            else:
+                values.pop(seg, None)
+        encoded = json.dumps(values, separators=(",", ":"), sort_keys=True)
+        self.call("input_text.set_value", {"entity_id": REQUESTS, "value": encoded})
+        self.D["button_vacancy_requests"] = values
+        return True
+
+    def _cancel_button_work(self, request_id, now, supplied):
+        """Forget committed planner work and make a best-effort dock command, without touching the other floor."""
+        D = self.D
+        active = [r for group in (D.get("groups") or []) for r in (group.get("rooms") or [])]
+        queued = [r for job in (D.get("manual_queue") or []) for r in (job.get("rooms") or [])]
+        rooms = list(dict.fromkeys(active + queued + list(supplied or [])))
+        D["manual_queue"] = []
+        if D.get("phase", "idle") != "idle":
+            D.update(phase="cancelled", cancel_forget=True,
+                     cancel_reason="physical Clean button stopped this floor")
+        if rooms and REQUESTS:
+            self._write_room_requests(rooms, False, now)
+        self.call("vacuum.return_to_base", {"entity_id": VAC})
+        result = {"ok": True, "action": "cancelled_and_docking", "rooms": rooms,
+                  "why": "%s robot work cancelled; sending it home" % FLOOR.title()}
+        self._remember_button_result(request_id, result, now)
+        self.log("physical_clean_cancelled", request_id=request_id, rooms=rooms)
+        self.save()
+        return result
+
     def button_request(self, body):
-        """Idempotently append one physical-button selection to this floor's durable FIFO."""
+        """Apply the physical Clean button's idle→vacancy→now progression, idempotently."""
         gesture = str(body.get("gesture") or "")
         request_id = str(body.get("request_id") or "").strip()[:160]
         supplied = body.get("rooms")
@@ -363,22 +443,18 @@ class Pilot:
         D.setdefault("manual_queue", [])
         seen = D.setdefault("manual_seen", {})
         if request_id in seen:
+            if seen[request_id].get("response"):
+                return dict(seen[request_id]["response"])
             if seen[request_id].get("cancel"):
-                return {"ok": True, "rooms": seen[request_id]["rooms"], "why": "already cancelled"}
-            return {"ok": True, "rooms": seen[request_id]["rooms"], "why": "already queued"}
+                return {"ok": True, "action": "cancelled_and_docking", "rooms": seen[request_id]["rooms"],
+                        "why": "already cancelled"}
+            return {"ok": True, "action": "clean_now_queued", "rooms": seen[request_id]["rooms"],
+                    "why": "already queued"}
+        now = time.time()
         if gesture == "cancel":
             if supplied:
                 return {"ok": False, "rooms": [], "why": "floor cancellation takes no room selection"}
-            rooms = list(dict.fromkeys(room for job in D["manual_queue"] for room in job["rooms"]))
-            D["manual_queue"] = []
-            if D.get("run_kind") == "manual" and D.get("phase") != "idle":
-                D["phase"] = "cancelled"
-            seen[request_id] = {"rooms": rooms, "ts": time.time(), "cancel": True}
-            for old in list(seen)[:-200]:
-                del seen[old]
-            self.log("manual_cancelled", request_id=request_id, rooms=rooms)
-            self.save()
-            return {"ok": True, "rooms": rooms, "why": "manual jobs cleared"}
+            return self._cancel_button_work(request_id, now, list(self.room_requests()))
         if gesture != "long" and not supplied:
             return {"ok": False, "rooms": [], "why": "this gesture selected no rooms"}
 
@@ -393,21 +469,37 @@ class Pilot:
                 why += ": " + "; ".join(skipped)
             return {"ok": False, "rooms": [], "why": why}
 
+        vs = self.get(VAC).get("state")
+        incl = self.get(IN_CLEAN).get("state")
+        busy = self._button_work(vs, incl, now)
+        if busy:
+            return self._cancel_button_work(request_id, now, rooms)
+
+        requested = self.room_requests()
+        if not all(room in requested for room in rooms):
+            if not self._write_room_requests(rooms, True, now):
+                return {"ok": False, "action": "rejected", "rooms": [],
+                        "why": "this floor has no Clean when vacant request store"}
+            result = {"ok": True, "action": "queued_when_vacant", "rooms": rooms,
+                      "why": "queued for the next vacancy" +
+                             ("; skipped " + ", ".join(skipped) if skipped else "")}
+            self._remember_button_result(request_id, result, now)
+            self.log("physical_clean_when_vacant", request_id=request_id, gesture=gesture, rooms=rooms,
+                     skipped=skipped)
+            self.save()
+            return result
+
         pending = {r for x in D["manual_queue"] for r in (x.get("rooms") or [])}
         already = [r for r in rooms if r in pending]
         existing_whole = any(x.get("whole_floor") or x.get("native_requested") for x in D["manual_queue"])
         queue_rooms = rooms if whole_floor else [r for r in rooms if r not in pending]
         append_item = bool(queue_rooms) and not (whole_floor and existing_whole)
-        now = time.time()
         if append_item:
             item = {"id": request_id, "gesture": gesture, "rooms": queue_rooms, "whole_floor": whole_floor,
                     "native_requested": whole_floor, "requested_rooms": supplied if gesture == "long" else None,
                     "one_at_time": gesture == "long" and not whole_floor, "created": now,
                     "attempts": 0, "next_attempt": 0}
             D["manual_queue"].append(item)
-        seen[request_id] = {"rooms": rooms, "ts": now}
-        for old, _ in sorted(seen.items(), key=lambda x: x[1].get("ts", 0))[:-200]:
-            seen.pop(old, None)
         self.log("manual_queued" if append_item else "manual_deduplicated", request_id=request_id,
                  gesture=gesture, rooms=rooms, queued=queue_rooms if append_item else [], already=already,
                  skipped=skipped, position=len(D["manual_queue"]))
@@ -421,7 +513,10 @@ class Pilot:
             why += ("; already pending " if append_item else ": ") + ", ".join(already)
         if skipped:
             why += "; skipped " + ", ".join(skipped)
-        return {"ok": True, "rooms": rooms, "why": why}
+        result = {"ok": True, "action": "clean_now_queued", "rooms": rooms, "why": why}
+        self._remember_button_result(request_id, result, now)
+        self.save()
+        return result
 
     def occ_quiet(self):
         now = time.time()
@@ -651,17 +746,8 @@ class Pilot:
         HA owns the small request helper. We never clear it here, avoiding a
         read/clear race with a person queuing another room during this tick.
         """
-        if not REQUESTS:
-            return {}
-        try:
-            values = json.loads(self.get(REQUESTS).get("state") or "{}")
-            if not isinstance(values, dict):
-                return {}
-            return {seg: ts for seg, ts in values.items() if seg in SEGMENTS
-                    and type(ts) in (int, float) and 0 < ts <= time.time() + 5
-                    and not self.request_serviced(seg, ts)}
-        except (TypeError, ValueError):
-            return {}
+        return {seg: ts for seg, ts in self._stored_room_requests().items()
+                if not self.request_serviced(seg, ts)}
 
     def segment_status(self):
         """Per robot segment: the autopilot's real decision and why (for dashboards).
@@ -1063,9 +1149,10 @@ class Pilot:
                 D.update(fail_streak=0, backoff_until=0)
         groups = D.get("groups") or []
         run_rooms = list(dict.fromkeys(r for g in groups for r in (g.get("rooms") or [])))
+        cancel_forget = bool(D.pop("cancel_forget", False))
         if run_kind == "manual":
             self.finish_manual(why == "done", why, now)
-        elif not D.get("explore"):
+        elif not D.get("explore") and not cancel_forget:
             if why == "done":
                 self.completed(run_rooms)
             else:
@@ -1339,7 +1426,7 @@ class Pilot:
                     self.finish("never started cleaning (state %s)" % vs, now)
         elif ph == "cancelled":
             if vs in ("docked", "charging"):
-                self.finish("manual jobs cancelled", now)
+                self.finish(D.pop("cancel_reason", None) or "manual jobs cancelled", now)
         elif ph == "between":       # next group only if downstairs is still empty (a manual FIFO job needs no vacancy)
             manual = next((job for job in D.get("manual_queue", []) if job["id"] == D.get("manual_active")), None)
             next_group = D["groups"][D["gi"] + 1]
@@ -1461,7 +1548,7 @@ class Pilot:
         if ph == "idle":
             return "idle"
         if ph == "cancelled":
-            return "manual jobs cancelled; waiting for the robot to dock"
+            return (D.get("cancel_reason") or "manual jobs cancelled") + "; waiting for the robot to dock"
         gr = (D.get("groups") or [{}])[D.get("gi", 0)] if D.get("groups") else {}
         rooms = gr.get("rooms") or []
         done = [r for r in rooms if D["visits"].get(r, 0) >= D.get("run_started", 0)]
