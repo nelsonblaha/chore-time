@@ -366,6 +366,10 @@ function pagerSm(id,pg,pages){if(pages<2)return "";return '<div class="pager sm"
   Array.apply(null,Array(pages)).map(function(_,i){return '<span class="'+(i===pg?"on":"")+'"></span>'}).join("")+'</div><div class="pg'+(pg<pages-1?'':' off')+'" data-pgm="'+id+':1">&#9654;</div></div>'}
 function $(id){return document.getElementById(id)}
 function api(path,body){return fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json()})}
+function entityPayload(states,id){var st=states&&states[id];if(!st)return null;var m=st.attributes||{};
+  if(!m.chunked)return JSON.parse(JSON.stringify(m));var n=Number(m.parts)||0,rev=m.revision,p=[];if(!n||!rev)return null;
+  for(var i=1;i<=n;i++){var q=states[id+"_part_"+i],a=q&&q.attributes;if(!a||a.revision!==rev||Number(a.part)!==i||Number(a.parts)!==n||typeof a.payload!=="string")return null;p.push(a.payload)}
+  try{return JSON.parse(p.join(""))}catch(e){return null}}
 /* Inside Home Assistant (served from /local/, e.g. a child's own tab at their other home): state comes from
    sensor.chore_state and actions go through the input_text relay, signed by the viewer's HA login; the server only
    lets that login act for the children it is allowed (home_assistant.user_kids). ?kid=<id> locks the screen to one child. */
@@ -386,7 +390,7 @@ function packingTestState(a){if(!PACK_TEST||!a.packing_game)return a;var id="pac
   a.records=a.records||{};var rc=sample(0,"Demo chore");a.records[rc.id]={kid:id,sec:345,ts:now-2*86400};return a}
 if(HA_MODE){
   var hass=function(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}};
-  var haState=function(){var h=hass(),st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));
+  var haState=function(){var h=hass(),a=h&&entityPayload(h.states,"sensor.chore_state");if(!a)return null;
     a.whatsnew=null;a.whatsnew_all=[];a.news_unseen=false;a.announce=[];a.announce_all=[];a.kid_open=a.kid_open||{};a.news_seen_kids={};a.ann_seen_kids={};
     return packingTestState(a)};
   api=function(path,body){
@@ -421,8 +425,8 @@ if(SANDBOX!=null){
   api=function(path,body){
     if(!body){if(SB)return Promise.resolve(SB);
       return fetch(SANDBOX,{cache:"no-store",credentials:"same-origin"}).then(function(r){return r.json()}).then(function(j){
-        var st=(j.states||j)["sensor.chore_demo_state"];if(!st)throw "no demo state";
-        SB=JSON.parse(JSON.stringify(st.attributes));if(SB.demo_now)SB=sbShift(SB,Date.now()/1000-SB.demo_now);SB.whatsnew=null;SB.whatsnew_all=[];SB.announce=[];SB.announce_all=[];
+        SB=entityPayload(j.states||j,"sensor.chore_demo_state");if(!SB)throw "no demo state";
+        if(SB.demo_now)SB=sbShift(SB,Date.now()/1000-SB.demo_now);SB.whatsnew=null;SB.whatsnew_all=[];SB.announce=[];SB.announce_all=[];
         SB.kid_open=SB.kid_open||{};SB.news_seen_kids={};SB.ann_seen_kids={};SB.now=Date.now()/1000;return SB})}
     var a=path.replace("/api/","").split("?")[0];
     if(a==="goal"){SB.goals=SB.goals||{};SB.goals[body.kid]=body.reward;return Promise.resolve({ok:true,state:SB})}

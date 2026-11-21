@@ -24,6 +24,9 @@ const projectState={instance:'p-smoke',chore:'yard_project',definition_version:'
   next:{kind:'step',phase:'session_stop',step:projectChore.stepped.steps[2]}};
 for(const f of ['static/kids.html','static/inspect.html','static/tvlock.html','static/now.html','static/music-block.html']){
   const c=ctx();[...fs.readFileSync(f,'utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].forEach(m=>vm.runInContext(m[1],c));
+  if(f.includes('kids')||f.includes('inspect')){const raw=JSON.stringify(st),rev='smoke-revision',states={'sensor.chore_state':{attributes:{chunked:true,revision:rev,parts:3}}};
+    for(let i=0;i<3;i++)states['sensor.chore_state_part_'+(i+1)]={attributes:{revision:rev,part:i+1,parts:3,payload:raw.slice(Math.floor(raw.length*i/3),Math.floor(raw.length*(i+1)/3))}};
+    c.__chunkStates=states;vm.runInContext('var __decoded=entityPayload(__chunkStates,"sensor.chore_state");if(!__decoded||!__decoded.config||__decoded.config.kids.length!== '+K.length+')throw new Error("chunked HA state did not reconstruct")',c)}
   if(f.includes('kids')){vm.runInContext('S='+JSON.stringify(st)+';render();'+K.map(k=>'kid="'+k+'";page=0;renderKid();openDetail("points");openDetail("streak");openDetail("news");openDetail("goal");closeDetail();openCalendar();CALWEEK.setDate(CALWEEK.getDate()+7);renderCalendar();closeCalendar();openAwards();'+K.map(x=>'openAwards("'+x+'");').join('')+'showNewAwards();'+ask([r0])+'kid="'+k1+'";'+ask(bundles)+
       'whoWatches(S.config.rewards[0],"'+tv0+'");S.paused=S.paused||{};S.paused["'+k1+'"]={chore:"'+shared+'",ts:S.now-3600,elapsed:60,team:["'+k1+'"]};remindJob("'+k1+'",0);'+
       'S.active=S.active||{};S.active["'+k2+'"]={chore:"'+r1+'",ts:S.now-3600,team:["'+k2+'"]};remindJob("'+k2+'",0);'+

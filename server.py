@@ -2351,8 +2351,61 @@ def demo_attrs(attrs):
     return d
 
 
+HA_STATE_ATTR_TARGET = 12000   # Recorder rejects one entity's attributes at 16,384 bytes; retain ample JSON overhead.
+
+
+def chunked_state_payload(attrs, attr_target=HA_STATE_ATTR_TARGET):
+    """Encode an arbitrarily rich UI state as bounded HA sensor attribute chunks.
+
+    The manifest is written last, so a browser either reconstructs one complete
+    revision or briefly keeps waiting while its parts are being replaced.
+    """
+    payload = json.dumps(attrs, ensure_ascii=False, separators=(",", ":"), default=str)
+    revision = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    chunks, pos = [], 0
+    while pos < len(payload):
+        lo, hi, best = 1, len(payload) - pos, 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            probe = {"friendly_name": "Chore state part 999", "revision": revision,
+                     "part": 999, "parts": 999, "payload": payload[pos:pos + mid]}
+            size = len(json.dumps(probe, ensure_ascii=False, separators=(",", ":")).encode())
+            if size <= attr_target:
+                best, lo = mid, mid + 1
+            else:
+                hi = mid - 1
+        chunks.append(payload[pos:pos + best])
+        pos += best
+    return revision, chunks
+
+
+def publish_chunked_state(entity, attrs, tok, guard_key, manifest_fields=None):
+    """Publish UI state without creating an oversized Recorder attribute row.
+
+    Returns False when the content is unchanged. Part entities are opaque
+    transport; the named entity is a small, stable manifest and action receipt.
+    """
+    revision, chunks = chunked_state_payload(attrs)
+    if GUARD.get(guard_key) == revision:
+        return False
+    stem = entity.removeprefix("sensor.")
+    total = len(chunks)
+    for i, payload in enumerate(chunks, 1):
+        ha_post_state(f"sensor.{stem}_part_{i}", revision,
+                      {"friendly_name": f"Chore state part {i}", "revision": revision,
+                       "part": i, "parts": total, "payload": payload}, tok)
+    manifest = {"friendly_name": attrs.get("friendly_name") or "Chore state",
+                "chunked": True, "encoding": "json", "revision": revision,
+                "parts": total, "payload_bytes": len(json.dumps(attrs, ensure_ascii=False,
+                                                                   separators=(",", ":"), default=str).encode())}
+    manifest.update(manifest_fields or {})
+    ha_post_state(entity, revision, manifest, tok)
+    GUARD[guard_key] = revision
+    return True
+
+
 def push_state_sensor(state=None, last_result=None):
-    """sensor.chore_state: everything the HA-served inspection page needs (kept well under 16 KB)."""
+    """Publish everything the HA-served screens need through bounded, deduplicated sensor chunks."""
     if not HA_URL:   # no Home Assistant configured
         return None
     try:
@@ -2373,7 +2426,7 @@ def push_state_sensor(state=None, last_result=None):
              "expected": state.get("expected"), "personal_best": state.get("personal_best"),
              "achievements": state.get("achievements"), "streak": state.get("streak"), "chore_mode": state.get("chore_mode"),
              "pending_points": state["pending_points"], "board": state["board"], "history": hist,
-             "now": time.time(), "tv": state.get("tv"), "toys": state.get("toys"), "tidy_spaces": state.get("tidy_spaces", {}),
+             "tv": state.get("tv"), "toys": state.get("toys"), "tidy_spaces": state.get("tidy_spaces", {}),
              "reward_ready": state.get("reward_ready"), "timers": state.get("timers"), "refundable": state.get("refundable"),
              # for the kids' screen inside HA (a child at another home, signed in by their parent's HA login)
              "awards": state.get("awards"), "awards_seen": state.get("awards_seen"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
@@ -2411,18 +2464,13 @@ def push_state_sensor(state=None, last_result=None):
     if HOUSE.get("demo_state"):   # a visitor's read-only demo of the kids' screen: the same, minus private details
         try:
             demo = demo_attrs(attrs)
-            sig = json.dumps(demo, sort_keys=True, default=str)
-            if sig != GUARD.get("demo_sig") and time.time() - GUARD.get("demo_ts", 0) > 60:
-                ha_post_state(HOUSE["demo_state"], str(int(time.time())), demo, tok)
-                GUARD["demo_sig"], GUARD["demo_ts"] = sig, time.time()
+            publish_chunked_state(HOUSE["demo_state"], demo, tok, "demo_sig",
+                                  {"version": demo.get("version")})
         except Exception as ex:  # noqa: BLE001
             print("demo state push failed", ex, flush=True)
-    body = json.dumps({"state": str(int(time.time())), "attributes": attrs}).encode()
-    req = urllib.request.Request(f"{HA_URL}/api/states/sensor.chore_state", data=body,
-                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
-                                 method="POST")
     try:
-        urllib.request.urlopen(req, timeout=5).read()
+        publish_chunked_state("sensor.chore_state", attrs, tok, "state_sig",
+                              {"version": attrs.get("version"), "last_result": attrs.get("last_result")})
     except Exception as ex:  # noqa: BLE001
         print("HA state push failed", ex, flush=True)
 
@@ -4967,7 +5015,8 @@ def active_spotify_interruption(room):
 def ha_post_state(ent, state, attrs, tok):
     if not HA_URL:   # no Home Assistant configured
         return None
-    body = json.dumps({"state": state, "attributes": attrs}).encode()
+    body = json.dumps({"state": state, "attributes": attrs}, ensure_ascii=False,
+                      separators=(",", ":")).encode()
     req = urllib.request.Request(f"{HA_URL}/api/states/{ent}", data=body,
                                  headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}, method="POST")
     urllib.request.urlopen(req, timeout=10).read()

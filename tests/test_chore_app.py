@@ -3015,19 +3015,21 @@ class GrownUpStartsVR(Case):
         self.assertTrue(changed)  # make the request appear on Home Assistant dashboards immediately
         state = a.state()
         sent = []
-        old_urlopen = a.s.urllib.request.urlopen
-
-        class Response:
-            def read(self):
-                return b"{}"
-
-        a.s.urllib.request.urlopen = lambda req, timeout=0: sent.append(json.loads(req.data)) or Response()
+        old_post = a.s.ha_post_state
+        a.s.ha_post_state = lambda entity, value, attrs, tok: sent.append(
+            {"entity": entity, "state": value, "attributes": attrs})
         try:
+            a.s.GUARD.pop("state_sig", None)
+            a.s.GUARD.pop("demo_sig", None)
             a.orig["push_state_sensor"](state)
         finally:
-            a.s.urllib.request.urlopen = old_urlopen
-        self.assertIn(ask["nonce"], {q["nonce"] for q in sent[-1]["attributes"]["assist_requests"]})
-        self.assertIn("room_choices", sent[-1]["attributes"])
+            a.s.ha_post_state = old_post
+        manifest = sent[-1]["attributes"]
+        parts = sorted((x["attributes"] for x in sent if x["attributes"].get("revision") == manifest["revision"]
+                        and "payload" in x["attributes"]), key=lambda x: x["part"])
+        published = json.loads("".join(x["payload"] for x in parts))
+        self.assertIn(ask["nonce"], {q["nonce"] for q in published["assist_requests"]})
+        self.assertIn("room_choices", published)
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
         # A reload/retry returns the unused yes instead of buzzing the grown-up again.
         self.assertEqual(a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})[1]["nonce"], ask["nonce"])

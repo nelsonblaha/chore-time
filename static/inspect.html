@@ -191,11 +191,15 @@ function closeDocumentPreview(){$("docpreview").classList.remove("on");$("docpag
 var S=null,me=null,adjKid=null,adjPts=null,TSEL={};   // TSEL: per-kid stars picked on a team job, kept across refreshes
 try{me=localStorage.getItem("inspector")}catch(e){}
 function api(p,b){return fetch(p,{method:b?"POST":"GET",headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json()})}
+function entityPayload(states,id){var st=states&&states[id];if(!st)return null;var m=st.attributes||{};
+  if(!m.chunked)return JSON.parse(JSON.stringify(m));var n=Number(m.parts)||0,rev=m.revision,p=[];if(!n||!rev)return null;
+  for(var i=1;i<=n;i++){var q=states[id+"_part_"+i],a=q&&q.attributes;if(!a||a.revision!==rev||Number(a.part)!==i||Number(a.parts)!==n||typeof a.payload!=="string")return null;p.push(a.payload)}
+  try{return JSON.parse(p.join(""))}catch(e){return null}}
 
 var HA_MODE=location.pathname.indexOf("/local/")===0,haUserMe=null;
 var ON_HUB=location.search.indexOf("hub=1")>=0,qby=(location.search.match(/[?&]by=([a-z]+)/)||[])[1];
 function hass(){try{return window.parent.document.querySelector("home-assistant").hass}catch(e){return null}}
-function haState(){var h=hass();var st=h&&h.states["sensor.chore_state"];if(!st)return null;var a=JSON.parse(JSON.stringify(st.attributes));a.now=Date.now()/1000;return a}
+function haState(){var h=hass();var a=h&&entityPayload(h.states,"sensor.chore_state");if(!a)return null;a.now=Date.now()/1000;return a}
 if(HA_MODE){
   api=function(path,body){
     if(!body)return new Promise(function(res,rej){var t=0;(function w(){var st=haState();if(st)return res(st);if(++t>40)return rej("no sensor.chore_state");setTimeout(w,250)})()});
@@ -214,7 +218,7 @@ if(HA_MODE){
       return send1(JSON.stringify({a:"_part",n:nn,id:id,i:i,of:parts.length,d:d}),nn)})});
     return chain;
   };
-  try{var nm=(hass().user.name||"").toLowerCase(),I=((hass().states["sensor.chore_state"]||{}).attributes||{}).config.inspectors||[];   // the HA login names the grown-up
+  try{var nm=(hass().user.name||"").toLowerCase(),I=(haState().config.inspectors||[]);   // the HA login names the grown-up
     var hit=I.find(function(i){return nm.indexOf(String(i.name).toLowerCase())>=0||nm.indexOf(i.id)>=0});if(hit)haUserMe=hit.id}catch(e){}
   if(haUserMe)me=haUserMe;
 }
@@ -229,7 +233,7 @@ if(SANDBOX!=null){
   api=function(path,body){
     if(!body){if(SB)return Promise.resolve(SB);
       return fetch(SANDBOX,{cache:"no-store",credentials:"same-origin"}).then(function(r){return r.json()}).then(function(j){
-        var st=(j.states||j)["sensor.chore_demo_state"];if(!st)throw "no demo state";SB=JSON.parse(JSON.stringify(st.attributes));
+        SB=entityPayload(j.states||j,"sensor.chore_demo_state");if(!SB)throw "no demo state";
         if(SB.demo_now)SB=sbShift(SB,Date.now()/1000-SB.demo_now);SB.now=Date.now()/1000;return SB})}
     return Promise.resolve({ok:false,error:"Demo: nothing is saved",state:SB})};
   flushL=function(){_q=[]};
