@@ -5097,7 +5097,7 @@ def pause_and_lock_tv_reward(tvid, playback, tok=None):
     for player in targets:
         ha_call("media_player.media_pause", {"entity_id": player}, tok)
     GUARD.setdefault("last_cast", {})[t["ip"]] = time.time()
-    cast(t["ip"], "/tv?paused_reward=1")
+    cast(t["ip"], "/tv?paused_reward=1&room=" + urllib.parse.quote(tvid, safe=""))
 
 
 def queue_tv_reward_pause(tvid, playback):

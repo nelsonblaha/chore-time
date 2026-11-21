@@ -9,7 +9,9 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -220,6 +222,30 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Pause &amp; save", grown)
         self.assertIn("Your movie is paused.", locked)
         self.assertIn("You’ll get the rest of your movie time later.", locked)
+
+    def test_paused_reward_lock_page_never_borrows_another_rooms_reward(self):
+        locked = (REPO / "static" / "tvlock.html").read_text()
+        helper = re.search(r"function rewardPauseFor\(S,search\)\{.*?\n\}", locked, re.S)
+        self.assertIsNotNone(helper)
+        script = helper.group(0) + r'''
+const saved={session_id:"saved-here",remaining_s:123};
+const state={display:{kind:"tv",id:"livingroom"},tv:{tvs:{
+  livingroom:{}, kitchen:{paused_reward:saved}
+}}};
+function same(a,b,msg){if(JSON.stringify(a)!==JSON.stringify(b))throw Error(msg)}
+same(rewardPauseFor(state,"?paused_reward=1&room=kitchen"),saved,"explicit kitchen room");
+same(rewardPauseFor(state,"?paused_reward=1&room=livingroom"),null,"cleared local room");
+same(rewardPauseFor(state,"?paused_reward=1"),null,"display room must not borrow kitchen");
+state.tv.tvs.livingroom.paused_reward={session_id:"local"};
+same(rewardPauseFor(state,"?paused_reward=1&room=livingroom"),{session_id:"local"},"local room");
+delete state.tv.tvs.livingroom.paused_reward;
+same(rewardPauseFor(state,"?paused_reward=1&room=livingroom"),null,"resumed local room");
+const noDisplay={tv:state.tv};
+same(rewardPauseFor(noDisplay,"?paused_reward=1&room=kitchen"),saved,"explicit room without display id");
+same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback");
+'''
+        ran = subprocess.run(["node", "-e", script], text=True, capture_output=True)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
 
     def test_login_coin_flip_is_separate_visual_spoken_celebration(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -952,7 +978,8 @@ class TvRewardPauseAndSave(Case):
                     "title": "Fixture Movie"}
         self.s.pause_and_lock_tv_reward("livingroom", playback, tok="fixture-token")
         self.assertIn(("media_player.media_pause", {"entity_id": playback["player"]}), self.app.calls)
-        self.assertEqual(calls, [("cast", self.s.TVS["livingroom"]["ip"], "/tv?paused_reward=1")])
+        self.assertEqual(calls, [("cast", self.s.TVS["livingroom"]["ip"],
+                                  "/tv?paused_reward=1&room=livingroom")])
 
     def test_adjustment_before_pause_is_not_reapplied_after_resume(self):
         events = [

@@ -144,8 +144,11 @@ function drawDress(S){var D=S.dress||{},el=document.getElementById("dress");DRS=
   el.className="on";tickDress()}
 function tickDress(){var c=document.getElementById("dclk");if(!c||!DRS)return;var t=Math.max(0,Math.round(Date.now()/1000-DRS));c.textContent=Math.floor(t/60)+":"+("0"+t%60).slice(-2)}
 setInterval(tickDress,1000);
-function drawRewardPause(S){var el=document.getElementById("rewardpause"),id=S.display&&S.display.kind==="tv"?S.display.id:null,T=id&&S.tv&&S.tv.tvs&&S.tv.tvs[id],r=T&&T.paused_reward;
-  if(!r&&location.search.indexOf("paused_reward=1")>=0&&S.tv)Object.keys(S.tv.tvs||{}).some(function(k){if(S.tv.tvs[k].paused_reward){r=S.tv.tvs[k].paused_reward;return true}});
+function rewardPauseFor(S,search){var q=new URLSearchParams(search||""),explicit=q.get("room"),shown=S.display&&S.display.kind==="tv"?S.display.id:null,id=explicit||shown;
+  if(!id||!S.tv||!S.tv.tvs)return null;
+  return (S.tv.tvs[id]||{}).paused_reward||null
+}
+function drawRewardPause(S){var el=document.getElementById("rewardpause"),r=rewardPauseFor(S,location.search);
   if(!r){el.className="";el.innerHTML="";return}
   var names=(r.kids||[]).map(function(id){var k=S.config.kids.find(function(x){return x.id===id});return k?k.name:id}).join(" + ");
   el.innerHTML='<div class="box"><div class="ico">⏸️</div><h1>Your movie is paused.</h1><div class="msg">You’ll get the rest of your movie time later.</div><div class="left">'+(names?names+' · ':'')+Math.max(1,Math.ceil((r.remaining_s||0)/60))+' minutes saved</div></div>';el.className="on"}
