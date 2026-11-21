@@ -1501,6 +1501,7 @@ def peer_pin_reset_public(ip, now=None, nonce=None):
 def state_for_display(ip):
     state = derive()
     state["peer_pin_reset"] = peer_pin_reset_public(ip)
+    state["peer_pin_reset_capable"] = bool(peer_reset_display(ip))
     return state
 
 
@@ -3035,6 +3036,7 @@ class H(BaseHTTPRequestHandler):
             st["hub"], st["hub_motion"] = hub_, (GUARD.get("hub_motion") or {}).get(hub_)
             display_ = display_for_ip(self.client_address[0])
             st["peer_pin_reset"] = peer_pin_reset_public(self.client_address[0])
+            st["peer_pin_reset_capable"] = bool(peer_reset_display(self.client_address[0]))
             interrupt_ = active_spotify_interruption((display_ or {}).get("room"))
             st["display"], st["music_interruption"] = display_, interrupt_
             try:

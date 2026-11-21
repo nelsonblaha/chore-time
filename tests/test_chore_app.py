@@ -149,6 +149,7 @@ class StaticUiRegressions(unittest.TestCase):
         kids = (REPO / "static" / "kids.html").read_text()
         grown = (REPO / "static" / "inspect.html").read_text()
         self.assertIn("Ask another kid on the other Nest Hub", kids)
+        self.assertIn("S.peer_pin_reset_capable?", kids)
         self.assertIn("HOLD TO HELP", kids)
         self.assertIn("onpointerleave=stop", kids)
         self.assertIn("The helper cannot see this screen", kids)
@@ -407,8 +408,8 @@ class SoundSettings(Case):
 
 
 class PeerKidPinReset(Case):
-    TARGET_IP = "127.0.0.1"
-    HELPER_IP = "127.0.0.2"
+    TARGET_IP = "127.0.0.2"
+    HELPER_IP = "127.0.0.3"
 
     def setUp(self):
         super().setUp()
@@ -444,6 +445,9 @@ class PeerKidPinReset(Case):
         return nonce, unlocked[1]["kid_session"]
 
     def test_reset_requires_other_authenticated_kid_other_hub_and_live_hold(self):
+        self.assertTrue(self.app.post_from(self.TARGET_IP, "/api/kid_unlock",
+                        {"kid": "ava", "pin": "1111"})[1]["state"]["peer_pin_reset_capable"])
+        self.assertFalse(self.app.state()["peer_pin_reset_capable"])
         requested = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_request", {"kid": "ava"})
         nonce = requested[1]["nonce"]
         target_session = self.app.post_from(self.TARGET_IP, "/api/kid_unlock",
