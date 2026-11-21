@@ -416,11 +416,33 @@ class Pilot:
             self._passage_error = "passage graph invalid: " + str(ex)
             return {}
 
-    def observed_clear_since(self, room, info, now):
-        """Source clear time, or a restart-local consecutive observation timer when HA has no historical `since`."""
+    def refresh_clear_observations(self, room_info, attrs, now):
+        """Invalidate local quiet clocks before any room-level decision can return.
+
+        HA publishes a fresh observed_at with each complete retained-occupancy snapshot.  A local clock may only span
+        consecutive publications; repeated reads of one publication do not manufacture quiet time.
+        """
         cache = getattr(self, "_request_clear_observed", None)
         if cache is None:
             cache = self._request_clear_observed = {}
+        observed = attrs.get("observed_at")
+        if type(observed) not in (int, float) or not 0 < observed <= now:
+            # Direct/legacy trackers predate observed_at; their fresh lease and evaluation instant are the snapshot.
+            observed = now
+        observed = float(observed)
+        previous = getattr(self, "_request_clear_snapshot", None)
+        if previous is not None and (observed < previous or observed - previous > 45):
+            cache.clear()
+        for room in list(cache):
+            info = room_info.get(room)
+            if not isinstance(info, dict) or info.get("state") != "clear" or info.get("people"):
+                cache.pop(room, None)
+        self._request_clear_snapshot = observed
+        return observed
+
+    def observed_clear_since(self, room, info, now, observed):
+        """Source clear time, or a restart-local consecutive-publication timer when HA has no historical `since`."""
+        cache = self._request_clear_observed
         if info.get("state") != "clear" or info.get("people"):
             cache.pop(room, None)
             return None
@@ -429,9 +451,10 @@ class Pilot:
             cache[room] = {"first": float(since), "last": now}
             return float(since)
         previous = cache.get(room)
-        first = previous["first"] if previous and 0 <= now - previous["last"] <= 45 else now
-        cache[room] = {"first": first, "last": now}
-        return first
+        first = previous["first"] if previous and 0 <= observed - previous["last"] <= 45 else observed
+        cache[room] = {"first": first, "last": observed}
+        verified_s = max(0, observed - first)
+        return now - verified_s
 
     def request_clearance(self, segments, now=None, route_only=()):
         """Room-level vacancy for an explicit Clean-when-vacant request.
@@ -456,12 +479,17 @@ class Pilot:
             fresh = False
         if not fresh:
             self._request_clear_observed = {}
+            self._request_clear_snapshot = None
             return {"allowed": False, "quiet_s": 0, "why": "presence tracker is stale or incomplete"}
         floor = (attrs.get("floors") or {}).get(OCC.get("floor")) or {}
         if floor.get("state") not in ("vacant", "occupied"):
             self._request_clear_observed = {}
+            self._request_clear_snapshot = None
             return {"allowed": False, "quiet_s": 0, "why": "floor placement is ambiguous"}
         room_info = attrs.get("rooms") or {}
+        observed = self.refresh_clear_observations(room_info, attrs, now)
+        if observed is None:
+            return {"allowed": False, "quiet_s": 0, "why": "presence tracker observation time is ambiguous"}
         full = set(segments)
         routes = set(route_only) - full
         needed = []
@@ -493,7 +521,7 @@ class Pilot:
                 info = room_info.get(room)
                 if not isinstance(info, dict) or info.get("state") != "clear" or info.get("people"):
                     return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
-                since = self.observed_clear_since(room, info, now)
+                since = self.observed_clear_since(room, info, now, observed)
                 if since is None:
                     return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
                 safe_since.append(since); checked_rooms.add(room)
@@ -508,7 +536,7 @@ class Pilot:
                     return {"allowed": False, "quiet_s": 0, "why": "%s adjacency is unknown" % room}
                 state, people = info.get("state"), info.get("people") or []
                 if state == "clear" and not people:
-                    since = self.observed_clear_since(room, info, now)
+                    since = self.observed_clear_since(room, info, now, observed)
                     if since is None:
                         return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
                     safe_since.append(since); checked_rooms.add(room)

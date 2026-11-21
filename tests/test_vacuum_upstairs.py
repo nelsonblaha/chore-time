@@ -346,17 +346,33 @@ class Upstairs(unittest.TestCase):
 
     def test_null_source_since_uses_consecutive_local_observations_and_resets_on_gap(self):
         self.occ({"bedroom": "occupied"})
-        self.H[OCC]["attributes"]["rooms"]["bath"]["since"] = None
+        attrs = self.H[OCC]["attributes"]
+        bath = attrs["rooms"]["bath"]
+        bath["since"] = None
+        attrs["observed_at"] = self.now[0]
         first = self.p.request_clearance(["Bath"])
         self.assertTrue(first["allowed"])
         self.assertEqual(first["quiet_s"], 0)
         for _ in range(40):
             self.now[0] += 30
-            self.H[OCC]["attributes"]["valid_until"] = self.now[0] + 90
+            attrs["valid_until"] = self.now[0] + 90
+            attrs["observed_at"] = self.now[0]
             result = self.p.request_clearance(["Bath"])
         self.assertGreaterEqual(result["quiet_s"], self.va.START_QUIET_S)
+        self.now[0] += 10
+        attrs.update(valid_until=self.now[0] + 90, observed_at=self.now[0])
+        bath.update(state="occupied", people=["X"])
+        self.assertFalse(self.p.request_clearance(["Bath"])["allowed"])
+        self.now[0] += 10
+        attrs.update(valid_until=self.now[0] + 90, observed_at=self.now[0])
+        bath.update(state="clear", people=[])
+        self.assertEqual(self.p.request_clearance(["Bath"])["quiet_s"], 0)
+        self.now[0] += 30
+        self.assertEqual(self.p.request_clearance(["Bath"])["quiet_s"], 0)  # rereading one snapshot accrues nothing
+        attrs["observed_at"] = self.now[0]
+        self.assertEqual(self.p.request_clearance(["Bath"])["quiet_s"], 30)
         self.now[0] += 46
-        self.H[OCC]["attributes"]["valid_until"] = self.now[0] + 90
+        attrs.update(valid_until=self.now[0] + 90, observed_at=self.now[0])
         self.assertEqual(self.p.request_clearance(["Bath"])["quiet_s"], 0)
 
     def test_route_room_must_be_clear_but_its_neighbours_do_not_expand_target_adjacency(self):
