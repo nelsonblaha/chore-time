@@ -30,6 +30,15 @@ UP = {
     "approach_sensors": ["binary_sensor.stairs_motion", "binary_sensor.landing_motion"],
     "approach_rooms": ["stairs", "stairs_down"],
     "occupancy": {"sensor": OCC, "floor": "upstairs",
+                  "request_clearance": {
+                      "Hall": {"complete": True, "rooms": ["hall"], "passages": []},
+                      "Bath": {"complete": True, "rooms": ["bath"], "passages": [
+                          {"room": "hall", "openings": [
+                              {"contact": "binary_sensor.bath_hall_a", "healthy": "binary_sensor.bath_hall_a_ok"},
+                              {"contact": "binary_sensor.bath_hall_b", "healthy": "binary_sensor.bath_hall_b_ok"},
+                          ]}
+                      ]}
+                  },
                   "seal": {"study": {"doors": ["binary_sensor.study_hall_door", "binary_sensor.study_bath_door"],
                                      "segments": ["Study", "Study Closet"]}}},
 }
@@ -54,6 +63,8 @@ class Upstairs(unittest.TestCase):
                      ("sensor.up_battery", "100"), ("sensor.up_error", "none"), ("select.up_mode", "vacuum"),
                      ("input_boolean.up_autopilot", "on"), ("input_boolean.bedroom_guest", "off"),
                      ("binary_sensor.study_hall_door", "on"), ("binary_sensor.study_bath_door", "on"),
+                     ("binary_sensor.bath_hall_a", "on"), ("binary_sensor.bath_hall_b", "on"),
+                     ("binary_sensor.bath_hall_a_ok", "on"), ("binary_sensor.bath_hall_b_ok", "on"),
                      ("binary_sensor.stairs_motion", "off"), ("binary_sensor.landing_motion", "off"),
                      ("select.up_map", "Upstairs ")):
             self.S(e, v)
@@ -80,7 +91,8 @@ class Upstairs(unittest.TestCase):
 
     def occ(self, who, fresh=True, roster=True, floor=None):
         """who = {room: state}; everything else clear"""
-        rooms = {r: {"state": who.get(r, "clear"), "people": ["X"] if who.get(r) in ("occupied", "still") else []} for r in ROOMS}
+        rooms = {r: {"state": who.get(r, "clear"), "people": ["X"] if who.get(r) in ("occupied", "still") else [],
+                     "since": self.now[0] - (120 if who.get(r) else 3600)} for r in ROOMS}
         self.S(OCC, "ok", valid_until=self.now[0] + (90 if fresh else -10), roster_complete=roster,
                floors={"upstairs": {"state": floor or ("occupied" if who else "vacant"), "rooms": ROOMS}}, rooms=rooms)
 
@@ -285,6 +297,110 @@ class Upstairs(unittest.TestCase):
         self.S("input_text.up_requests", '{"Bath": %d}' % (self.now[0] - 5))
         launch, _ = self.run_until_start()
         self.assertEqual(launch["rooms"], ["Bath"])                  # only the pressed room
+
+    def test_explicit_request_runs_with_remote_people_after_target_and_passage_are_clear(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.occ({"bedroom": "occupied", "study": "still"})       # multiple residents elsewhere on the floor
+        first = self.button(rooms=["Bath"], request_id="remote-bath")
+        self.assertEqual(first["action"], "queued_when_vacant")
+        launch, _ = self.run_until_start()
+        self.assertEqual(launch["rooms"], ["Bath"])
+        self.assertEqual(self.p.D["run_kind"], "request")
+        self.assertTrue(self.p.D["groups"][0]["rooms"] == ["Bath"])
+
+    def test_scheduled_cleaning_still_requires_the_whole_floor_vacant(self):
+        self.occ({"bedroom": "occupied"})
+        self.assertIsNone(self.run_until_start()[0])
+        self.assertNotEqual(self.p.D.get("run_kind"), "request")
+
+    def test_occupied_adjacent_room_needs_every_healthy_opening_closed_for_twenty_minutes(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.occ({"hall": "occupied"})
+        self.button(rooms=["Bath"], request_id="isolated-bath")
+        self.assertIsNone(self.run_until_start()[0])                  # both openings are open
+        self.S("binary_sensor.bath_hall_a", "off")
+        self.assertIsNone(self.run_until_start()[0])                  # one physical opening is still open
+        self.S("binary_sensor.bath_hall_b", "off")
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick()])
+        self.S("binary_sensor.bath_hall_b_ok", "off")
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick(1201)])
+        self.S("binary_sensor.bath_hall_b_ok", "on", ago=1201)
+        self.S("binary_sensor.bath_hall_a", "off", ago=1201)
+        self.S("binary_sensor.bath_hall_b", "off", ago=1201)
+        launch, _ = self.run_until_start()
+        self.assertEqual(launch["rooms"], ["Bath"])
+
+    def test_stale_tracker_or_ambiguous_target_never_grants_room_level_clearance(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.button(rooms=["Bath"], request_id="stale-bath")
+        self.occ({"bedroom": "occupied"}, fresh=False)
+        self.assertIsNone(self.run_until_start()[0])
+        self.occ({"bath": "uncertain"})
+        self.assertIsNone(self.run_until_start()[0])
+
+    def test_validated_passage_graph_requires_exact_segments_and_fresh_contact_health(self):
+        self.va.OCC.pop("request_clearance", None)
+        graph = self.tmp / "passages.json"
+        segment_rooms = {name: list(spec["rooms"]) for name, spec in UP["segments"].items()}
+        floors = {room: "upstairs" for rooms in segment_rooms.values() for room in rooms}
+        data = {"aliases": {}, "floors": floors, "contact_valid_seconds": 172800,
+                "segments": {"upstairs": segment_rooms},
+                "passages": [{"a": "bath", "b": "hall", "contact": {
+                    "entity_id": "binary_sensor.graph_door", "node_status": "sensor.graph_node",
+                    "last_seen": "sensor.graph_seen"}}]}
+        graph.write_text(__import__("json").dumps(data))
+        self.va.OCC["passage_graph"] = str(graph)
+        self.occ({"hall": "occupied"})
+        self.S("binary_sensor.graph_door", "off", ago=3600)
+        self.S("sensor.graph_node", "asleep", ago=3600)
+        self.S("sensor.graph_seen", datetime.fromtimestamp(self.now[0] - 3600).astimezone().isoformat(), ago=3600)
+        clearance = self.p.request_clearance(["Bath"])
+        self.assertTrue(clearance["allowed"], clearance)
+        self.S("sensor.graph_node", "dead")
+        self.assertFalse(self.p.request_clearance(["Bath"])["allowed"])
+        data["segments"]["upstairs"].pop("Bath")
+        graph.write_text(__import__("json").dumps(data))
+        self.p._passage_cache = None
+        self.assertIn("do not exactly match", self.p.request_clearance(["Bath"])["why"])
+
+    def test_requested_run_ignores_remote_resident_but_pauses_and_resumes_for_local_intrusion(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.occ({"bedroom": "occupied"})
+        self.button(rooms=["Bath"], request_id="route-bath")
+        self.assertIsNotNone(self.run_until_start()[0])
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        self.assertNotIn("vacuum.pause", [svc for svc, _ in self.tick(10)])
+        self.occ({"bedroom": "occupied", "hall": "occupied"})
+        self.assertIn("vacuum.pause", [svc for svc, _ in self.tick()])
+        self.assertEqual(self.p.D["phase"], "paused")
+        self.S("vacuum.up", "paused")
+        self.occ({"bedroom": "occupied"})
+        self.assertNotIn("vacuum.send_command", [svc for svc, _ in self.tick(self.va.RESUME_QUIET_S - 1)])
+        self.assertIn("vacuum.send_command", [svc for svc, _ in self.tick(2)])
+
+    def test_requested_run_rechecks_room_clearance_before_its_next_segment(self):
+        self.va.OCC["request_clearance"]["Study"] = {"complete": True, "rooms": ["study"], "passages": []}
+        self.p.D.update(phase="between", run_kind="request", groups=[
+            {"mode": "smart_mode", "rooms": ["Bath"]}, {"mode": "smart_mode", "rooms": ["Study"]}],
+            gi=0, between_since=self.now[0], run_started=self.now[0] - 300, pauses=[], saved={})
+        self.occ({"study": "occupied", "bedroom": "occupied"})
+        self.assertNotIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick()])
+        self.assertEqual(self.p.D["phase"], "between")
+        self.occ({"bedroom": "occupied"})
+        self.assertIn("script.vacuum_clean_rooms", [svc for svc, _ in self.tick()])
+        self.assertEqual(self.p.D["gi"], 1)
+
+    def test_requested_run_pauses_when_its_live_route_room_is_unknown(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.occ({"bedroom": "occupied"})
+        self.button(rooms=["Bath"], request_id="unknown-route")
+        self.assertIsNotNone(self.run_until_start()[0])
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        self.S("sensor.up_room", "unknown")
+        self.assertIn("vacuum.pause", [svc for svc, _ in self.tick(10)])
+        self.assertEqual(self.p.D["phase"], "paused")
 
     def button(self, gesture="single", rooms=None, request_id="press-1"):
         return self.p.button_request({"gesture": gesture, "rooms": rooms or [], "request_id": request_id})

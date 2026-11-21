@@ -13,6 +13,8 @@ More robots: each gets its own copy (server loads this module once per house.jso
   occupancy       {"sensor", "floor", "seal": {room: {"doors": [...], "segments": [...]}}}: floor vacancy from the house's
                   people tracker instead of motion sensors; an occupied room shut off by closed doors doesn't count, its
                   robot rooms are skipped
+                  Optional passage_graph points to HA's private validated room/passages export for room-level clearance
+                  of explicit Clean-when-vacant requests. Invalid graph data falls back to whole-floor vacancy.
   guest_switches  {segment: switch}: skip a room while a guest stays there
   sleep_protection {segment: entity}: hold a room while the sleep guard is on or unavailable
   untidy_blocks   true: a room marked untidy waits until it's tidy
@@ -26,6 +28,7 @@ import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
+from pathlib import Path
 from entry_edges import entry_edges
 import schedule
 
@@ -294,6 +297,231 @@ class Pilot:
     def sealed_segments(self):
         _, sealed = self.occ_presence() if OCC else (None, set())
         return {seg for r in sealed for seg in ((OCC.get("seal") or {}).get(r) or {}).get("segments") or []}
+
+    def request_clearance_specs(self):
+        """Return validated per-segment specs, deriving them from HA's private passage graph when configured."""
+        direct = OCC.get("request_clearance") or {}
+        if direct:
+            return direct.get("segments") if isinstance(direct.get("segments"), dict) else direct
+        source = OCC.get("passage_graph")
+        if not source:
+            self._passage_error = "room passage topology is unavailable"
+            return {}
+        try:
+            path = Path(source).expanduser()
+            stamp = path.stat().st_mtime_ns
+            cached = getattr(self, "_passage_cache", None)
+            if cached and cached[0] == stamp:
+                self._passage_error = None
+                return cached[1]
+            data = json.loads(path.read_text())
+            floor = OCC.get("floor")
+            aliases = data.get("aliases") or {}
+            segment_rooms = (data.get("segments") or {}).get(floor)
+            if not isinstance(segment_rooms, dict) or set(segment_rooms) != set(SEGMENTS):
+                raise ValueError("robot segments do not exactly match the validated graph")
+            normal = lambda room: aliases.get(room, room)
+            for seg in SEGMENTS:
+                configured = {normal(room) for room in SEG_ROOMS.get(seg, [])}
+                exported = set(segment_rooms.get(seg) or [])
+                if not configured or configured != exported:
+                    raise ValueError("tracker rooms differ for " + seg)
+            floors = data.get("floors") or {}
+            passages = data.get("passages")
+            if not isinstance(passages, list) or not isinstance(floors, dict):
+                raise ValueError("passage list or room floors missing")
+            pairs, adjacent = set(), {}
+            valid_s = float(data.get("contact_valid_seconds") or 0)
+            for edge in passages:
+                if not isinstance(edge, dict) or not isinstance(edge.get("a"), str) or not isinstance(edge.get("b"), str):
+                    raise ValueError("ambiguous passage")
+                a, b = normal(edge["a"]), normal(edge["b"])
+                pair = frozenset((a, b))
+                if len(pair) != 2 or pair in pairs:
+                    raise ValueError("duplicate or self passage")
+                pairs.add(pair)
+                if floors.get(a) != floor or floors.get(b) != floor:
+                    continue                 # robots do not cross floors, exterior doors or basement stairs
+                contact = edge.get("contact")
+                if contact is None:
+                    opening = {"contact": None}
+                elif isinstance(contact, dict) and contact.get("entity_id") and contact.get("node_status") and \
+                        contact.get("last_seen") and valid_s > 0:
+                    opening = {"contact": contact["entity_id"], "node_status": contact["node_status"],
+                               "last_seen": contact["last_seen"], "valid_seconds": valid_s}
+                else:
+                    raise ValueError("incomplete contact evidence")
+                adjacent.setdefault(a, []).append((b, opening))
+                adjacent.setdefault(b, []).append((a, opening))
+            specs = {}
+            for seg, rooms in segment_rooms.items():
+                target = set(rooms)
+                grouped = {}
+                for room in target:
+                    if floors.get(room) != floor:
+                        raise ValueError("segment crosses floors")
+                    for neighbour, opening in adjacent.get(room, []):
+                        if neighbour not in target:
+                            grouped.setdefault(neighbour, []).append(opening)
+                specs[seg] = {"complete": True, "rooms": sorted(target),
+                              "route_segments": list(TRANSIT.get(seg) or []),
+                              "passages": [{"room": room, "openings": openings}
+                                           for room, openings in sorted(grouped.items())]}
+            self._passage_cache = (stamp, specs)
+            self._passage_error = None
+            return specs
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as ex:
+            self._passage_error = "passage graph invalid: " + str(ex)
+            return {}
+
+    def request_clearance(self, segments, now=None):
+        """Room-level vacancy for an explicit Clean-when-vacant request.
+
+        This is deliberately narrower than ordinary autopilot admission. HA supplies and validates the private
+        segment/room/passage graph; missing or ambiguous evidence falls back to whole-floor vacancy. An occupied
+        adjacent room is isolated only when every physical opening to it has a positively closed healthy contact.
+        """
+        now = now or time.time()
+        specs = self.request_clearance_specs()
+        if not isinstance(specs, dict):
+            return {"allowed": False, "quiet_s": 0, "why": "room passage topology is unavailable"}
+        if not specs:
+            return {"allowed": False, "quiet_s": 0,
+                    "why": getattr(self, "_passage_error", None) or "room passage topology is unavailable"}
+        tracker = self.get(OCC.get("sensor")) if OCC.get("sensor") else {}
+        attrs = tracker.get("attributes") or {}
+        try:
+            fresh = tracker.get("state") == "ok" and float(attrs.get("valid_until") or 0) > now \
+                and attrs.get("roster_complete") is True
+        except (TypeError, ValueError):
+            fresh = False
+        if not fresh:
+            return {"allowed": False, "quiet_s": 0, "why": "presence tracker is stale or incomplete"}
+        floor = (attrs.get("floors") or {}).get(OCC.get("floor")) or {}
+        if floor.get("state") not in ("vacant", "occupied"):
+            return {"allowed": False, "quiet_s": 0, "why": "floor placement is ambiguous"}
+        room_info = attrs.get("rooms") or {}
+        needed = []
+        for seg in dict.fromkeys(segments):
+            spec = specs.get(seg)
+            if not isinstance(spec, dict) or spec.get("complete") is not True:
+                return {"allowed": False, "quiet_s": 0,
+                        "why": "%s passage topology is missing or unvalidated" % seg}
+            needed.append(seg)
+            for route in spec.get("route_segments") or []:
+                if route not in needed:
+                    needed.append(route)
+
+        safe_since = []
+        checked_rooms = set()
+        for seg in needed:
+            spec = specs.get(seg)
+            if not isinstance(spec, dict) or spec.get("complete") is not True:
+                return {"allowed": False, "quiet_s": 0,
+                        "why": "%s route topology is missing or unvalidated" % seg}
+            targets = spec.get("rooms") or []
+            if not targets or any(not isinstance(room, str) for room in targets):
+                return {"allowed": False, "quiet_s": 0, "why": "%s has no unambiguous tracker room" % seg}
+            for room in targets:
+                info = room_info.get(room)
+                if not isinstance(info, dict) or info.get("state") != "clear" or info.get("people"):
+                    return {"allowed": False, "quiet_s": 0, "why": "%s is not verifiably clear" % room}
+                since = info.get("since")
+                if type(since) not in (int, float) or not 0 < since <= now:
+                    return {"allowed": False, "quiet_s": 0, "why": "%s clear time is ambiguous" % room}
+                safe_since.append(float(since)); checked_rooms.add(room)
+            for passage in spec.get("passages") or []:
+                if not isinstance(passage, dict) or not isinstance(passage.get("room"), str):
+                    return {"allowed": False, "quiet_s": 0, "why": "%s has ambiguous adjacency" % seg}
+                room = passage["room"]
+                info = room_info.get(room)
+                if not isinstance(info, dict):
+                    return {"allowed": False, "quiet_s": 0, "why": "%s adjacency is unknown" % room}
+                state, people = info.get("state"), info.get("people") or []
+                since = info.get("since")
+                if state == "clear" and not people:
+                    if type(since) not in (int, float) or not 0 < since <= now:
+                        return {"allowed": False, "quiet_s": 0, "why": "%s clear time is ambiguous" % room}
+                    safe_since.append(float(since)); checked_rooms.add(room)
+                    continue
+                if state not in ("occupied", "still"):
+                    return {"allowed": False, "quiet_s": 0, "why": "%s adjacency is %s" % (room, state or "unknown")}
+                openings = passage.get("openings")
+                if not isinstance(openings, list) or not openings:
+                    return {"allowed": False, "quiet_s": 0, "why": "%s has an open passage to %s" % (seg, room)}
+                for opening in openings:
+                    if isinstance(opening, str):
+                        opening = {"contact": opening}
+                    contact = opening.get("contact") if isinstance(opening, dict) else None
+                    healthy = opening.get("healthy") if isinstance(opening, dict) else None
+                    if not contact:
+                        return {"allowed": False, "quiet_s": 0,
+                                "why": "%s has an unmonitored open passage to %s" % (seg, room)}
+                    contact_state = self.get(contact)
+                    if contact_state.get("state") != "off":
+                        return {"allowed": False, "quiet_s": 0,
+                                "why": "%s passage to %s is open or unavailable" % (seg, room)}
+                    if healthy:
+                        health_state = self.get(healthy)
+                        if health_state.get("state") != "on":
+                            return {"allowed": False, "quiet_s": 0,
+                                    "why": "%s passage contact is not healthy" % seg}
+                        safe_since.append(epoch(health_state) or now)
+                    elif opening.get("node_status") or opening.get("last_seen"):
+                        status = self.get(opening.get("node_status")) if opening.get("node_status") else {}
+                        if status.get("state") not in ("alive", "awake", "asleep"):
+                            return {"allowed": False, "quiet_s": 0,
+                                    "why": "%s passage contact node is unavailable" % seg}
+                        seen_state = self.get(opening.get("last_seen")) if opening.get("last_seen") else {}
+                        seen_value = seen_state.get("state")
+                        try:
+                            seen_at = float(seen_value) if type(seen_value) in (int, float) else \
+                                datetime.fromisoformat(str(seen_value).replace("Z", "+00:00")).timestamp()
+                        except (TypeError, ValueError):
+                            seen_at = 0
+                        valid_s = float(opening.get("valid_seconds") or 0)
+                        if not valid_s or not 0 <= now - seen_at < valid_s:
+                            return {"allowed": False, "quiet_s": 0,
+                                    "why": "%s passage contact report is stale" % seg}
+                        safe_since.extend([epoch(status) or now, epoch(seen_state) or now])
+                    safe_since.append(epoch(contact_state) or now)
+                checked_rooms.add(room)
+        if not safe_since:
+            return {"allowed": False, "quiet_s": 0, "why": "no relevant room evidence"}
+        since = max(safe_since)
+        quiet = max(0, now - since)
+        return {"allowed": True, "quiet_s": quiet, "since": since, "segments": needed,
+                "rooms": sorted(checked_rooms),
+                "why": "requested rooms and direct passages clear for %d of %d minutes" %
+                       (quiet // 60, START_QUIET_S // 60)}
+
+    def requested_run_risk(self, now):
+        """Current target/route intrusion for a room-cleared explicit request run."""
+        groups = self.D.get("groups") or []
+        i = min(int(self.D.get("gi") or 0), max(0, len(groups) - 1))
+        rooms = (groups[i] if groups else {}).get("rooms") or []
+        current = self.get(ROOM_SENSOR).get("state")
+        if current in SEGMENTS and current not in rooms:
+            rooms = list(rooms) + [current]       # the live route becomes relevant as soon as the robot reports it
+        elif self.get(VAC).get("state") in ("cleaning", "paused") and current not in SEGMENTS:
+            return {"reason_code": "request_route_unknown", "reason": "robot route room is unknown",
+                    "sensor": ROOM_SENSOR, "observed_at": now}
+        clearance = self.request_clearance(rooms, now)
+        if clearance.get("allowed"):
+            return None
+        return {"reason_code": "request_zone_intrusion", "reason": clearance["why"],
+                "sensor": OCC.get("sensor"), "observed_at": now}
+
+    def requested_presence_pause(self, now):
+        risk = self.requested_run_risk(now)
+        previous = self.D.get("presence_pause") or {}
+        if risk:
+            risk.update(since=previous.get("since") or now, last_seen=now, clearing=False)
+        else:
+            risk = dict(previous, clearing=True) if previous.get("last_seen") and \
+                now - previous["last_seen"] < RESUME_QUIET_S else {}
+        self.D["presence_pause"] = risk
+        return risk
 
     def closed_segments(self):
         """Robot rooms behind entrances that are all positively closed, occupied or not."""
@@ -821,7 +1049,11 @@ class Pilot:
             elif seg in incomplete:
                 d["eligible"], d["why"] = True, "unfinished from an interrupted run"
             elif seg in requests:
-                d["eligible"], d["why"] = True, "requested: clean when vacant"
+                clearance = self.request_clearance([seg], now)
+                d["eligible"] = True
+                d["request_clearance"] = clearance
+                d["why"] = "requested: " + (clearance["why"] if clearance.get("allowed") else
+                                                "waiting for whole-floor vacancy; " + clearance["why"])
             elif sch.get("nightly_after") and self.nightly_due(sch, last):
                 d["eligible"], d["why"] = True, "nightly" + (" (dinner was eaten here)" if sch.get("needs_dinner") else "")
             elif not last or now - last >= every:
@@ -834,7 +1066,10 @@ class Pilot:
                 if sch.get("nightly_after"):
                     d["why"] += "; nightly after " + sch["nightly_after"] + (" if dinner was eaten here" if sch.get("needs_dinner") else "")
             if d["eligible"]:
-                d["why"] += " · goes next time the floor is empty 20 min"
+                if seg in requests and (d.get("request_clearance") or {}).get("allowed"):
+                    d["why"] += " · may run while occupied elsewhere after 20 clear minutes"
+                else:
+                    d["why"] += " · goes next time the floor is empty 20 min"
             elif EXPLORE and untidy and (not d["blocked"] or messy and d["why"].startswith("marked untidy")):
                 d["explore"] = True   # untidy, and not held back for any other reason
                 d["why"] += " · the robot may explore it to check tidiness while the kids are home"
@@ -1066,6 +1301,10 @@ class Pilot:
                       clean_first=0, clean_last=0, saw_clean=False, docked_since=0, docking_since=0,
                       resume_fallback=False, explore=explore, run_kind=run_kind,
                       manual_active=request_id if run_kind == "manual" else None)
+        if run_kind == "request":
+            # Admission may occur while the floor-level pause signal names a remote resident. Do not carry that
+            # broader pre-start latch into the room-scoped run; the next tick rebuilds it from target/route evidence.
+            self.D["presence_pause"] = {}
         self.call("input_boolean.turn_on", {"entity_id": ACTIVE})
         self.log("start", rooms=rooms, saved=self.D["saved"], explore=explore,
                  run_kind=run_kind, request_id=request_id, whole_floor=whole_floor,
@@ -1307,7 +1546,8 @@ class Pilot:
         self.return_lights(vs, now)
         self.dinner_reopens()
         ph = D["phase"]
-        pause_signal = self.presence_pause(
+        request_run = D.get("run_kind") == "request"
+        pause_signal = self.requested_presence_pause(now) if request_run else self.presence_pause(
             now, include_path=ph == "running" and vs == "cleaning" and D.get("run_kind") != "manual")
         self.publish_presence_pause(pause_signal, now)
         info = {}
@@ -1356,6 +1596,22 @@ class Pilot:
                 ok_robot = vs == "docked" and (incl != "on" or self.leftover(vs, incl, now)) and \
                     (not BATTERY or float(self.get(BATTERY).get("state") or 0) >= 50) and (not ERROR or self.get(ERROR).get("state") in ("none", None))
                 reqs = self.room_requests()
+                remote_run = False
+                remote_wait = None
+                if rooms and (q is None or q < START_QUIET_S):
+                    requested = [seg for seg in rooms if seg in reqs]
+                    clearances = [(seg, self.request_clearance([seg], now)) for seg in requested]
+                    ready = [seg for seg, clearance in clearances
+                             if clearance.get("allowed") and clearance.get("quiet_s", 0) >= START_QUIET_S]
+                    if ready:
+                        # Only explicit requests may use room-level clearance. Scheduled/due rooms remain behind the
+                        # whole-floor vacancy rule, and one-at-a-time grouping permits a fresh check before each room.
+                        rooms, remote_run, q, who = ready, True, START_QUIET_S, "requested room clearance"
+                        info.update(eligible=rooms, quiet_min=START_QUIET_S // 60,
+                                    request_clearance="room-level")
+                    elif clearances:
+                        remote_wait = next((clearance["why"] for _, clearance in clearances
+                                            if not clearance.get("allowed")), clearances[0][1]["why"])
                 # after failed starts, wait (2 h, 4 h, 8 h, then daily); a room pressed since the failure still goes
                 held = now < D.get("backoff_until", 0) and not any(t > D.get("failed_at", 0) for t in reqs.values())
                 hm = lambda t: datetime.fromtimestamp(t).strftime("%H:%M")
@@ -1378,16 +1634,18 @@ class Pilot:
                     info["why"] = "not starting before %s: the last %d start(s) failed (%s)" % (
                         hm(D["backoff_until"]), D.get("fail_streak", 0), last)
                 elif q is None or q < START_QUIET_S:
-                    info["why"] = tag + ("waiting for %s to be empty: quiet %d of %d minutes%s" % (
+                    info["why"] = tag + (("waiting for requested-room clearance: " + remote_wait) if remote_wait else
+                        ("waiting for %s to be empty: quiet %d of %d minutes%s" % (
                         FLOOR, (q or 0) // 60, START_QUIET_S // 60, " (%s)" % self.who_text(who) if who else "")) if q is not None \
-                        else "waiting: can't tell whether %s is empty" % FLOOR
+                        else "waiting: can't tell whether %s is empty" % FLOOR)
                 elif now - D.get("last_attempt", 0) <= RETRY_S:
                     info["why"] = "waiting to retry at %s" % hm(D["last_attempt"] + RETRY_S)
                 else:
                     D["last_attempt"] = now
                     if pr:
                         D["explore_day"] = datetime.fromtimestamp(now).date().isoformat()
-                    self.start(rooms, now, explore=bool(pr))
+                    self.start(rooms, now, explore=bool(pr), run_kind="request" if remote_run else "auto",
+                               one_at_time=remote_run)
         elif ph == "running":
             if incl == "on":
                 D["device_task_acknowledged"] = True
@@ -1444,6 +1702,9 @@ class Pilot:
             next_group = D["groups"][D["gi"] + 1]
             holds = self.room_holds(next_group["rooms"], explicit=manual.get("gesture") != "long") if manual else {}
             hold = next(iter(holds.values()), None)
+            next_clearance = self.request_clearance(next_group["rooms"], now) if request_run else None
+            request_next_ready = bool(next_clearance and next_clearance.get("allowed") and
+                                      next_clearance.get("quiet_s", 0) >= BETWEEN_QUIET_S)
             if hold and manual.get("gesture") == "long":
                 D["groups"].pop(D["gi"] + 1)
                 self.log("room_skipped", rooms=next_group["rooms"], why=hold)
@@ -1453,15 +1714,21 @@ class Pilot:
                 self.finish("run too old to continue", now)
             elif hold:
                 info["why"] = "manual clean queued: " + hold
-            elif manual or (not pause_signal and (self.quiet_for(held=False)[0] or 0) >= BETWEEN_QUIET_S):
+            elif request_run and not request_next_ready:
+                info["why"] = "requested next room is waiting: " + (next_clearance or {}).get(
+                    "why", "room-level clearance unavailable")
+            elif manual or request_next_ready or (not pause_signal and
+                                                   (self.quiet_for(held=False)[0] or 0) >= BETWEEN_QUIET_S):
                 D["gi"] += 1
                 D["phase"] = "running"
                 self.launch(now)
             elif now - D.get("between_since", now) > PARK_DOCK_S:
                 self.finish("people back between rooms", now)
         elif ph == "paused":
-            q, who = (0, pause_signal["reason"]) if pause_signal else \
-                self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
+            q, who = ((0, pause_signal["reason"]) if pause_signal else
+                      (RESUME_QUIET_S, "requested rooms and route clear")) if request_run else \
+                ((0, pause_signal["reason"]) if pause_signal else
+                 self.quiet_for(exclude={D.get("cur")} - {None}, held=False))
             age = max(0, now - D["paused_at"])
             if vs in ("returning", "docked"):
                 D["phase"] = "docking"
@@ -1486,8 +1753,10 @@ class Pilot:
                 D["phase"] = "docking"
                 self.log("dock", who=who)
         elif ph == "resuming":
-            q, who = (0, pause_signal["reason"]) if pause_signal else \
-                self.quiet_for(exclude={D.get("cur")} - {None}, held=False)
+            q, who = ((0, pause_signal["reason"]) if pause_signal else
+                      (RESUME_QUIET_S, "requested rooms and route clear")) if request_run else \
+                ((0, pause_signal["reason"]) if pause_signal else
+                 self.quiet_for(exclude={D.get("cur")} - {None}, held=False))
             if vs in ("returning", "docked"):
                 D["phase"] = "docking"
             elif q < RESUME_QUIET_S:

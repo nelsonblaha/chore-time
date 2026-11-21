@@ -1181,6 +1181,26 @@ class Vacuum(unittest.TestCase):
         self.assertEqual(self.p.D.get("manual_queue", []), [])
         self.assertEqual(self.p.room_requests(), {})
 
+    def test_downstairs_explicit_request_uses_validated_room_clearance_not_remote_floor_occupancy(self):
+        tracker = "sensor.downstairs_people"
+        self.va.OCC = {"sensor": tracker, "floor": "downstairs", "request_clearance": {
+            "Kitchen": {"complete": True, "rooms": ["kitchen"],
+                        "passages": [{"room": "hall", "openings": [{"contact": "binary_sensor.kitchen_hall"}]}]}
+        }}
+        self.S("binary_sensor.kitchen_hall", "on")                 # irrelevant while the adjacent hall is clear
+        self.S(tracker, "ok", valid_until=self.now[0] + 90, roster_complete=True,
+               floors={"downstairs": {"state": "occupied", "rooms": ["living"]}},
+               rooms={"kitchen": {"state": "clear", "people": [], "since": self.now[0] - 3600},
+                      "hall": {"state": "clear", "people": [], "since": self.now[0] - 3600},
+                      "living": {"state": "occupied", "people": ["X"], "since": self.now[0] - 300}})
+        self.S(self.va.ENABLE, "off")
+        result = self.p.button_request({"gesture": "single", "rooms": ["Kitchen"],
+                                        "request_id": "down-remote-kitchen"})
+        self.assertEqual(result["action"], "queued_when_vacant")
+        calls = self.tick()
+        self.assertIn("script.vacuum_clean_rooms", calls)
+        self.assertEqual(self.p.D["run_kind"], "request")
+
     def test_vacuum_rooms_before_mop_rooms_and_suction_by_who_is_home(self):
         self.tick()
         g = self.p.D["groups"]
