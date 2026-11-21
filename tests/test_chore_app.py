@@ -795,6 +795,34 @@ class TvClocks(Case):
         running = [g for g in tv["grants"] if not g["armed"]][0]
         self.assertAlmostEqual(tv["locks_at"], running["until"] + 30 * 60, delta=2)
 
+    def test_reward_audience_contract_distinguishes_solo_group_and_waiting_sessions(self):
+        a = self.app
+        for kid in ("ava", "max", "zoe"):
+            a.event(type="adjust", kid=kid, points=50, by="jordan", reason="test")
+        code, bought = a.post("/api/spend", {"kid": "ava", "reward": "movie", "tv": "livingroom",
+                                             "with": ["max"]})
+        self.assertEqual(code, 200, bought)
+        code, queued = a.post("/api/spend", {"kid": "zoe", "reward": "show", "tv": "livingroom"})
+        self.assertEqual(code, 200, queued)
+
+        tv = a.state()["tv"]["tvs"]["livingroom"]
+        group = next(x for x in tv["reward_audiences"] if x["reward"] == "movie")
+        solo = next(x for x in tv["reward_audiences"] if x["reward"] == "show")
+        self.assertEqual((group["expected_kids"], group["expected_count"], group["state"]),
+                         (["ava", "max"], 2, "waiting"))
+        self.assertEqual((solo["expected_kids"], solo["expected_count"], solo["state"]),
+                         (["zoe"], 1, "waiting"))
+        self.assertTrue(all("group" in g for g in tv["grants"]))
+
+        for grant in tv["grants"]:
+            if grant["group"] == group["session_id"]:
+                a.event(type="tv_started", ref=grant["id"], tv="livingroom", what="stream")
+        tv = a.state()["tv"]["tvs"]["livingroom"]
+        group = next(x for x in tv["reward_audiences"] if x["reward"] == "movie")
+        solo = next(x for x in tv["reward_audiences"] if x["reward"] == "show")
+        self.assertEqual((group["state"], solo["state"]), ("active", "waiting"))
+        self.assertIn("started_at", group)
+
     def test_games_break_comes_after_the_games(self):
         # "screen break until 8:54" showed before Max had played at all
         ev = self.spend("max", "games")

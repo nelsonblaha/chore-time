@@ -2225,7 +2225,32 @@ def derive():
                 if tid in tvs and us:
                     tvs[tid]["unlocked_until"] = max(u["until"] for u in us)
                     tvs[tid]["unlock_why"] = sorted({u["what"] for u in us})
-                    tvs[tid]["grants"] = [{k: u.get(k) for k in ("id", "until", "start", "kid", "what", "by", "kinds", "armed", "mins")} for u in us]
+                    tvs[tid]["grants"] = [{k: u.get(k) for k in ("id", "until", "start", "kid", "what", "by", "kinds", "armed", "mins", "group")} for u in us]
+                    # Camera/room automation can compare the actual child audience with the children who paid for
+                    # this exact reward session. Waiting purchases are published but are not active monitoring
+                    # windows; a watch-together group has one session id and one expected-kids set.
+                    audience_ = {}
+                    kid_order_ = {kid_["id"]: i for i, kid_ in enumerate(c["kids"])}
+                    for u in us:
+                        if u.get("what") not in ("show", "movie", "games") or not u.get("kid"):
+                            continue
+                        session_ = u.get("group") or u["id"]
+                        row_ = audience_.setdefault(session_, {"session_id": session_, "reward": u["what"],
+                                                                 "expected_kids": [], "active": False,
+                                                                 "valid_until": u["until"], "kinds": u.get("kinds") or []})
+                        if u["kid"] not in row_["expected_kids"]:
+                            row_["expected_kids"].append(u["kid"])
+                        row_["active"] = row_["active"] or not u.get("armed")
+                        row_["valid_until"] = max(row_["valid_until"], u["until"])
+                        if not u.get("armed"):
+                            row_["started_at"] = min(row_.get("started_at", u["start"]), u["start"])
+                    for row_ in audience_.values():
+                        row_["expected_kids"].sort(key=lambda kid_: kid_order_.get(kid_, len(kid_order_)))
+                        row_["expected_count"] = len(row_["expected_kids"])
+                        row_["state"] = "active" if row_.pop("active") else "waiting"
+                    if audience_:
+                        tvs[tid]["reward_audiences"] = sorted(audience_.values(), key=lambda row_: (
+                            row_["state"] != "active", row_.get("started_at") or row_["valid_until"]))
                     # when it actually locks: the running clocks, then any queued purchases back to back (armed = not started)
                     run_ = [u["until"] for u in us if not u.get("armed") and u["what"] != "vr"]
                     if run_:
