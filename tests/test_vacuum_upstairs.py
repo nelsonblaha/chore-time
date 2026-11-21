@@ -502,6 +502,81 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(launch["rooms"], ["Bath"])
         self.assertEqual(self.p.D["manual_active"], "two")
 
+    def test_map_vacancy_on_and_off_are_idempotent_and_preserve_clean_now(self):
+        self.S("input_text.up_requests", '{"Hall": %d}' % (self.now[0] - 60))
+        added = self.button("map_vacant_on", ["Bath"], "map-vacant-on")
+        self.assertEqual(added["changed"], ["Bath"])
+        self.assertEqual(set(self.p.room_requests()), {"Hall", "Bath"})
+        self.assertEqual(self.button("map_vacant_on", ["Bedroom"], "map-vacant-on"), added)
+        immediate = self.button("map_now_on", ["Bath"], "map-now-on")
+        self.assertEqual(immediate["changed"], ["Bath"])
+        self.S("input_text.up_requests", '{"Bath": %d, "Hall": %d}' % (self.now[0], self.now[0] - 60))
+        removed = self.button("map_vacant_off", ["Bath"], "map-vacant-off")
+        self.assertEqual(removed["changed"], ["Bath"])
+        self.assertEqual(set(self.p.room_requests()), {"Hall"})
+        self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Bath"])
+        self.assertFalse(self.posts[-1][2]["segments"]["Bath"]["requested"])
+        calls = len(self.calls)
+        again = self.button("map_vacant_off", ["Bath"], "map-vacant-off-again")
+        self.assertEqual(again["changed"], [])
+        self.assertEqual(len(self.calls), calls)                       # a mirrored Off is a no-op
+        self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
+    def test_map_vacancy_off_reports_but_does_not_interrupt_an_active_request(self):
+        self.S("input_text.up_requests", '{"Bath": %d, "Hall": %d}' % (self.now[0] - 30, self.now[0] - 60))
+        self.p.D.update(phase="running", run_kind="request", gi=0,
+                        groups=[{"mode": "vacuum", "rooms": ["Bath"]}])
+        result = self.button("map_vacant_off", ["Bath"], "active-vacant-off")
+        self.assertEqual(result["active_finishing"], ["Bath"])
+        self.assertEqual(self.p.D["groups"], [{"mode": "vacuum", "rooms": ["Bath"]}])
+        self.assertEqual(set(self.p.room_requests()), {"Hall"})
+        self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
+    def test_map_now_off_removes_only_selected_queued_rooms(self):
+        self.button("map_vacant_on", ["Bath"], "keep-vacant")
+        self.button("map_now_on", ["Bath", "Bedroom"], "now-pair")
+        self.button("map_now_on", ["Hall"], "now-hall")
+        removed = self.button("map_now_off", ["Bath"], "now-bath-off")
+        self.assertEqual(removed["changed"], ["Bath"])
+        self.assertEqual([item["rooms"] for item in self.p.D["manual_queue"]], [["Bedroom"], ["Hall"]])
+        self.assertIn("Bath", self.p.room_requests())                 # the vacancy kind is independent
+        self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
+    def test_map_now_on_queues_behind_busy_work_without_cancelling_it(self):
+        self.p.D.update(phase="running", run_kind="auto", gi=0,
+                        groups=[{"mode": "vacuum", "rooms": ["Hall"]}])
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        result = self.button("map_now_on", ["Bath"], "busy-map-on")
+        self.assertEqual(result["changed"], ["Bath"])
+        self.assertIn("behind current robot work", result["why"])
+        self.assertEqual(self.p.D["groups"], [{"mode": "vacuum", "rooms": ["Hall"]}])
+        self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Bath"])
+        self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
+    def test_map_now_off_does_not_dock_an_active_room_and_removes_future_groups(self):
+        self.p.D.update(phase="running", run_kind="manual", manual_active="active-map", gi=0,
+                        groups=[{"mode": "vacuum", "rooms": ["Bath"]},
+                                {"mode": "vacuum", "rooms": ["Bedroom"]}],
+                        manual_queue=[{"id": "active-map", "gesture": "map_now_on",
+                                       "rooms": ["Bath", "Bedroom"], "whole_floor": False},
+                                      {"id": "later", "gesture": "map_now_on",
+                                       "rooms": ["Hall"], "whole_floor": False}])
+        removed = self.button("map_now_off", ["Bath", "Bedroom"], "active-off")
+        self.assertEqual(removed["active_finishing"], ["Bath"])
+        self.assertEqual(removed["changed"], ["Bath", "Bedroom"])
+        self.assertEqual(self.p.D["groups"], [{"mode": "vacuum", "rooms": ["Bath"]}])
+        self.assertEqual([item["rooms"] for item in self.p.D["manual_queue"]], [["Hall"]])
+        self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
+    def test_map_now_off_leaves_native_whole_floor_work_alone(self):
+        self.p.D["manual_queue"] = [{"id": "physical-long", "gesture": "long", "rooms": list(self.va.SEGMENTS),
+                                      "whole_floor": True, "native_requested": True}]
+        result = self.button("map_now_off", ["Bath"], "map-off-whole")
+        self.assertEqual(result["whole_floor_unchanged"], ["Bath"])
+        self.assertEqual(self.p.D["manual_queue"][0]["rooms"], list(self.va.SEGMENTS))
+        self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
     def test_button_merges_vacancy_rooms_then_promotes_only_when_all_are_already_flagged(self):
         self.button(rooms=["Bath"], request_id="one")
         result = self.button("double", ["Bath", "Hall"], "two")

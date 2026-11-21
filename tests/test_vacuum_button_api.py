@@ -42,7 +42,8 @@ class VacuumButtonApiTest(unittest.TestCase):
             return ex.code, json.loads(ex.read())
 
     def test_internal_contract_routes_to_the_floor_planner(self):
-        body = {"floor": "upstairs", "gesture": "double", "rooms": ["Office"], "request_id": "ha-context-1"}
+        body = {"floor": "upstairs", "gesture": "map_now_off", "rooms": ["Office"],
+                "request_id": "ha-context-1"}
         code, result = self.post(body, self.token)
         self.assertEqual(code, 200)
         self.assertEqual(result, {"ok": True, "rooms": ["Office"], "why": "queued next"})

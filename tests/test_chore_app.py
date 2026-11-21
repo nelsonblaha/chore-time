@@ -1163,6 +1163,25 @@ class Vacuum(unittest.TestCase):
         self.assertEqual(second["action"], "clean_now_queued")
         self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Kitchen"])
 
+    def test_downstairs_map_buttons_set_each_kind_independently_and_deselect(self):
+        vacant = self.p.button_request({"gesture": "map_vacant_on", "rooms": ["Kitchen"],
+                                        "request_id": "down-map-vacant-on"})
+        immediate = self.p.button_request({"gesture": "map_now_on", "rooms": ["Kitchen", "Hall"],
+                                           "request_id": "down-map-now-on"})
+        self.assertEqual(vacant["changed"], ["Kitchen"])
+        self.assertEqual(immediate["changed"], ["Kitchen", "Hall"])
+        off_now = self.p.button_request({"gesture": "map_now_off", "rooms": ["Kitchen"],
+                                         "request_id": "down-map-now-off"})
+        self.assertEqual(off_now["changed"], ["Kitchen"])
+        self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Hall"])
+        self.assertIn("Kitchen", self.p.room_requests())
+        off_vacant = self.p.button_request({"gesture": "map_vacant_off", "rooms": ["Kitchen"],
+                                            "request_id": "down-map-vacant-off"})
+        self.assertEqual(off_vacant["changed"], ["Kitchen"])
+        self.assertNotIn("Kitchen", self.p.room_requests())
+        self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Hall"])
+        self.assertNotIn(("vacuum.return_to_base", {"entity_id": self.va.VAC}), self.calls)
+
     def test_downstairs_busy_robot_press_has_cancel_and_dock_precedence(self):
         self.S(self.va.VAC, "cleaning")
         self.S(self.va.IN_CLEAN, "on")
