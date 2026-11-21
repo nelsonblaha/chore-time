@@ -227,6 +227,9 @@ class StaticUiRegressions(unittest.TestCase):
         kids = (REPO / "static" / "kids.html").read_text()
         grown = (REPO / "static" / "inspect.html").read_text()
         self.assertIn("Stop safely for now", kids)
+        self.assertIn('if(c.stepped){projectModal(c);return}', kids)
+        self.assertIn('data-project-open', kids)
+        self.assertNotIn('function renderProjects(){var rows=', kids)
         self.assertIn("No sensor verifies this", grown)
         self.assertIn("No amount is suggested", grown)
         self.assertIn('data-paward="', grown)
@@ -2302,6 +2305,37 @@ class PutOnClothes(Case):
         self.assertEqual(code, 200, timed)
         self.assertIn("started", timed["event"])
 
+    def test_confirmed_house_departure_clears_the_gate_and_temporary_dressing_work(self):
+        old = self.s.DRESS.get("house_vacancy")
+        self.s.DRESS["house_vacancy"] = "sensor.house_occupancy"
+        self.addCleanup(lambda: self.s.DRESS.pop("house_vacancy", None) if old is None else
+                        self.s.DRESS.__setitem__("house_vacancy", old))
+        self.app.post("/api/dress", {"by": "jordan", "on": True, "kids": ["ava", "max"]})
+        since = self.app.state()["dress"]["since"]
+        self.app.post("/api/start", {"kid": "ava", "chore": "get_dressed"})
+        code, waiting = self.app.post("/api/report", {"kid": "max", "chore": "get_dressed", "feeling": "ok"})
+        self.assertEqual(code, 200, waiting)
+
+        vacant = {"state": "vacant", "last_changed": iso(since + 1)}
+        self.assertTrue(self.s.dress_departure_step(vacant))
+        st = self.app.state()
+        self.assertFalse(st["dress"]["on"])
+        self.assertFalse(any(x.get("chore") == "get_dressed" for x in st["active"].values()))
+        self.assertFalse(any(x.get("chore") == "get_dressed" for x in st["paused_all"]))
+        self.assertFalse(any(x.get("id") == waiting["event"]["id"] for x in st["history"]))
+        self.assertEqual(st["balance"]["max"], 0)
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})[0], 200)
+
+    def test_a_stale_vacancy_from_before_the_dress_switch_is_not_a_departure(self):
+        old = self.s.DRESS.get("house_vacancy")
+        self.s.DRESS["house_vacancy"] = "sensor.house_occupancy"
+        self.addCleanup(lambda: self.s.DRESS.pop("house_vacancy", None) if old is None else
+                        self.s.DRESS.__setitem__("house_vacancy", old))
+        self.app.post("/api/dress", {"by": "jordan", "on": True, "kids": ["ava"]})
+        since = self.app.state()["dress"]["since"]
+        self.assertFalse(self.s.dress_departure_step({"state": "vacant", "last_changed": iso(since - 1)}))
+        self.assertTrue(self.app.state()["dress"]["on"])
+
 
 class SchoolMornings(Case):
     """On school days "Put on clothes!" switches itself on at 5:30 for the kids at this house, quietly, and off at 7:30.
@@ -2663,6 +2697,13 @@ class SteppedProjectApi(unittest.TestCase):
         self.assertEqual(code, 409)
         self.assertGreater(stale["project"]["revision"], p["revision"])
         self.assertEqual(stale["project"]["next"]["step"]["id"], "location")
+
+    def test_a_kid_must_end_an_active_project_session_before_another_chore(self):
+        self.app.post("/api/project/start", {"kid": "ava", "chore": "yard_project", "team": ["max"]})
+        code, blocked = self.app.post("/api/start", {"kid": "ava", "chore": "kitchen"})
+        self.assertEqual(code, 409)
+        self.assertIn("End your ongoing project session", blocked["error"])
+        self.assertEqual(self.app.state()["projects"][0]["active_session"]["team"], ["ava", "max"])
 
     def test_unknown_weather_needs_adult_approval_and_rain_blocks(self):
         self.s.GUARD["outdoor_context"] = {"state": "unknown", "reason": "weather unavailable"}

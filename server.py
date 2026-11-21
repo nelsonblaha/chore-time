@@ -819,6 +819,54 @@ def dress_state(evs, reports, awake=None):
     return res
 
 
+def dress_departure_step(vacancy, st=None):
+    """Clear a dressing session once HA positively observes the house becoming vacant.
+
+    Departure is useful physical evidence that the family got dressed and left, but
+    it is not evidence for a speed award or stars.  Active work and uninspected
+    dressing taps are temporary session state, so remove them rather than leaving
+    children blocked or a grown-up with meaningless inspection rows on return.
+    """
+    st = st or derive()
+    dress = st.get("dress") or {}
+    if not dress.get("on") or not DRESS.get("house_vacancy"):
+        return False
+    vacant_states = {str(x).lower() for x in DRESS.get("vacant_states") or ["vacant", "on"]}
+    if str((vacancy or {}).get("state") or "").lower() not in vacant_states:
+        return False
+    try:
+        from datetime import datetime as _dt
+        changed = _dt.fromisoformat(str(vacancy.get("last_changed") or "").replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return False
+    if changed <= float(dress.get("since") or 0):
+        return False       # it was already vacant before this dressing session; no departure was observed
+
+    ended = set()
+    for paused, jobs in ((False, st.get("active") or {}), (True, st.get("paused") or {})):
+        for kid, job in jobs.items():
+            if job.get("chore") != "get_dressed":
+                continue
+            team = tuple(job.get("team") or [kid])
+            key = (paused, team)
+            if key in ended:
+                continue
+            ended.add(key)
+            append({"type": "abandon", "kid": kid, "team": list(team), "chore": "get_dressed",
+                    "paused": paused, "by": "vacancy", "why": "family left the house"})
+    withdrawn = []
+    for report in st.get("history") or []:
+        if report.get("type") == "report" and report.get("chore") == "get_dressed" \
+                and report.get("status") == "pending" and float(report.get("ts") or 0) >= float(dress.get("since") or 0):
+            append({"type": "withdraw", "ref": report["id"], "by": "vacancy", "why": "family left the house"})
+            withdrawn.append(report["id"])
+    append({"type": "dress", "on": False, "kids": [], "by": "vacancy", "why": "house became vacant"})
+    ilog({"src": "dress", "action": "clear_on_departure", "vacant_at": changed,
+          "active_ended": len(ended), "reports_withdrawn": len(withdrawn)})
+    after_change()
+    return True
+
+
 # School mornings (house.json dress.school_mornings): "Put on clothes!" switches itself on at "at" on school days
 # for the kids at this house (home switch on), quietly (no speakers, no chimes), and off again at "until".
 # A school day: one of "weekdays" (Mon=0) that the kids' calendar doesn't mark as no school for that kid.
@@ -1185,6 +1233,9 @@ def watch_dress():
         time.sleep(5)
         n += 1
         try:
+            if DRESS.get("house_vacancy"):
+                vacancy_ = ha_get(DRESS["house_vacancy"], ha_token())
+                dress_departure_step(vacancy_)
             d_ = derive().get("dress") or {}
             on = bool(d_.get("on")) and (not d_.get("school") or d_.get("go", 0) <= time.time())   # screens wait until they're up
             if on != was or (on and n % 12 == 0):   # on/off, and once a minute while on (someone may have stopped it)
@@ -1730,6 +1781,9 @@ def derive():
     chores = {x["id"]: x for x in c["chores"]}
     reports = {e["id"]: dict(e, status="pending") for e in evs if e["type"] == "report"}
     for e in evs:
+        if e["type"] == "withdraw" and e.get("ref") in reports:
+            reports.pop(e["ref"], None)   # temporary report canceled without a pass, fail, history row, or points
+            continue
         if e["type"] == "document_host" and e.get("ref") in reports:
             reports[e["ref"]]["document_pages"] = list(e.get("pages") or [])
             reports[e["ref"]].pop("document_url", None)
@@ -4082,9 +4136,20 @@ class H(BaseHTTPRequestHandler):
                 extra["started"] = st["dress"]["since"]
             if ch_.get("together") and not set(ch_.get("only") or []) <= set(extra.get("team") or [b["kid"]]):
                 return self.send(409, {"error": "do it together: team up first"})
+            physical_ = vacuum_help.report_verification(
+                HOUSE.get("vacuum_help") or {}, b["chore"],
+                extra.get("started") or (act or {}).get("ts") or time.time(),
+                lambda entity_: ha_get(entity_, ha_token()) or {})
+            if physical_ and physical_.get("error"):
+                return self.send(409, {"error": physical_["error"]})
+            if physical_:
+                extra["auto_verified"] = physical_["reason"]
             ev = append({"type": "report", "kid": b["kid"], "chore": b["chore"],
                          "feeling": b.get("feeling"), "points": bd["price"], **extra})
-            if ch_.get("trust") and not extra.get("partial"):   # a trusted job: the kid's word is the inspection
+            if physical_:
+                append({"type": "inspect", "ts": physical_["at"], "ref": ev["id"], "by": "vacuum",
+                        "ok": True, "points": int(bd["price"] or 0), "label": "", "trusted": True})
+            elif ch_.get("trust") and not extra.get("partial"):   # a trusted job: the kid's word is the inspection
                 append({"type": "inspect", "ref": ev["id"], "by": "vacuum" if ch_.get("help_robot") else LEAD_ADULT,
                         "ok": True, "points": int(bd["price"] or 0), "label": "", "trusted": True})
         elif p == "/api/spend":
@@ -4402,6 +4467,9 @@ class H(BaseHTTPRequestHandler):
         elif p in ("/api/start", "/api/stop"):
             if b.get("kid") not in kids or (p == "/api/start" and b.get("chore") not in chores):
                 return self.send(400, {"error": "unknown kid/chore"})
+            if p == "/api/start" and any(project_.get("active_session") and
+                    b["kid"] in (project_["active_session"].get("team") or []) for project_ in st.get("projects") or []):
+                return self.send(409, {"error": "End your ongoing project session before starting another chore."})
             if p == "/api/start" and (st["active"].get(b["kid"]) or {}).get("chore") == b["chore"]:
                 return self.send(200, {"ok": True, "already": True, "state": st})   # a second tap keeps the clock running
             if p == "/api/start" and chores[b["chore"]].get("each_daily") and \
@@ -4743,7 +4811,8 @@ class H(BaseHTTPRequestHandler):
             threading.Thread(target=notify_started, args=(ev["members"][0], ev["chore"], ev["members"], "team"), daemon=True).start()
         if p == "/api/pause" and ev.get("type") == "pause":
             threading.Thread(target=notify_started, args=(ev["kid"], ev["chore"], ev.get("team"), "paused"), daemon=True).start()
-        if p == "/api/report" and ev.get("type") == "report" and not (chores.get(ev.get("chore")) or {}).get("trust"):
+        if p == "/api/report" and ev.get("type") == "report" and not ev.get("auto_verified") \
+                and not (chores.get(ev.get("chore")) or {}).get("trust"):
             threading.Thread(target=notify_report, args=(ev, derive()), daemon=True).start()
         if ev.get("type") in ("inspect", "undo") and ev.get("ref"):
             threading.Thread(target=clear_report_notice, args=(ev["ref"],), daemon=True).start()

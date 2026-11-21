@@ -36,6 +36,19 @@ class RobotHeroJobs(Case):
     def tick(self, now=None):
         self.h.tick(now)
 
+    def physically_finish(self, kid, cid):
+        self.assertEqual(self.app.post("/api/start", {"kid": kid, "chore": cid})[0], 200)
+        time.sleep(0.02)
+        if cid.startswith("help_rescue_"):
+            self.app.set(ERR, "none")
+            self.app.set("vacuum.down", "docked")
+        else:
+            self.app.set(DOCK, "ok")
+            self.app.set(WATER, "off")
+        code, result = self.app.post("/api/report", {"kid": kid, "chore": cid, "feeling": "ok"})
+        self.assertEqual(code, 200, result)
+        return result["event"]
+
     def test_main_brush_jam_marks_the_room_untidy_and_opens_a_rescue_as_big_news(self):
         # "if a vacuum gets main brush jammed in a room, it's instantly declared untidy"; rescuing it is a hero job
         self.app.pass_report("zoe", "kitchen", points=4)
@@ -55,24 +68,23 @@ class RobotHeroJobs(Case):
         self.tick()                                                              # once per jam
         self.assertEqual(sum(1 for e in self.s.read_events() if e.get("chore") == "help_rescue_down" and e["type"] == "reopen"), 1)
 
-    def test_the_tidied_part_comes_off_the_room_job(self):
-        # "it comes with cleaning at least some part of the room for partial points"
+    def test_auto_verified_rescue_does_not_claim_unverified_room_tidying(self):
         self.app.pass_report("zoe", "kitchen", points=4)
         self.app.set(ERR, "main_brush_jammed", ago=60)
         self.tick()
-        ev = self.app.pass_report("max", "help_rescue_down", points=5)            # 3 rescue + 2 for part of the kitchen
+        ev = self.physically_finish("max", "help_rescue_down")
         self.assertEqual(ev["partial_of"], ["kitchen"])
         st = self.app.state()
-        self.assertEqual(st["board"]["kitchen"]["price"], 4 - 2)                 # the rest of the kitchen is still a job
+        self.assertEqual(st["board"]["kitchen"]["price"], 4)                     # robot docking proves no room tidying
         self.assertFalse(st["board"]["kitchen"]["clean_until"])
-        self.assertIn("tidied part of Kitchen", next(h for h in st["history"] if h.get("id") == ev["id"])["chore_name"])
+        self.assertNotIn("tidied part", next(h for h in st["history"] if h.get("id") == ev["id"])["chore_name"])
         self.assertEqual(self.job("help_rescue_down").get("closed"), "on_demand")
         self.assertNotIn("help_rescue_down", [a["chore"] for a in st["announce_all"]])
 
     def test_main_brush_rescue_with_base_pay_does_not_claim_room_tidying(self):
         self.app.set(ERR, "main_brush_jammed", ago=60)
         self.tick()
-        ev = self.app.pass_report("max", "help_rescue_down", points=3)
+        ev = self.physically_finish("max", "help_rescue_down")
         report = next(h for h in self.app.state()["history"] if h.get("id") == ev["id"])
         self.assertNotIn("partial_of", report)
         self.assertNotIn("tidied part", report["chore_name"])
@@ -96,7 +108,7 @@ class RobotHeroJobs(Case):
         self.assertEqual(st["board"]["help_rescue_down"]["price"], 3)
         self.assertIn("Carry it", st["board"]["help_rescue_down"]["note"])
         self.assertNotIn("Tidy", st["board"]["help_rescue_down"]["note"])
-        ev = self.app.pass_report("ava", "help_rescue_down", points=3)
+        ev = self.physically_finish("ava", "help_rescue_down")
         self.assertNotIn("partial_of", ev)
 
     def test_a_flat_battery_that_stops_answering_still_opens_after_bedtime(self):
@@ -123,15 +135,28 @@ class RobotHeroJobs(Case):
         before = self.app.state()["balance"]["max"]
         self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "help_rescue_down"})[0], 200)
         code, report = self.app.post("/api/report", {"kid": "max", "chore": "help_rescue_down", "feeling": "ok"})
-        self.assertEqual(code, 200)
+        self.assertEqual(code, 409)
+        self.assertIn("not back on its dock", report["error"])
+        self.assertEqual(self.app.state()["active"]["max"]["chore"], "help_rescue_down")
+        self.assertFalse(any(h.get("chore") == "help_rescue_down" for h in self.app.state()["history"]))
         time.sleep(0.02)
         self.app.set(ERR, "none")
         self.app.set("vacuum.down", "docked")
         self.tick()
         st = self.app.state()
-        done = next(h for h in st["history"] if h.get("id") == report["event"]["id"])
+        done = next(h for h in st["history"] if h.get("chore") == "help_rescue_down")
         self.assertEqual((done["status"], done["awarded"], done["inspected_by"]), ("inspected", 3, "vacuum"))
         self.assertEqual(st["balance"]["max"], before + 3)
+
+    def test_done_after_docking_is_immediately_auto_inspected(self):
+        self.app.set(ERR, "robot_trapped", ago=60)
+        self.app.set("vacuum.down", "error", ago=60)
+        self.tick()
+        before = self.app.state()["balance"]["max"]
+        report = self.physically_finish("max", "help_rescue_down")
+        done = next(h for h in self.app.state()["history"] if h.get("id") == report["id"])
+        self.assertEqual((done["status"], done["awarded"], done["inspected_by"]), ("inspected", 3, "vacuum"))
+        self.assertEqual(self.app.state()["balance"]["max"], before + 3)
 
     def test_docking_without_a_claimant_awards_nobody(self):
         self.app.set(ERR, "robot_trapped", ago=60)
@@ -165,7 +190,7 @@ class RobotHeroJobs(Case):
         self.assertEqual(b["price"], 2)
         self.assertIn("empty its dirty water tank and fill its clean water tank", b["note"])
         self.assertEqual(self.job("help_rescue_down").get("closed"), "on_demand")
-        ev = self.app.pass_report("ava", "help_water_down", points=2)
+        ev = self.physically_finish("ava", "help_water_down")
         self.assertNotIn("partial_of", ev)
 
     def test_a_wedged_bumper_says_how_to_free_it(self):
@@ -180,7 +205,7 @@ class RobotHeroJobs(Case):
         self.assertNotIn("Home button", note)
         self.assertNotIn("tidy", note.lower())
         self.assertTrue(st["board"]["kitchen"]["clean_until"])
-        ev = self.app.pass_report("ava", "help_rescue_down", points=3)
+        ev = self.physically_finish("ava", "help_rescue_down")
         self.assertNotIn("partial_of", ev)
 
     def test_a_held_room_is_not_blamed(self):

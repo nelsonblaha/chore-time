@@ -625,31 +625,33 @@ function renderKidMenu(){
 }
 function projectChore(id){return S.config.chores.find(function(c){return c.id===id})||{id:id,name:id,icon:"1f6e0"}}
 function openProject(cid){return (S.projects||[]).filter(function(p){return p.chore===cid&&p.status!=="complete"&&p.status!=="abandoned"}).slice(-1)[0]}
-function projectSend(path,body){if(busy)return;busy=true;api(path,body).then(function(r){busy=false;if(r.state)S=r.state;if(!r.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+safeText(r.error||"That step changed")+'</div>');addOk()}renderKid()}).catch(function(){busy=false;modal('<div class="q">The chore screen did not answer. Try again.</div>');addOk()})}
+function projectSend(path,body,after){if(busy)return;busy=true;api(path,body).then(function(r){busy=false;if(r.state)S=r.state;if(!r.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+safeText(r.error||"That step changed")+'</div>');addOk();return}renderKid();if(after)after()}).catch(function(){busy=false;modal('<div class="q">The chore screen did not answer. Try again.</div>');addOk()})}
 function startProject(c){var min=Math.max(1,+((c.stepped||{}).min_team||1));if(min<=1){projectSend("/api/project/start",{kid:kid,chore:c.id,team:[]});return}
   pickHelpers("Who is doing "+c.name+" with you?",function(ps){if(ps.length+1<min)return;closeModal();projectSend("/api/project/start",{kid:kid,chore:c.id,team:ps})})}
-function renderProjects(){var rows=S.config.chores.filter(function(c){return c.stepped&&!c.hidden&&(!c.only||c.only.indexOf(kid)>=0)&&here(c)}),html="";
-  rows.forEach(function(c){var p=openProject(c.id),ctx=(S.project_contexts||{})[c.id]||{},next=p&&p.next,session=p&&p.active_session,team=session?session.team:[],mine=team.indexOf(kid)>=0;
-    var status=!p?"Ready to begin":p.status==="held"?"Saved for the next work session":p.status==="stopping"?"Stop safely before anyone leaves":p.status==="finishing"?"Waiting for final inspection":p.status==="active"?"Work session in progress":p.status;
-    html+='<div style="margin:8px 3vw;padding:12px 18px;border-radius:22px;border:5px solid '+(p&&p.status==="stopping"?'#c62828':'var(--kid)')+';background:'+(p&&p.status==="stopping"?'#ffebee':'#fff8e1')+';box-shadow:0 3px 10px #0002">'+
-      '<div style="display:flex;align-items:center;gap:14px"><span style="font-size:54px">'+E(c.icon)+'</span><div style="flex:1"><b style="font-size:29px">'+safeText(c.name)+'</b><div style="font-size:19px;font-weight:800;opacity:.75">'+safeText(status)+(team.length?' · '+teamIcons(team):'')+'</div></div></div>';
-    if(!p||p.status==="held"){
-      if(ctx.state==="blocked")html+='<div class="q" style="font-size:22px;color:#b71c1c">'+E("1f327")+' Not safe to start now: '+safeText(((ctx.items||[]).filter(function(x){return x.state==="blocked"})[0]||{}).reason||"outside conditions")+'</div>';
-      else if(ctx.state==="unknown")html+='<div class="q" style="font-size:22px">'+E("2753")+' A grown-up must confirm the weather first.</div><div class="faces"><div class="btn" data-projadult="1">'+E("1f9d1")+' Get a grown-up</div></div>';
-      else html+='<div class="faces"><div class="btn yes" data-projstart="'+c.id+'">'+E("1f465")+' Start a team session</div></div>';
-    }else if(session&&!mine){html+='<div class="q" style="font-size:22px">This team is working now. You can join a later session.</div>'}
-    else if(next&&next.kind==="step"){
-      var step=next.step||{},adult=step.actor==="adult";
-      html+='<div class="q" style="font-size:27px;'+(step.safety?'background:#ffcdd2;border-radius:16px;padding:8px':'')+'">'+(step.safety?E("26a0")+' ':'')+safeText(step.text||step.name||step.id)+'</div>'+
-        (adult?'<div class="faces"><div class="btn" data-projadult="1">'+E("1f9d1")+' Get a grown-up</div></div>':'<div class="faces"><div class="btn yes" data-projstep="'+step.id+'" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("2705")+' Done</div></div>');
-    }else if(next&&next.kind==="work")html+='<div class="q" style="font-size:27px">'+safeText((next.step||{}).text||"Keep working together")+'</div><div class="faces"><div class="btn" data-projstop="pause" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("23f8")+' Stop safely for now</div><div class="btn yes" data-projstop="finish" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("2705")+' The whole project is finished</div></div>';
-    else if(next&&next.kind==="award")html+='<div class="q" style="font-size:25px">'+E("1f9d1")+' Tell a grown-up. They will record stars for each kid before this session closes.</div><div class="faces"><div class="btn" data-projadult="1">Get a grown-up</div></div>';
-    html+='</div>'});
+function projectStatus(p){return !p?"Ready to begin":p.status==="held"?"Saved for the next work session":p.status==="stopping"?"Stop safely before anyone leaves":p.status==="finishing"?"Waiting for final inspection":p.status==="active"?"Work session in progress":p.status}
+function projectModal(c){var p=openProject(c.id),ctx=(S.project_contexts||{})[c.id]||{},next=p&&p.next,session=p&&p.active_session,team=session?session.team:[],mine=team.indexOf(kid)>=0;
+  var html='<div class="big">'+E(c.icon)+'</div><div class="q">'+safeText(c.name)+'</div><div class="q" style="font-size:22px;opacity:.75">'+safeText(projectStatus(p))+(team.length?' · '+teamIcons(team):'')+'</div>';
+  if(!p||p.status==="held"){
+    if(ctx.state==="blocked")html+='<div class="q" style="font-size:22px;color:#b71c1c">'+E("1f327")+' Not safe to start now: '+safeText(((ctx.items||[]).filter(function(x){return x.state==="blocked"})[0]||{}).reason||"outside conditions")+'</div>';
+    else if(ctx.state==="unknown")html+='<div class="q" style="font-size:22px">'+E("2753")+' A grown-up must confirm the weather first.</div><div class="faces"><div class="btn" data-projadult="1">'+E("1f9d1")+' Get a grown-up</div></div>';
+    else html+='<div class="faces"><div class="btn yes" data-projstart="'+c.id+'">'+E("1f465")+' Start a team session</div></div>';
+  }else if(session&&!mine)html+='<div class="q" style="font-size:22px">This team is working now. You can join a later session.</div>';
+  else if(next&&next.kind==="step"){
+    var step=next.step||{},adult=step.actor==="adult";
+    html+='<div class="q" style="font-size:27px;'+(step.safety?'background:#ffcdd2;border-radius:16px;padding:8px':'')+'">'+(step.safety?E("26a0")+' ':'')+safeText(step.text||step.name||step.id)+'</div>'+
+      (adult?'<div class="faces"><div class="btn" data-projadult="1">'+E("1f9d1")+' Get a grown-up</div></div>':'<div class="faces"><div class="btn yes" data-projstep="'+step.id+'" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("2705")+' Done</div></div>');
+  }else if(next&&next.kind==="work")html+='<div class="q" style="font-size:27px">'+safeText((next.step||{}).text||"Keep working together")+'</div><div class="faces"><div class="btn" data-projstop="pause" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("23f8")+' Stop safely for now</div><div class="btn yes" data-projstop="finish" data-inst="'+p.instance+'" data-rev="'+p.revision+'">'+E("2705")+' The whole project is finished</div></div>';
+  else if(next&&next.kind==="award")html+='<div class="q" style="font-size:25px">'+E("1f9d1")+' Tell a grown-up. They will record stars for each kid before this session closes.</div><div class="faces"><div class="btn" data-projadult="1">Get a grown-up</div></div>';
+  modal(html);
+  document.querySelectorAll("#mbox [data-projstart]").forEach(function(n){n.onclick=function(){startProject(projectChore(n.dataset.projstart))}});
+  document.querySelectorAll("#mbox [data-projstep]").forEach(function(n){n.onclick=function(){projectSend("/api/project/step",{instance:n.dataset.inst,revision:+n.dataset.rev,step:n.dataset.projstep,kid:kid},function(){projectModal(c)})}});
+  document.querySelectorAll("#mbox [data-projstop]").forEach(function(n){n.onclick=function(){projectSend("/api/project/stop",{instance:n.dataset.inst,revision:+n.dataset.rev,mode:n.dataset.projstop,kid:kid},function(){projectModal(c)})}});
+  document.querySelectorAll("#mbox [data-projadult]").forEach(function(n){n.onclick=adultRequest})}
+function renderProjects(){var p=(S.projects||[]).find(function(x){return x.active_session&&(x.active_session.team||[]).indexOf(kid)>=0}),html="";
+  if(p){var c=projectChore(p.chore),next=p.next||{},label=next.kind==="step"&&next.step&&next.step.actor==="adult"?"Grown-up step needed":projectStatus(p);
+    html='<div class="doing" data-project-open="'+c.id+'" style="cursor:pointer;'+(p.status==="stopping"?'background:#ffebee;border-color:#c62828':'')+'"><span class="ic">'+E(c.icon)+'</span><span style="flex:1">'+safeText(c.name)+'<br><span style="font-size:17px;opacity:.75">'+safeText(label)+' · tap to open</span></span><span>'+E("25b6")+'</span></div>'}
   $("projectbox").innerHTML=html;
-  document.querySelectorAll("[data-projstart]").forEach(function(n){n.onclick=function(){startProject(projectChore(n.dataset.projstart))}});
-  document.querySelectorAll("[data-projstep]").forEach(function(n){n.onclick=function(){projectSend("/api/project/step",{instance:n.dataset.inst,revision:+n.dataset.rev,step:n.dataset.projstep,kid:kid})}});
-  document.querySelectorAll("[data-projstop]").forEach(function(n){n.onclick=function(){projectSend("/api/project/stop",{instance:n.dataset.inst,revision:+n.dataset.rev,mode:n.dataset.projstop,kid:kid})}});
-  document.querySelectorAll("[data-projadult]").forEach(function(n){n.onclick=adultRequest})}
+  document.querySelectorAll("[data-project-open]").forEach(function(n){n.onclick=function(){projectModal(projectChore(n.dataset.projectOpen))}})}
 function renderKid(){
   var k=K();document.documentElement.style.setProperty("--kid",k.color);
   $("kface").innerHTML=E(k.icon);$("kname").innerHTML=k.name+" "+trophies(kid)+(houseName()?'<span style="font-size:.55em;opacity:.75;margin-left:8px">'+E("1f3e0")+' '+houseName()+'</span>':'');
@@ -697,7 +699,7 @@ function renderKid(){
   var busyNow=!!(S.active||{})[kid];
   $("chores").classList.toggle("two",busyNow);$("barlbl").style.display="none";
   // don't show chores a kid can't do right now (presumed clean, someone else waiting on it, someone else's claim)
-  var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.stepped||c.hidden||(c.only&&c.only.indexOf(kid)<0)||!here(c))return false;
+  var vis=S.config.chores.filter(function(c){var bd=S.board[c.id]||{};if(c.hidden||(c.only&&c.only.indexOf(kid)<0)||!here(c))return false;
     if(bd.clean_until)return false;
     if((bd.pending_by||[]).length&&!c.shared&&bd.pending_by.indexOf(kid)<0)return false;
     if(c.slot&&bd.claimed_by&&bd.claimed_by!==kid)return false;
@@ -995,6 +997,7 @@ function startChore(c){if(needsAdultFirst(c)){askAdultFirst(c);return}L("chore_s
   modal('<div class="big">'+E(c.icon)+'</div><div class="q">'+E("25b6")+' Go! '+c.name+'</div><div class="q" style="font-size:24px;opacity:.75">Tap I\'m done! when you finish.</div>');chime([523,659]);addOk()})}
 function askChore(cid,fromDoing){L("ask_chore",{chore:cid});if(dressScreen(kid))return;
   var c=S.config.chores.find(function(x){return x.id===cid}),bd=S.board[cid]||{price:c.points},A=(S.active||{})[kid],T=(S.typical||{})[cid]||(c.est_minutes?{minutes:c.est_minutes}:null);
+  if(c.stepped){projectModal(c);return}
   var other=cid==="other"||c.shared?null:Object.keys(S.active||{}).find(function(k){var a=S.active[k];return a.chore===cid&&(a.team||[k]).indexOf(kid)<0});
   var saver=cid==="other"?null:Object.keys(S.paused||{}).find(function(k){return S.paused[k].chore===cid&&(!c.shared||k===kid)});
   if(saver===kid){resumeModal();return}
@@ -1182,7 +1185,8 @@ function dressScreen(k){var st=dressOf(k);if(!st||st==="ready")return false;L("d
   locked();$("drdone").onclick=done;
   return true}
 var dressBeepT=0;setInterval(function(){try{dressBeep()}catch(e){}},5000);
-function dressBeep(){var D=S&&S.dress;if(!D||!D.on||D.school)return;   // school mornings stay quietvar todo=Object.keys(D.kids||{}).filter(function(k){return D.kids[k]==="todo"});if(!todo.length)return;
+function dressBeep(){var D=S&&S.dress;if(!D||!D.on||D.school)return;   // school mornings stay quiet
+  var todo=Object.keys(D.kids||{}).filter(function(k){return D.kids[k]==="todo"});if(!todo.length)return;
   if(Date.now()-dressBeepT<30000)return;dressBeepT=Date.now();L("dress_beep",{n:todo.length});chime([880,660,880,660,988])}
 function doReport(c,feel,node,note,ask,delivered){L("report",{chore:c.id,feeling:feel,note:note||null,ask:ask==null?null:ask});
   if(busy)return;busy=true;

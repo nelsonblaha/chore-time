@@ -188,7 +188,32 @@ def water_resolved_at(robot, read):
         rows.append(tank)
     if not rows:
         return 0
-    return max(epoch(row.get("last_changed")) for row in rows)
+    changed = [epoch_or_zero(row.get("last_changed")) for row in rows]
+    return max(changed) if all(changed) else 0
+
+
+def report_verification(cfg, cid, started, read):
+    """Return physical proof for a kid's Done tap, or a useful rejection.
+
+    Rescue and water jobs are not matters of judgment: a rescue is complete only
+    after that robot has reached its dock since the job began, and a water job is
+    complete only after every configured tank signal has become healthy since it
+    began.  Unknown telemetry fails closed so it can never create an inspection
+    item for a grown-up to sort out.
+    """
+    robot = next((r for r in cfg.get("robots") or [] if cid in (rescue_id(r), water_id(r))), None)
+    if not robot:
+        return None
+    if cid == rescue_id(robot):
+        vac = read(robot.get("vacuum")) if robot.get("vacuum") else {}
+        at = epoch_or_zero(vac.get("last_changed"))
+        if vac.get("state") == "docked" and at >= float(started or 0):
+            return {"at": at, "reason": robot["name"] + " reached its dock"}
+        return {"error": robot["name"] + " is not back on its dock yet. Press Home and wait until it reaches the dock; this job is still yours."}
+    at = water_resolved_at(robot, read)
+    if at and at >= float(started or 0):
+        return {"at": at, "reason": robot["name"] + " water tanks are ready"}
+    return {"error": robot["name"] + " still says its water needs attention. Check both tanks; this job is still yours."}
 
 
 def untidy_events(spaces, board, space_rows, robot, room_name):
@@ -228,6 +253,17 @@ def epoch(s):
         return time.time()
 
 
+def epoch_or_zero(s):
+    """Strict HA timestamp parser for evidence: missing/bad data is never proof."""
+    if not s:
+        return 0
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0
+
+
 class Helper:
     def __init__(self, g, cfg):
         self.g, self.cfg = g, cfg
@@ -258,8 +294,9 @@ class Helper:
             if robot.get("vacuum"):
                 vac = self.read(robot["vacuum"])
                 if vac.get("state") == "docked":
-                    refs = g["auto_verify_chore"](rescue_id(robot), epoch(vac.get("last_changed")), "vacuum",
-                                                   robot["name"] + " reached its dock")
+                    docked_at = epoch_or_zero(vac.get("last_changed"))
+                    refs = g["auto_verify_chore"](rescue_id(robot), docked_at, "vacuum",
+                                                   robot["name"] + " reached its dock") if docked_at else []
                     if refs:
                         g["ilog"]({"src": "vac_help", "robot": robot["id"], "kind": "rescue",
                                    "action": "auto_verify", "refs": refs})

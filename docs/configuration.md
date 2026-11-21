@@ -92,7 +92,7 @@ break, intersession, "no school", "off school", vacation) and not `"school_anywa
 
 ### School mornings ("Put on clothes!" by itself)
 
-house.json `"dress": {"school_mornings": {"at": "05:30", "until": "07:30", "weekdays": [0, 1, 2, 3, 4],
+house.json `"dress": {"house_vacancy": "sensor.house_occupancy_evidence", "school_mornings": {"at": "05:30", "until": "07:30", "weekdays": [0, 1, 2, 3, 4],
 "awake": "input_boolean.kids_awake"}}`: on a school day (one of `weekdays`, Mon=0, that the kids' calendar doesn't
 mark as no school) the "Put on clothes!" switch turns on at `at` for the kids at this house (home switch on), and
 off at `until` if a grown-up hasn't passed everyone yet. It is quiet: no spoken reminders, no chimes, and the
@@ -100,6 +100,10 @@ Hubs and TVs aren't taken over until the kids are up (`awake`: an optional Home 
 when the kids get up; otherwise when bedtime ends). Each kid starts their own race clock with Start on their
 screen. Once a morning: a grown-up who
 switches it off keeps it off until the next school day.
+
+If `house_vacancy` positively changes to `vacant` (or `on` for a binary sensor) after a dressing session began,
+the family has left: the gate and unfinished dressing-session state are cleared without awarding points or a
+speed achievement. Set `vacant_states` to override those two accepted states.
 
 ### Two households
 
