@@ -103,6 +103,11 @@ ILOG = DATA / "interactions.jsonl"
 VACUUM_BUTTON_TOKEN_FILE = Path(os.environ.get("VACUUM_BUTTON_TOKEN_FILE", DATA / "vacuum-button.token")).expanduser()
 NEWS_SEEN = DATA / "news_seen.json"   # whats-new version acknowledged, per device IP   # every UI tap/screen + TV guard decision, for later study
 PAPER_SCAN_FILE = DATA / "paper_scans.json"   # short-lived kid claim for the next Brother-to-Drive scan
+PEER_PIN_FILE = DATA / "peer_pin_resets.json"
+HUB_PLACEMENT_FILE = DATA / "hub_placement.json"
+PEER_PIN_CFG = HOUSE.get("peer_pin_reset") or {}
+PEER_LOCK = threading.Lock()
+SERVER_STARTED_AT = time.time()
 
 
 def ilog(rec):
@@ -136,6 +141,34 @@ def load_paper_scans():
 
 
 PAPER_SCANS = load_paper_scans()
+
+
+def load_private_json(path, default):
+    try:
+        value = json.loads(path.read_text())
+        return value if isinstance(value, type(default)) else default
+    except (OSError, ValueError):
+        return default
+
+
+PEER_PIN_RESETS = load_private_json(PEER_PIN_FILE, {})
+HUB_PLACEMENT = load_private_json(HUB_PLACEMENT_FILE, {"trusted": False, "pending": bool(PEER_PIN_CFG)})
+
+
+def save_private_json(path, value):
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", opener=lambda name, flags: os.open(name, flags, 0o600)) as output:
+        output.write(json.dumps(value, indent=2))
+    tmp.replace(path)
+    os.chmod(path, 0o600)
+
+
+def save_peer_pin_resets():
+    save_private_json(PEER_PIN_FILE, PEER_PIN_RESETS)
+
+
+def save_hub_placement():
+    save_private_json(HUB_PLACEMENT_FILE, HUB_PLACEMENT)
 
 
 def save_paper_scans():
@@ -1407,6 +1440,109 @@ def record_kid_display_presence(c, kid, ip, verified=False, now=None):
     return row
 
 
+def peer_reset_display(ip):
+    display = display_for_ip(ip)
+    allowed = set(PEER_PIN_CFG.get("displays") or [])
+    return display if display and display.get("kind") == "hub" and display.get("id") in allowed else None
+
+
+def issue_kid_session(kid, ip, now=None):
+    now = time.time() if now is None else float(now)
+    token = uuid.uuid4().hex
+    sessions = GUARD.setdefault("kid_sessions", {})
+    for old_token, row in list(sessions.items()):
+        if float(row.get("until") or 0) <= now:
+            sessions.pop(old_token, None)
+    sessions[token] = {"kid": kid, "ip": ip, "until": now + 600}
+    return token
+
+
+def valid_kid_session(token, kid, ip, now=None):
+    now = time.time() if now is None else float(now)
+    row = (GUARD.get("kid_sessions") or {}).get(str(token or "")) or {}
+    return row.get("kid") == kid and row.get("ip") == ip and float(row.get("until") or 0) > now
+
+
+def active_peer_pin_reset(now=None):
+    now = time.time() if now is None else float(now)
+    for nonce, row in list(PEER_PIN_RESETS.items()):
+        if row.get("status") in ("waiting", "helping") and float(row.get("until") or 0) > now:
+            return nonce, row
+    return None, None
+
+
+def peer_helper_holding(row, now=None):
+    now = time.time() if now is None else float(now)
+    hold_s = max(.5, min(3, float(PEER_PIN_CFG.get("hold_fresh_seconds") or 1.5)))
+    return bool(row.get("holding")) and now - float(row.get("last_hold") or 0) <= hold_s
+
+
+def peer_pin_reset_public(ip, now=None, nonce=None):
+    """Return only the active ceremony fields relevant to this one fixed display; never a PIN or session token."""
+    now = time.time() if now is None else float(now)
+    if nonce:
+        row = PEER_PIN_RESETS.get(str(nonce))
+        if not row or float(row.get("until") or 0) <= now:
+            row = None
+    else:
+        nonce, row = active_peer_pin_reset(now)
+    display = peer_reset_display(ip)
+    if not nonce or not row or not display:
+        return None
+    role = "target" if ip == row.get("target_ip") else "helper" if display.get("id") != row.get("target_display") else None
+    if not role:
+        return None
+    return {"nonce": nonce, "role": role, "target": row["target"], "helper": row.get("helper"),
+            "status": row.get("status"), "holding": peer_helper_holding(row, now),
+            "target_display": row.get("target_display"), "helper_display": row.get("helper_display"),
+            "until": row.get("until"), "placement_trusted": bool(HUB_PLACEMENT.get("trusted"))}
+
+
+def state_for_display(ip):
+    state = derive()
+    state["peer_pin_reset"] = peer_pin_reset_public(ip)
+    return state
+
+
+def hub_placement_review_state(now=None):
+    if not PEER_PIN_CFG or HUB_PLACEMENT.get("trusted"):
+        return None
+    now = time.time() if now is None else float(now)
+    displays = []
+    for display_id in PEER_PIN_CFG.get("displays") or []:
+        cfg_ = HUBS.get(display_id) or {}
+        displays.append({"id": display_id, "room": cfg_.get("room") or display_id,
+                         "fresh": now - float((GUARD.get("hub_heartbeat") or {}).get(display_id) or 0)
+                                  <= float(PEER_PIN_CFG.get("offline_seconds") or 8)})
+    return {"nonce": HUB_PLACEMENT.get("nonce"), "adult": str(PEER_PIN_CFG.get("adult") or LEAD_ADULT or ""),
+            "reason": HUB_PLACEMENT.get("reason") or "Hub placement needs checking",
+            "detected_at": HUB_PLACEMENT.get("detected_at"), "displays": displays}
+
+
+def stale_peer_hubs(now=None):
+    now = time.time() if now is None else float(now)
+    max_age = max(4, min(60, float(PEER_PIN_CFG.get("offline_seconds") or 8)))
+    heartbeats = GUARD.get("hub_heartbeat") or {}
+    return [display_id for display_id in PEER_PIN_CFG.get("displays") or []
+            if now - float(heartbeats.get(display_id) or 0) > max_age]
+
+
+def invalidate_hub_placement(reason, missing=None, now=None):
+    now = time.time() if now is None else float(now)
+    if not PEER_PIN_CFG or not HUB_PLACEMENT.get("trusted"):
+        return False
+    HUB_PLACEMENT.update({"trusted": False, "pending": True, "nonce": uuid.uuid4().hex[:8],
+                          "reason": reason, "missing": list(missing or []), "detected_at": now,
+                          "phone_notified": False, "watch_notified": False})
+    save_hub_placement()
+    nonce, row = active_peer_pin_reset(now)
+    if row:
+        row.update(status="cancelled", reason="Hub placement must be checked again", holding=False)
+        save_peer_pin_resets()
+    after_change()
+    return True
+
+
 def is_here(item, c, kid):
     """A job or reward belongs to one household ("household": id, default the first) or to "any" (homework...)."""
     if not c.get("households"):
@@ -1785,7 +1921,12 @@ def derive():
             bal[e["kid"]] -= int(e["cost"])
         elif e["type"] == "adjust":
             bal[e["kid"]] += int(e["points"])
-            earned[e["kid"]] += int(e["points"])
+            if e.get("earned", True):
+                earned[e["kid"]] += int(e["points"])
+        elif e["type"] == "transfer":
+            if e.get("from") in bal and e.get("to") in bal:
+                bal[e["from"]] -= int(e.get("points") or 0)
+                bal[e["to"]] += int(e.get("points") or 0)
     for r in reports.values():
         if r.get("partial_of") and r["status"] == "inspected" \
                 and int(r.get("awarded") or 0) <= int(r.get("rescue_base") or 0):
@@ -1999,7 +2140,7 @@ def derive():
             for rid in ("show", "movie", "games"):
                 d[rid] = max(d.get(rid, 0), brk)
     history = sorted(
-        list(reports.values()) + [e for e in evs if e["type"] in ("spend", "adjust")],
+        list(reports.values()) + [e for e in evs if e["type"] in ("spend", "adjust", "transfer")],
         key=lambda e: e["ts"], reverse=True)
     tvs = {k: {"name": v["name"], "short": v.get("short") or v["name"].replace(" TV", ""), "icon": v.get("icon", "1f4fa"), **GUARD["status"].get(k, {})} for k, v in TVS.items()} if "TVS" in globals() else {}
     if "TVS" in globals():
@@ -2093,6 +2234,7 @@ def derive():
             "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
             "pin_reset_open": pin_reset_open,
             "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
+            "hub_placement_review": hub_placement_review_state(),
             "shower": shower, "evening_routine": evening_routine,
             "calendar": schedule.agenda(), "packing_game": packing_config(),
             "papers": papers, "paper_scan_ready": bool((HOUSE.get("paper_scanner") or {}).get("ready")),
@@ -2163,7 +2305,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices",
+DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices", "hub_placement_review",
              "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",
@@ -2449,6 +2591,69 @@ def adult_buzz_allowed(who, tok):
     state = str((ha_get(gate["entity"], tok) or {}).get("state") or "").lower()
     allowed = {str(x).lower() for x in gate.get("states") or ["on"]}
     return state in allowed
+
+
+def notify_hub_placement_review():
+    if not HUB_PLACEMENT.get("pending") or not HUB_PLACEMENT.get("nonce"):
+        return
+    who = str(PEER_PIN_CFG.get("adult") or LEAD_ADULT or "")
+    if not who:
+        return
+    tok, nonce = ha_token(), HUB_PLACEMENT["nonce"]
+    title = "Chores: check both kid Nest Hubs"
+    message = "A kid Nest Hub stopped checking in. Verify both Hubs are back in their proper rooms before restoring kid-to-kid PIN resets."
+    if not HUB_PLACEMENT.get("phone_notified"):
+        accepted = [svc for svc in ADULT_NOTIFY.get(who, []) if ha_call(
+            svc, {"title": title, "message": message,
+                  "data": {"tag": "chore-hub-placement", "priority": "high", "ttl": 0,
+                           "clickAction": "/lovelace/chore-inspection",
+                           "actions": [{"action": "CHORE_HUBS_OK_" + nonce,
+                                        "title": "I checked both are in place"}]}}, tok)]
+        if accepted:
+            HUB_PLACEMENT["phone_notified"] = True
+            save_hub_placement()
+    if not HUB_PLACEMENT.get("watch_notified") and adult_buzz_allowed(who, tok):
+        accepted = [svc for svc in ADULT_BUZZ_NOTIFY.get(who, []) if ha_call(
+            svc, {"title": title, "message": message + " Open the parent Chores dashboard after you physically check them.",
+                  "data": {"tag": "chore-hub-placement-watch", "priority": "high", "ttl": 0,
+                           "channel": "Chore approvals", "importance": "high"}}, tok)]
+        if accepted:
+            HUB_PLACEMENT["watch_notified"] = True
+            save_hub_placement()
+
+
+def attest_hub_placement(nonce, by):
+    if not HUB_PLACEMENT.get("pending") or not hmac.compare_digest(str(nonce or ""), str(HUB_PLACEMENT.get("nonce") or "")):
+        return False, "That placement check is no longer waiting."
+    missing = stale_peer_hubs()
+    if missing:
+        return False, "Both Nest Hubs must be online in their proper rooms before you confirm."
+    HUB_PLACEMENT.update({"trusted": True, "pending": False, "attested_at": time.time(), "attested_by": by,
+                          "reason": None, "missing": [], "phone_notified": False, "watch_notified": False})
+    save_hub_placement()
+    tok = ha_token()
+    for svc in ADULT_NOTIFY.get(by, []) + ADULT_BUZZ_NOTIFY.get(by, []):
+        ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-hub-placement"}}, tok)
+        ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-hub-placement-watch"}}, tok)
+    ilog({"src": "peer_pin_reset", "action": "hub_placement_attested", "by": by,
+          "displays": list(PEER_PIN_CFG.get("displays") or [])})
+    after_change()
+    return True, None
+
+
+def watch_hub_placement():
+    """Any real heartbeat outage revokes the physical-separation assumption until an adult checks both rooms."""
+    while True:
+        try:
+            if HUB_PLACEMENT.get("trusted") and time.time() - SERVER_STARTED_AT >= 30:
+                missing = stale_peer_hubs()
+                if missing:
+                    invalidate_hub_placement("One or more kid Nest Hubs stopped checking in", missing)
+            if HUB_PLACEMENT.get("pending"):
+                notify_hub_placement_review()
+        except Exception as ex:  # noqa: BLE001
+            print("hub placement watcher error", ex, flush=True)
+        time.sleep(2)
 
 
 def parent_available(tok):
@@ -2750,6 +2955,16 @@ def watch_ha_events():
                                     print("watch inspect failed", ex, flush=True)
                                 ilog({"src": "watch", "action": ("pass %s" % pts_) if ok else "not_yet", "ref": ref,
                                       "reply": data_.get("reply_text")})
+                        if act.startswith("CHORE_HUBS_OK_"):
+                            nonce = act[len("CHORE_HUBS_OK_"):]
+                            req = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/hub_placement_attest",
+                                                         data=json.dumps({"nonce": nonce, "by": LEAD_ADULT}).encode(),
+                                                         headers={"Content-Type": "application/json", "X-From": "watch"}, method="POST")
+                            try:
+                                urllib.request.urlopen(req, timeout=10).read()
+                            except Exception as ex:  # noqa: BLE001
+                                print("watch hub placement attestation failed", ex, flush=True)
+                            ilog({"src": "watch", "action": "hub_placement_attest", "nonce": nonce})
                         if act.startswith("CHORE_OK_") or act.startswith("CHORE_NO_"):
                             nonce = act[9:]
                             resolve_phone_adult_request(nonce, act.startswith("CHORE_OK_"))
@@ -2819,6 +3034,7 @@ class H(BaseHTTPRequestHandler):
             hub_ = next((h for h, x in (HOUSE.get("hubs") or {}).items() if x.get("ip") == self.client_address[0]), None)
             st["hub"], st["hub_motion"] = hub_, (GUARD.get("hub_motion") or {}).get(hub_)
             display_ = display_for_ip(self.client_address[0])
+            st["peer_pin_reset"] = peer_pin_reset_public(self.client_address[0])
             interrupt_ = active_spotify_interruption((display_ or {}).get("room"))
             st["display"], st["music_interruption"] = display_, interrupt_
             try:
@@ -2871,6 +3087,11 @@ class H(BaseHTTPRequestHandler):
             b = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self.send(400, {"error": "bad json"})
+        if self.path == "/api/hub_heartbeat":
+            display_ = peer_reset_display(self.client_address[0])
+            if display_:
+                GUARD.setdefault("hub_heartbeat", {})[display_["id"]] = time.time()
+            return self.send(200, {"ok": True, "hub": display_.get("id") if display_ else None})
         if self.path == "/api/vacuum/button":
             try:
                 expected = VACUUM_BUTTON_TOKEN_FILE.read_text().strip()
@@ -3114,9 +3335,11 @@ class H(BaseHTTPRequestHandler):
                 return self.send(404, {"error": "unknown kid"})
             if not kid_.get("pin_hash"):
                 evidence_ = record_kid_display_presence(c, kid_["id"], self.client_address[0], verified=False)
+                session_ = issue_kid_session(kid_["id"], self.client_address[0])
                 if evidence_:
                     after_change()
-                return self.send(200, {"ok": True, "state": derive()})
+                return self.send(200, {"ok": True, "kid_session": session_,
+                                       "state": state_for_display(self.client_address[0])})
             now_, ip_ = time.time(), self.client_address[0]
             attempts_ = [x for x in GUARD.setdefault("kid_pin_failures", {}).get(ip_, []) if now_ - x < 60]
             if len(attempts_) >= 5:
@@ -3128,9 +3351,113 @@ class H(BaseHTTPRequestHandler):
             GUARD["kid_pin_failures"].pop(ip_, None)
             ilog({"src": "kid_pin", "kid": kid_["id"], "ip": ip_, "ok": True})
             evidence_ = record_kid_display_presence(c, kid_["id"], ip_, verified=True)
+            session_ = issue_kid_session(kid_["id"], ip_)
             if evidence_:
                 after_change()
-            return self.send(200, {"ok": True, "state": derive()})
+            return self.send(200, {"ok": True, "kid_session": session_, "state": state_for_display(ip_)})
+        if p == "/api/kid_peer_reset_request":
+            target_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
+            display_ = peer_reset_display(self.client_address[0])
+            eligible_ = set(PEER_PIN_CFG.get("kids") or [x["id"] for x in c["kids"] if x.get("pin_hash")])
+            if not PEER_PIN_CFG or not display_ or not target_ or target_["id"] not in eligible_:
+                return self.send(409, {"error": "The two-Hub reset is not available here."})
+            if not HUB_PLACEMENT.get("trusted") or stale_peer_hubs():
+                return self.send(409, {"error": "The two Nest Hubs need a grown-up placement check first."})
+            if int(st["balance"].get(target_["id"], 0)) < 1:
+                return self.send(409, {"error": "You need 1 star to thank the kid who helps. Ask a grown-up instead."})
+            with PEER_LOCK:
+                old_nonce_, old_ = active_peer_pin_reset()
+                if old_:
+                    if old_.get("target") != target_["id"] or old_.get("target_ip") != self.client_address[0]:
+                        return self.send(409, {"error": "Another two-Hub reset is already happening."})
+                    nonce_ = old_nonce_
+                else:
+                    nonce_ = uuid.uuid4().hex[:10]
+                    PEER_PIN_RESETS[nonce_] = {"target": target_["id"], "target_ip": self.client_address[0],
+                                               "target_display": display_["id"], "status": "waiting",
+                                               "ts": time.time(), "until": time.time() + max(60, min(900, int(
+                                                   PEER_PIN_CFG.get("valid_seconds") or 300))),
+                                               "holding": False}
+                    save_peer_pin_resets()
+                    after_change()
+            ilog({"src": "peer_pin_reset", "action": "requested", "kid": target_["id"],
+                  "display": display_["id"], "nonce": nonce_})
+            return self.send(200, {"ok": True, "nonce": nonce_,
+                                   "peer_pin_reset": peer_pin_reset_public(self.client_address[0], nonce=nonce_)})
+        if p == "/api/kid_peer_reset_help":
+            nonce_, helper_ = str(b.get("nonce") or ""), str(b.get("kid") or "")
+            display_ = peer_reset_display(self.client_address[0])
+            eligible_ = set(PEER_PIN_CFG.get("kids") or [x["id"] for x in c["kids"] if x.get("pin_hash")])
+            with PEER_LOCK:
+                row_ = PEER_PIN_RESETS.get(nonce_)
+                if not row_ or row_.get("status") not in ("waiting", "helping") or float(row_.get("until") or 0) <= time.time():
+                    return self.send(409, {"error": "That reset is no longer waiting."})
+                if not HUB_PLACEMENT.get("trusted") or stale_peer_hubs():
+                    return self.send(409, {"error": "The two Nest Hubs need a grown-up placement check first."})
+                if not display_ or display_["id"] == row_.get("target_display") or helper_ == row_.get("target") or helper_ not in eligible_:
+                    return self.send(403, {"error": "A different kid must help from the other Nest Hub."})
+                if not valid_kid_session(b.get("kid_session"), helper_, self.client_address[0]):
+                    return self.send(403, {"error": "The helper must enter their own PIN on this Hub."})
+                if row_.get("helper") not in (None, helper_):
+                    return self.send(409, {"error": "Another kid is already helping."})
+                row_.update(status="helping", helper=helper_, helper_ip=self.client_address[0],
+                            helper_display=display_["id"], holding=False)
+                save_peer_pin_resets()
+            ilog({"src": "peer_pin_reset", "action": "helper_ready", "kid": row_["target"],
+                  "helper": helper_, "display": display_["id"], "nonce": nonce_})
+            after_change()
+            return self.send(200, {"ok": True, "peer_pin_reset": peer_pin_reset_public(self.client_address[0], nonce=nonce_)})
+        if p == "/api/kid_peer_reset_hold":
+            nonce_, helper_ = str(b.get("nonce") or ""), str(b.get("kid") or "")
+            with PEER_LOCK:
+                row_ = PEER_PIN_RESETS.get(nonce_)
+                if not row_ or row_.get("status") != "helping" or row_.get("helper") != helper_ \
+                        or row_.get("helper_ip") != self.client_address[0] \
+                        or not valid_kid_session(b.get("kid_session"), helper_, self.client_address[0]):
+                    return self.send(403, {"error": "The helper session is not active."})
+                row_["holding"] = bool(b.get("holding"))
+                row_["last_hold"] = time.time() if row_["holding"] else 0
+                return self.send(200, {"ok": True, "holding": peer_helper_holding(row_)})
+        if p == "/api/kid_peer_reset_status":
+            public_ = peer_pin_reset_public(self.client_address[0], nonce=str(b.get("nonce") or ""))
+            return self.send(200 if public_ else 404, {"ok": bool(public_), "peer_pin_reset": public_})
+        if p == "/api/kid_peer_reset_finish":
+            nonce_, target_ = str(b.get("nonce") or ""), str(b.get("kid") or "")
+            with PEER_LOCK:
+                row_ = PEER_PIN_RESETS.get(nonce_)
+                if not row_ or row_.get("status") != "helping" or row_.get("target") != target_ \
+                        or row_.get("target_ip") != self.client_address[0]:
+                    return self.send(409, {"error": "That two-Hub reset is not ready."})
+                if not HUB_PLACEMENT.get("trusted") or stale_peer_hubs() or not peer_helper_holding(row_):
+                    return self.send(409, {"error": "Your helper must stay at the other Hub and hold the big button."})
+                if int(derive()["balance"].get(target_, 0)) < 1:
+                    return self.send(409, {"error": "You no longer have the 1 star needed to thank your helper."})
+                try:
+                    new_hash_ = make_kid_pin_hash(b.get("new_pin"))
+                except ValueError as ex:
+                    return self.send(400, {"error": str(ex)})
+                with LOCK:
+                    config_ = cfg()
+                    target_cfg_ = next((x for x in config_["kids"] if x["id"] == target_), None)
+                    if not target_cfg_:
+                        return self.send(404, {"error": "unknown kid"})
+                    target_cfg_["pin_hash"] = new_hash_
+                    save_cfg(config_)
+                transfer_ = append({"type": "transfer", "from": target_, "to": row_["helper"], "points": 1,
+                                    "reason": "Helped with a two-Hub PIN reset", "icon": "1f91d",
+                                    "by": row_["helper"], "peer_reset": nonce_})
+                row_.update(status="done", holding=False, completed_at=time.time(), transfer=transfer_["id"])
+                save_peer_pin_resets()
+            ilog({"src": "peer_pin_reset", "action": "completed", "kid": target_,
+                  "helper": row_["helper"], "nonce": nonce_})
+            after_change()
+            return self.send(200, {"ok": True, "helper": row_["helper"], "state": state_for_display(self.client_address[0])})
+        if p == "/api/hub_placement_attest":
+            required_adult_ = str(PEER_PIN_CFG.get("adult") or LEAD_ADULT or "")
+            if b.get("by") not in insp or b.get("by") != required_adult_:
+                return self.send(403, {"error": "Only the designated grown-up can confirm the Hub locations."})
+            ok_, error_ = attest_hub_placement(b.get("nonce"), b["by"])
+            return self.send(200 if ok_ else 409, {"ok": ok_, "error": error_, "state": derive()})
         if p == "/api/kid_pin_reset_request":
             kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
             if not kid_:
@@ -5994,6 +6321,8 @@ def start_modules():
                 go("school-mornings", watch_school_mornings)   # "Put on clothes!" by itself on school mornings
             if any((h_ or {}).get("motion") for h_ in (HOUSE.get("hubs") or {}).values()):
                 go("hub-motion", watch_hub_motion)   # someone walks up to a Hub: it chimes for kids with something waiting
+        if PEER_PIN_CFG:
+            go("hub-placement", watch_hub_placement)   # an unplugged reset Hub revokes the separation trust
         if TVS or HUBS:
             go("tv-guard", watch_tvs)             # chore time, TV locks, Hub keeper, bedtime holds
         if LAUNCHERS:

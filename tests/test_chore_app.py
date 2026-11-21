@@ -6,6 +6,7 @@ Nothing here talks to the network or the live ledger.
 """
 import importlib
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -112,6 +113,16 @@ class App:
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"{}")
 
+    def post_from(self, ip, path, body):
+        """Exercise display-bound APIs from two distinct loopback addresses."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10,
+                                          source_address=(ip, 0))
+        conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+        response = conn.getresponse()
+        payload = json.loads(response.read() or b"{}")
+        conn.close()
+        return response.status, payload
+
     def state(self):
         return json.loads(urllib.request.urlopen(self.base + "/api/state", timeout=10).read())
 
@@ -131,8 +142,18 @@ class StaticUiRegressions(unittest.TestCase):
 
     def test_nested_inspection_card_does_not_rebind_full_job_without_a_report_id(self):
         html = (REPO / "static" / "inspect.html").read_text()
-        self.assertIn("'#pending > .card:not([data-swap]):not([data-dr])'", html)
+        self.assertIn("'#pending > .card:not([data-swap]):not([data-dr]):not([data-hub-placement])'", html)
         self.assertNotIn("'#pending .card:not([data-swap]):not([data-dr])'", html)
+
+    def test_two_hub_reset_ui_requires_a_continuous_helper_and_parent_placement_review(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("Ask another kid on the other Nest Hub", kids)
+        self.assertIn("HOLD TO HELP", kids)
+        self.assertIn("onpointerleave=stop", kids)
+        self.assertIn("The helper cannot see this screen", kids)
+        self.assertIn("I physically checked both Hubs are in their proper rooms", grown)
+        self.assertIn("/api/hub_placement_attest", grown)
 
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
@@ -383,6 +404,113 @@ class SoundSettings(Case):
             "kid":"ava","pin":"12345678910"})[0],200)
         self.assertEqual(self.app.post("/api/kid_unlock",{
             "kid":"ava","pin":"1234567891"})[0],403)
+
+
+class PeerKidPinReset(Case):
+    TARGET_IP = "127.0.0.1"
+    HELPER_IP = "127.0.0.2"
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads((self.app.dir / "chores.json").read_text())
+        config["kids"][0]["pin_hash"] = self.s.make_kid_pin_hash("1111")
+        config["kids"][1]["pin_hash"] = self.s.make_kid_pin_hash("2222")
+        (self.app.dir / "chores.json").write_text(json.dumps(config))
+        self.s.PEER_PIN_CFG.clear()
+        self.s.PEER_PIN_CFG.update({"displays": ["target_hub", "helper_hub"],
+                                    "kids": ["ava", "max"], "adult": "jordan",
+                                    "offline_seconds": 8, "hold_fresh_seconds": 1.5})
+        self.s.HUBS.clear()
+        self.s.HUBS.update({"target_hub": {"ip": self.TARGET_IP, "room": "Living room"},
+                            "helper_hub": {"ip": self.HELPER_IP, "room": "Kids room"}})
+        self.s.HUB_PLACEMENT.clear()
+        self.s.HUB_PLACEMENT.update({"trusted": True, "pending": False})
+        self.app.event(type="adjust", kid="ava", points=3, reason="test", earned=False)
+        self.heartbeat_both()
+
+    def heartbeat_both(self):
+        self.assertEqual(self.app.post_from(self.TARGET_IP, "/api/hub_heartbeat", {})[0], 200)
+        self.assertEqual(self.app.post_from(self.HELPER_IP, "/api/hub_heartbeat", {})[0], 200)
+
+    def begin(self):
+        code, requested = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_request", {"kid": "ava"})
+        self.assertEqual(code, 200, requested)
+        unlocked = self.app.post_from(self.HELPER_IP, "/api/kid_unlock", {"kid": "max", "pin": "2222"})
+        self.assertEqual(unlocked[0], 200, unlocked[1])
+        nonce = requested["nonce"]
+        helped = self.app.post_from(self.HELPER_IP, "/api/kid_peer_reset_help",
+                                    {"nonce": nonce, "kid": "max", "kid_session": unlocked[1]["kid_session"]})
+        self.assertEqual(helped[0], 200, helped[1])
+        return nonce, unlocked[1]["kid_session"]
+
+    def test_reset_requires_other_authenticated_kid_other_hub_and_live_hold(self):
+        requested = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_request", {"kid": "ava"})
+        nonce = requested[1]["nonce"]
+        target_session = self.app.post_from(self.TARGET_IP, "/api/kid_unlock",
+                                            {"kid": "ava", "pin": "1111"})[1]["kid_session"]
+        same_hub = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_help",
+                                      {"nonce": nonce, "kid": "max", "kid_session": target_session})
+        self.assertEqual(same_hub[0], 403)
+        helper_unlock = self.app.post_from(self.HELPER_IP, "/api/kid_unlock",
+                                           {"kid": "max", "pin": "2222"})[1]
+        wrong_kid = self.app.post_from(self.HELPER_IP, "/api/kid_peer_reset_help",
+                                       {"nonce": nonce, "kid": "ava",
+                                        "kid_session": helper_unlock["kid_session"]})
+        self.assertEqual(wrong_kid[0], 403)
+        self.assertEqual(self.app.post_from(self.HELPER_IP, "/api/kid_peer_reset_help",
+                         {"nonce": nonce, "kid": "max", "kid_session": "made-up"})[0], 403)
+        self.assertEqual(self.app.post_from(self.HELPER_IP, "/api/kid_peer_reset_help",
+                         {"nonce": nonce, "kid": "max",
+                          "kid_session": helper_unlock["kid_session"]})[0], 200)
+        no_hold = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_finish",
+                                     {"nonce": nonce, "kid": "ava", "new_pin": "6767"})
+        self.assertEqual(no_hold[0], 409)
+
+    def test_success_changes_pin_once_and_moves_one_existing_point_without_inflating_earnings(self):
+        before = self.app.state()
+        nonce, token = self.begin()
+        held = self.app.post_from(self.HELPER_IP, "/api/kid_peer_reset_hold",
+                                  {"nonce": nonce, "kid": "max", "kid_session": token, "holding": True})
+        self.assertEqual(held[0], 200)
+        code, finished = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_finish",
+                                            {"nonce": nonce, "kid": "ava", "new_pin": "6767"})
+        self.assertEqual(code, 200, finished)
+        self.assertNotIn("6767", json.dumps(finished))
+        self.assertNotIn(token, (self.app.dir / "peer_pin_resets.json").read_text())
+        after = finished["state"]
+        self.assertEqual(after["balance"]["ava"], before["balance"]["ava"] - 1)
+        self.assertEqual(after["balance"]["max"], before["balance"]["max"] + 1)
+        self.assertEqual(after["earned"], before["earned"])
+        transfers = [x for x in after["history"] if x["type"] == "transfer"]
+        self.assertEqual(len(transfers), 1)
+        self.assertEqual((transfers[0]["from"], transfers[0]["to"], transfers[0]["points"]),
+                         ("ava", "max", 1))
+        self.assertEqual(self.app.post_from(self.TARGET_IP, "/api/kid_unlock",
+                                            {"kid": "ava", "pin": "1111"})[0], 403)
+        self.assertEqual(self.app.post_from(self.TARGET_IP, "/api/kid_unlock",
+                                            {"kid": "ava", "pin": "6767"})[0], 200)
+        self.assertEqual(self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_finish",
+                                            {"nonce": nonce, "kid": "ava", "new_pin": "9999"})[0], 409)
+        self.assertEqual(len([x for x in self.app.state()["history"] if x["type"] == "transfer"]), 1)
+
+    def test_unplug_revokes_trust_until_ben_checks_two_fresh_hubs(self):
+        self.s.GUARD["hub_heartbeat"]["helper_hub"] -= 20
+        self.assertTrue(self.s.invalidate_hub_placement("A kid Nest Hub stopped checking in", ["helper_hub"]))
+        blocked = self.app.post_from(self.TARGET_IP, "/api/kid_peer_reset_request", {"kid": "ava"})
+        self.assertEqual(blocked[0], 409)
+        review = self.app.state()["hub_placement_review"]
+        self.assertEqual(review["nonce"], self.s.HUB_PLACEMENT["nonce"])
+        self.assertEqual(review["adult"], "jordan")
+        self.assertFalse(next(x for x in review["displays"] if x["id"] == "helper_hub")["fresh"])
+        refused = self.app.post("/api/hub_placement_attest", {"nonce": review["nonce"], "by": "casey"})
+        self.assertEqual(refused[0], 403)
+        stale = self.app.post("/api/hub_placement_attest", {"nonce": review["nonce"], "by": "jordan"})
+        self.assertEqual(stale[0], 409)
+        self.heartbeat_both()
+        attested = self.app.post("/api/hub_placement_attest", {"nonce": review["nonce"], "by": "jordan"})
+        self.assertEqual(attested[0], 200)
+        self.assertTrue(self.s.HUB_PLACEMENT["trusted"])
+        self.assertIsNone(attested[1]["state"]["hub_placement_review"])
 
 
 class RewardBlockers(Case):

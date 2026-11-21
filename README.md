@@ -130,7 +130,7 @@ Open **http://localhost:8790**. It's a made-up family (Ava, Max and Zoe, with gr
    cp example-config/chores.json example-config/house.json ~/.local/share/chore-time/
    ```
 2. **Edit `chores.json`:** your kids (name, colour, emoji), grown-ups, jobs and rewards. Delete what you don't use.
-3. **Edit `house.json`**, or delete it to run with no smart-home features at all. Each section turns on a module: `home_assistant`, `adults`, `tvs`, `hubs`, `launchers`, `lights`, `vacuum` (and `vacuum_more` for more robots), `vacuum_help`, `robot_locator`, `room_eye`, `grocy`, `demo_state`. See [docs/configuration.md](docs/configuration.md).
+3. **Edit `house.json`**, or delete it to run with no smart-home features at all. Each section turns on a module: `home_assistant`, `adults`, `tvs`, `hubs`, optional two-Hub `peer_pin_reset`, `launchers`, `lights`, `vacuum` (and `vacuum_more` for more robots), `vacuum_help`, `robot_locator`, `room_eye`, `grocy`, `demo_state`. See [docs/configuration.md](docs/configuration.md).
 4. **Run it:**
    ```bash
    python3 server.py                      # core only: standard library, nothing to install

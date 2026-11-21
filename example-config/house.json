@@ -81,13 +81,28 @@
   "hubs": {
     "living_room": {
       "ip": "192.168.1.30",
-      "entity": "media_player.living_room_hub_max"
+      "entity": "media_player.living_room_hub_max",
+      "room": "Living room"
     },
     "kids_room": {
       "ip": "192.168.1.31",
       "entity": "media_player.kids_room_hub_max",
       "from_h": 7
     }
+  },
+  "peer_pin_reset": {
+    "displays": [
+      "living_room",
+      "kids_room"
+    ],
+    "kids": [
+      "ava",
+      "max"
+    ],
+    "adult": "jordan",
+    "valid_seconds": 300,
+    "offline_seconds": 8,
+    "hold_fresh_seconds": 1.5
   },
   "launchers": {
     "input_button.chore_board_living_room": {

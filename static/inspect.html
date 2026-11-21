@@ -535,7 +535,7 @@ function render(){
   // pending
   var pend=S.history.filter(function(h){return h.type==="report"&&h.status==="pending"}).reverse();
   pend.sort(function(a,b){return (b.priority?1:0)-(a.priority?1:0)});
-  var ph="";pend.forEach(function(r){var k=kidOf(r.kid),fixed=r.points!=null,other=r.chore==="other";
+  var HP=S.hub_placement_review,ph=HP?'<div class="card" data-hub-placement="1" style="border:4px solid #c62828;background:#fff3e0"><div class="row"><span class="big">'+E("1f6e1")+E("1f4cd")+'</span><div style="flex:1"><b>Physically check both kid Nest Hubs</b><div class="mute">'+esc(HP.reason||"A Hub stopped checking in")+'. Kid-to-kid PIN resets stay disabled until Ben verifies the Hubs are still in their proper, separate rooms.</div></div></div><div class="chips" style="margin-top:8px">'+(HP.displays||[]).map(function(d){return '<span class="tag '+(d.fresh?'clean':'warn')+'">'+esc(d.room)+' · '+(d.fresh?'online':'not checking in')+'</span>'}).join('')+'</div><div class="row" style="margin-top:10px">'+(me===HP.adult?'<button class="ok" data-hub-attest="'+esc(HP.nonce||"")+'">I physically checked both Hubs are in their proper rooms</button>':'<span class="tag warn">Ben must do this check</span>')+'</div></div>':'';pend.forEach(function(r){var k=kidOf(r.kid),fixed=r.points!=null,other=r.chore==="other";
     if(r.chore==="toy_out"){ph+='<div class="card" data-r="'+r.id+'"><div class="row"><span class="big">'+E(k.icon)+'🧸👋</span><div><b>'+esc(k.name)+'</b> wants to give away <b>'+esc(r.note||"a toy")+'</b> · asks <b>'+(r.ask||0)+' ⭐</b><div class="mute">'+ago(r.ts)+' · settle on what the choice is worth</div></div></div>'+
       '<div class="chips">'+[0,1,2,3,4,5,6].map(function(n){return '<button class="'+(n===r.ask?"ok":"")+'" data-p="'+n+'">'+(n===r.ask?"✓ ":"")+n+'</button>'}).join("")+'<input type="number" class="cus" placeholder="other" min="0" max="50"><button class="no" data-x="1">Not yet…</button></div></div>';return}
     if(r.chore==="get_dressed"){ph+='<div class="card" data-r="'+r.id+'" data-dr="1" style="border:3px solid #f5b400"><div class="row"><span class="big">'+E(k.icon)+'👕👖🩲🧦👟</span><div><b>'+esc(k.name)+'</b> says they\'re dressed<div class="mute">'+ago(r.ts)+' · shirt, pants, underwear, socks and shoes?</div></div></div>'+
@@ -577,12 +577,13 @@ function render(){
       '<div class="mute">'+when.toLocaleDateString([], {weekday:"long",month:"short",day:"numeric"})+' at '+when.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})+' · claimed by '+esc(k.name)+'</div>'+
       (bd.home_that_day===false?'<div class="tag warn">⚠️ '+esc(k.name)+'\'s home switch was never on that day</div>':'')+'</div></div>'+
       '<div class="chips"><button class="ok" data-cert="'+c.id+'" data-ok="1">✅ Yes: +'+(bd.price==null?"?":bd.price)+'⭐</button><button class="no" data-cert="'+c.id+'" data-ok="0">❌ It didn\'t happen</button></div></div>'+ph});
-  $("pcount").textContent=pend.length+cert.length;$("pendwrap").style.display=pend.length+cert.length?"":"none";
+  $("pcount").textContent=pend.length+cert.length+(HP?1:0);$("pendwrap").style.display=pend.length+cert.length+(HP?1:0)?"":"none";
   $("pending").innerHTML=ph||'<div class="empty">Nothing waiting '+E("2728")+'</div>';
   fillPhotos();
   document.querySelectorAll("[data-doc-pages]").forEach(function(b){b.onclick=function(e){e.stopPropagation();var pages=[];try{pages=JSON.parse(b.dataset.docPages)}catch(x){}openDocumentPreview(pages,b.dataset.docTitle)}});
   document.querySelectorAll("[data-cert]").forEach(function(b){b.onclick=function(){var ok=b.dataset.ok==="1";
     post("/api/certify",{chore:b.dataset.cert,ok:ok},ok?"Stars given":"Marked as not done")}});
+  document.querySelectorAll("[data-hub-attest]").forEach(function(b){b.onclick=function(){post("/api/hub_placement_attest",{nonce:b.dataset.hubAttest},"Both Nest Hubs verified in place")}});
   document.querySelectorAll("[data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
   document.querySelectorAll("[data-prank]").forEach(function(b){b.onclick=function(){var r=S.history.find(function(h){return h.id===b.dataset.prank});if(!r)return;
     var t=prompt("Nothing was done? "+kidOf(r.kid).name+" loses 1 ⭐. Message they'll see:","Adding fake chores is against the rules! Nothing was done, so it costs 1 star.");if(t===null)return;
@@ -607,7 +608,7 @@ function render(){
   // Only inspection-job cards carry data-r. Some jobs contain nested .card UI (for
   // example the cohesive full/partial/not-yet chooser); walking every descendant
   // rebound its buttons with an undefined job id after the correct outer binding.
-  document.querySelectorAll('#pending > .card:not([data-swap]):not([data-dr])').forEach(function(c){var id=c.dataset.r;
+  document.querySelectorAll('#pending > .card:not([data-swap]):not([data-dr]):not([data-hub-placement])').forEach(function(c){var id=c.dataset.r;
     if(c.querySelector("[data-fullpass]"))c.querySelector("[data-fullpass]").onclick=function(){var r=S.history.find(function(h){return h.id===id});
       post("/api/inspect",{ref:id,ok:true,points:r.points},"Full job passed · awarded "+kidOf(r.kid).name+" "+r.points+" ⭐")};
     c.querySelectorAll("[data-p]").forEach(function(b){b.onclick=function(){var l=c.querySelector(".lbl");
@@ -827,9 +828,10 @@ function render(){
   var rc="";S.history.slice(0,25).forEach(function(h){var k=kidOf(h.kid),line,undo=h.id;
     if(h.type==="report"){line=E(h.chore_icon)+' '+esc(h.chore_name)+' — '+(h.status==="pending"?"waiting":h.status==="inspected"?E(inspOf(h.inspected_by).icon)+" +"+h.awarded:"sent back");undo=h.status==="pending"?h.id:h.inspect_id}
     else if(h.type==="spend")line=E(h.reward_icon)+' bought '+esc(h.reward_name)+' (−'+h.cost+')';
+    else if(h.type==="transfer"){var from=kidOf(h.from),to=kidOf(h.to);k=to;line=E("1f91d")+' '+esc(from.name)+' gave '+esc(to.name)+' '+h.points+' ⭐ for helping with a private PIN reset';undo=null}
     else line=(h.points>0?"+":"")+h.points+' '+esc(h.reason||"")+' '+E(inspOf(h.by).icon);
     var chg=h.type==="report"&&h.status==="inspected"&&Date.now()/1000-(h.inspected_ts||0)<86400?'<button data-fix="'+h.id+'">✏️ Change</button>':'';
-    rc+='<div class="card row"><span>'+E(k.icon)+'</span><span style="flex:1">'+line+((h.team||[]).length>1&&h.split?'<div class="mute">'+h.team.map(function(m){return esc(kidOf(m).name)+' '+(h.split[m]||0)}).join(' · ')+'</div>':'')+'<div class="mute">'+ago(h.ts)+'</div></span>'+chg+'<button data-u="'+undo+'">Undo</button></div>'});
+    rc+='<div class="card row"><span>'+E(k.icon)+'</span><span style="flex:1">'+line+((h.team||[]).length>1&&h.split?'<div class="mute">'+h.team.map(function(m){return esc(kidOf(m).name)+' '+(h.split[m]||0)}).join(' · ')+'</div>':'')+'<div class="mute">'+ago(h.ts)+'</div></span>'+chg+(undo?'<button data-u="'+undo+'">Undo</button>':'')+'</div>'});
   $("recent").innerHTML=rc;
   document.querySelectorAll("[data-u]").forEach(function(b){b.onclick=function(){if(confirm("Undo this?"))post("/api/undo",{ref:b.dataset.u},"Undone")}});
   document.querySelectorAll("#recent [data-fix]").forEach(function(b){b.onclick=function(){FIXJOB=b.dataset.fix;openPM("fixjob")}});
