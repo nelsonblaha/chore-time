@@ -771,6 +771,12 @@ class Pilot:
         self.last_pub = None
         self.publish({"why": result["why"]}, self.get(VAC).get("state"), self.get(ROOM_SENSOR).get("state"))
 
+    @staticmethod
+    def _map_owned_now(item):
+        """New explicit map rows plus legacy modal rows created before source tagging existed."""
+        return item.get("source") == "map" or item.get("gesture") == "map_now_on" or \
+            str(item.get("id") or "").startswith("map-")
+
     def _map_vacancy_set(self, gesture, rooms, request_id, now):
         want = gesture == "map_vacant_on"
         requested = self.room_requests()
@@ -800,11 +806,12 @@ class Pilot:
     def _map_now_on(self, rooms, request_id, now):
         queue = self.D.setdefault("manual_queue", [])
         busy = self._button_work(self.get(VAC).get("state"), self.get(IN_CLEAN).get("state"), now)
-        pending = {room for item in queue for room in ((SEGMENTS if item.get("whole_floor") else item.get("rooms")) or [])}
+        pending = {room for item in queue if self._map_owned_now(item)
+                   for room in ((SEGMENTS if item.get("whole_floor") else item.get("rooms")) or [])}
         changed = [room for room in rooms if room not in pending]
         already = [room for room in rooms if room in pending]
         if changed:
-            queue.append({"id": request_id, "gesture": "map_now_on", "rooms": changed,
+            queue.append({"id": request_id, "gesture": "map_now_on", "source": "map", "rooms": changed,
                           "whole_floor": False, "native_requested": False, "one_at_time": False,
                           "created": now, "attempts": 0, "next_attempt": 0})
         why = ("Clean now queued for " + ", ".join(changed)) if changed else \
@@ -826,18 +833,28 @@ class Pilot:
         queue = D.setdefault("manual_queue", [])
         selected = set(rooms)
         active_id = D.get("manual_active") if D.get("run_kind") == "manual" and D.get("phase") != "idle" else None
+        active_item = next((item for item in queue if item.get("id") == active_id), None)
+        active_map = bool(active_item and self._map_owned_now(active_item))
         current = set()
-        if active_id and D.get("groups"):
+        if active_map and D.get("groups"):
             i = min(int(D.get("gi") or 0), len(D["groups"]) - 1)
             current = set(D["groups"][i].get("rooms") or [])
         active_finishing = sorted(selected & current)
         changed, whole_floor = set(), set()
+        other_jobs = set()
         kept = []
         for item in queue:
             item_rooms = set(item.get("rooms") or [])
-            if item.get("whole_floor") and selected & (item_rooms or set(SEGMENTS)):
-                whole_floor.update(selected & (item_rooms or set(SEGMENTS)))
-                kept.append(item)       # a native whole-floor command cannot be edited room-by-room safely
+            overlap = selected & (item_rooms or (set(SEGMENTS) if item.get("whole_floor") else set()))
+            if not self._map_owned_now(item):
+                other_jobs.update(overlap)
+                if item.get("whole_floor"):
+                    whole_floor.update(overlap)
+                kept.append(item)       # physical/other work is a separate intent and must remain untouched
+                continue
+            if item.get("whole_floor") and overlap:
+                whole_floor.update(overlap)
+                kept.append(item)
                 continue
             removed = item_rooms & selected
             changed.update(removed)
@@ -849,7 +866,7 @@ class Pilot:
 
         # A launched command cannot be surgically edited.  Let its current group finish, but remove deselected rooms
         # from every not-yet-launched group so they cannot run later or retry.
-        if active_id and D.get("groups"):
+        if active_map and D.get("groups"):
             cut = min(int(D.get("gi") or 0) + 1, len(D["groups"]))
             future = []
             for group in D["groups"][cut:]:
@@ -860,19 +877,23 @@ class Pilot:
             if D.get("phase") == "between" and int(D.get("gi") or 0) + 1 >= len(D["groups"]):
                 self.finish("done", now)
 
-        unchanged = [room for room in rooms if room not in changed and room not in whole_floor]
+        unchanged = [room for room in rooms if room not in changed and room not in whole_floor and room not in other_jobs]
         why = ("Clean now deselected for " + ", ".join(sorted(changed))) if changed else \
             ("Clean now was not selected for " + ", ".join(rooms))
         if active_finishing:
             why += "; already-active rooms finish their current pass, with future groups and retries removed"
         if whole_floor:
             why += "; native whole-floor work is unchanged because it cannot be edited room-by-room"
+        elif other_jobs:
+            why += "; non-map robot work is unchanged"
         result = {"ok": True, "action": "map_now_off", "rooms": rooms, "changed": sorted(changed),
                   "already": unchanged, "active_finishing": active_finishing,
-                  "whole_floor_unchanged": sorted(whole_floor), "why": why}
+                  "whole_floor_unchanged": sorted(whole_floor),
+                  "other_jobs_unchanged": sorted(other_jobs), "why": why}
         self._remember_button_result(request_id, result, now)
         self.log("map_clean_now_set", request_id=request_id, on=False, rooms=rooms, changed=sorted(changed),
-                 active_finishing=active_finishing, whole_floor_unchanged=sorted(whole_floor))
+                 active_finishing=active_finishing, whole_floor_unchanged=sorted(whole_floor),
+                 other_jobs_unchanged=sorted(other_jobs))
         self.save()
         self._publish_button_result(result)
         return result
@@ -990,7 +1011,8 @@ class Pilot:
         queue_rooms = rooms if whole_floor else [r for r in rooms if r not in pending]
         append_item = bool(queue_rooms) and not (whole_floor and existing_whole)
         if append_item:
-            item = {"id": request_id, "gesture": gesture, "rooms": queue_rooms, "whole_floor": whole_floor,
+            item = {"id": request_id, "gesture": gesture, "source": "physical", "rooms": queue_rooms,
+                    "whole_floor": whole_floor,
                     "native_requested": whole_floor, "requested_rooms": supplied if gesture == "long" else None,
                     "one_at_time": gesture == "long" and not whole_floor, "created": now,
                     "attempts": 0, "next_attempt": 0}
@@ -1810,6 +1832,17 @@ class Pilot:
             # Physical button work is a separate durable FIFO. It always gets first admission, but it never
             # interrupts an autopilot run, a different manual clean, a pause, or a recharge/mop-wash dock break.
             manual = D.setdefault("manual_queue", [])
+            while manual and self._map_owned_now(manual[0]):
+                item = manual[0]
+                serviced = [room for room in (item.get("rooms") or [])
+                            if D.get("visits", {}).get(room, 0) >= item.get("created", now)]
+                if not serviced:
+                    break
+                item["rooms"] = [room for room in item.get("rooms", []) if room not in serviced]
+                self.log("map_clean_now_already_serviced", request_id=item.get("id"), rooms=serviced)
+                if item["rooms"]:
+                    break
+                manual.pop(0)
             if manual:
                 item = manual[0]
                 wait = self.manual_wait(vs, incl, now)
@@ -1823,7 +1856,8 @@ class Pilot:
                 if not wait and item.get("native_requested"):
                     self.refresh_native_request(item)
                     wait = item.get("launch_blocked")
-                info.update(manual_queue=[{"id": x.get("id"), "gesture": x.get("gesture"), "rooms": x.get("rooms"),
+                info.update(manual_queue=[{"id": x.get("id"), "gesture": x.get("gesture"),
+                                          "source": x.get("source"), "rooms": x.get("rooms"),
                                           "attempts": x.get("attempts", 0), "whole_floor": bool(x.get("whole_floor"))}
                                          for x in manual],
                             eligible=item.get("rooms") or [])
@@ -2142,6 +2176,7 @@ class Pilot:
                  "robot": vs, "robot_room": room, **info,
                  "groups": D.get("groups"), "gi": D.get("gi"),
                  "manual_queue": [{"request_id": x.get("id"), "gesture": x.get("gesture"),
+                                   "source": x.get("source"),
                                    "rooms": x.get("rooms"), "attempts": x.get("attempts", 0),
                                    "next_attempt": x.get("next_attempt", 0),
                                    "whole_floor": bool(x.get("whole_floor"))} for x in (D.get("manual_queue") or [])],

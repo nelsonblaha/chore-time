@@ -510,6 +510,7 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(self.button("map_vacant_on", ["Bedroom"], "map-vacant-on"), added)
         immediate = self.button("map_now_on", ["Bath"], "map-now-on")
         self.assertEqual(immediate["changed"], ["Bath"])
+        self.assertEqual(self.posts[-1][2]["manual_queue"][0]["source"], "map")
         self.S("input_text.up_requests", '{"Bath": %d, "Hall": %d}' % (self.now[0], self.now[0] - 60))
         removed = self.button("map_vacant_off", ["Bath"], "map-vacant-off")
         self.assertEqual(removed["changed"], ["Bath"])
@@ -553,6 +554,28 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(self.p.D["groups"], [{"mode": "vacuum", "rooms": ["Hall"]}])
         self.assertEqual(self.p.D["manual_queue"][0]["rooms"], ["Bath"])
         self.assertNotIn("vacuum.return_to_base", [service for service, _ in self.calls])
+
+    def test_map_now_overlap_and_off_leave_a_physical_job_untouched(self):
+        self.p.D["manual_queue"] = [{"id": "remote-press", "gesture": "single", "source": "physical",
+                                      "rooms": ["Bath"], "whole_floor": False}]
+        added = self.button("map_now_on", ["Bath"], "map-overlap")
+        self.assertEqual(added["changed"], ["Bath"])
+        self.assertEqual([item["source"] for item in self.p.D["manual_queue"]], ["physical", "map"])
+        removed = self.button("map_now_off", ["Bath"], "map-overlap-off")
+        self.assertEqual(removed["changed"], ["Bath"])
+        self.assertEqual(removed["other_jobs_unchanged"], ["Bath"])
+        self.assertEqual([(item["id"], item["rooms"]) for item in self.p.D["manual_queue"]],
+                         [("remote-press", ["Bath"])])
+
+    def test_map_now_row_drops_if_other_work_already_cleaned_it(self):
+        self.S("input_boolean.up_autopilot", "off")
+        self.p.D["manual_queue"] = [{"id": "map-later", "gesture": "map_now_on", "source": "map",
+                                      "rooms": ["Bath"], "created": self.now[0] - 60,
+                                      "whole_floor": False, "attempts": 0, "next_attempt": 0}]
+        self.p.D["visits"]["Bath"] = self.now[0]
+        calls = self.tick()
+        self.assertEqual(self.p.D["manual_queue"], [])
+        self.assertNotIn("script.vacuum_clean_rooms", [service for service, _ in calls])
 
     def test_map_now_off_does_not_dock_an_active_room_and_removes_future_groups(self):
         self.p.D.update(phase="running", run_kind="manual", manual_active="active-map", gi=0,
