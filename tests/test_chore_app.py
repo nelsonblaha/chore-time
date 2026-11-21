@@ -896,7 +896,11 @@ class TvRewardPauseAndSave(Case):
         self.assertTrue(paused["lock_requested"])
         self.assertAlmostEqual(paused["saved_reward"]["remaining_s"], remaining, delta=2)
         tv = paused["state"]["tv"]["tvs"]["livingroom"]
-        self.assertNotIn("reward_audiences", tv)
+        paused_audience = tv["reward_audiences"][0]
+        self.assertEqual((paused_audience["session_id"], paused_audience["state"]),
+                         (self.purchase["id"], "paused"))
+        self.assertAlmostEqual(paused_audience["remaining_s"], remaining, delta=2)
+        self.assertTrue(all(x["state"] != "active" for x in tv["reward_audiences"]))
         self.assertEqual(tv["paused_reward"]["session_id"], self.purchase["id"])
         self.assertEqual(paused["state"]["balance"]["ava"], balance)
         self.assertEqual(self.physical[0][0:2], ("pause", "livingroom"))

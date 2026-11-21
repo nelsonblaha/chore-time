@@ -2240,6 +2240,14 @@ def derive():
                     tvs[saved_["tv"]].setdefault("saved_rewards", []).append(public_saved_)
                     # The TV lock page reads this exact row to explain why playback stopped.
                     tvs[saved_["tv"]]["paused_reward"] = public_saved_
+                    # Keep the session in the HA audience contract, explicitly non-active. Room/camera consumers
+                    # stop watching while floorplans can still show the banked entitlement and its transition time.
+                    tvs[saved_["tv"]].setdefault("reward_audiences", []).append({
+                        "session_id": saved_["session_id"], "reward": saved_["reward"],
+                        "expected_kids": list(saved_["kids"]), "expected_count": len(saved_["kids"]),
+                        "state": "paused", "remaining_s": saved_["remaining_s"],
+                        "paused_at": saved_["paused_at"], "started_at": saved_["paused_at"],
+                        "valid_until": saved_["paused_at"], "kinds": saved_.get("kinds") or []})
             for tid, us in active_unlocks_raw(evs).items():
                 if tid in tvs and us:
                     tvs[tid]["unlocked_until"] = max(u["until"] for u in us)
@@ -2267,7 +2275,7 @@ def derive():
                         row_["expected_count"] = len(row_["expected_kids"])
                         row_["state"] = "active" if row_.pop("active") else "waiting"
                     if audience_:
-                        tvs[tid]["reward_audiences"] = sorted(audience_.values(), key=lambda row_: (
+                        tvs[tid]["reward_audiences"] = sorted(list(audience_.values()) + tvs[tid].get("reward_audiences", []), key=lambda row_: (
                             row_["state"] != "active", row_.get("started_at") or row_["valid_until"]))
                     # when it actually locks: the running clocks, then any queued purchases back to back (armed = not started)
                     run_ = [u["until"] for u in us if not u.get("armed") and u["what"] != "vr"]
@@ -5746,6 +5754,7 @@ def saved_tv_rewards(evs, now=None):
             saved = by_session.setdefault(session, {"session_id": session, "tv": tid, "reward": row["what"],
                                                      "kids": [], "remaining_s": float(transition["remaining_s"]),
                                                      "paused_at": transition["ts"], "paused_by": transition.get("by"),
+                                                     "kinds": list(row.get("kinds") or []),
                                                      "playback": transition.get("playback")})
             if row.get("kid") and row["kid"] not in saved["kids"]:
                 saved["kids"].append(row["kid"])
