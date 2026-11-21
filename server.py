@@ -5712,14 +5712,18 @@ def _tv_grants(evs, now=None, reward_lifecycle=True):
                     x["until"] = float(transition.get("until") or
                                        (transition["ts"] + float(transition.get("remaining_s") or 0)))
                     x["start"], x["armed"] = transition["ts"], False
+                    x["_reward_transition_ts"] = transition["ts"]
                 kept.append(x)
             g[tid] = kept
     # Adjustments are applied last so +10/-10/Lock after a resumed reward operate on its new clock.
     for e in adjustments:
         for tid in (list(TVS) if e["tv"] == "*" else [e["tv"]]):
             for x in g.get(tid, []):
-                if x["ts"] < e["ts"] and x["until"] > e["ts"]:
+                if x["ts"] < e["ts"] and e["ts"] > x.get("_reward_transition_ts", 0) and x["until"] > e["ts"]:
                     x["until"] = e["until"]
+    for rows in g.values():
+        for x in rows:
+            x.pop("_reward_transition_ts", None)
     return {t: [x for x in xs if x["until"] > now] for t, xs in g.items()}
 
 

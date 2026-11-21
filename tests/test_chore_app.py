@@ -950,6 +950,20 @@ class TvRewardPauseAndSave(Case):
         self.assertIn(("media_player.media_pause", {"entity_id": playback["player"]}), self.app.calls)
         self.assertEqual(calls, [("cast", self.s.TVS["livingroom"]["ip"], "/tv?paused_reward=1")])
 
+    def test_adjustment_before_pause_is_not_reapplied_after_resume(self):
+        events = [
+            {"id": "buy", "type": "spend", "ts": 1000, "kid": "ava", "reward": "movie",
+             "cost": 15, "tv": "livingroom", "until": 2000, "by": "jordan"},
+            {"id": "adjust", "type": "tv_set_until", "ts": 1100, "tv": "livingroom",
+             "until": 1500, "by": "jordan", "action": "minus"},
+            {"id": "pause", "type": "tv_reward_pause", "ts": 1200, "session": "buy",
+             "tv": "livingroom", "remaining_s": 300, "by": "jordan"},
+            {"id": "resume", "type": "tv_reward_resume", "ts": 5000, "session": "buy",
+             "tv": "livingroom", "remaining_s": 300, "until": 5300, "by": "jordan"},
+        ]
+        grant = self.s.tv_grants(events, now=5001)["livingroom"][0]
+        self.assertEqual(grant["until"], 5300)
+
 
 class SonyInputs(Case):
     """tv_status on the Sun room Sony: the TV's own input report wins (Max's console never locked, 8 PM)."""
