@@ -44,7 +44,8 @@ REWARD_BLOCK_CACHE = {"ts": 0, "value": {"on": False, "items": []}}
 
 def packing_config():
     """Private trip details may live outside house.json so they can be revised without touching code."""
-    path = house_path(HOUSE.get("packing_game_file")) if "house_path" in globals() else None
+    raw_path = HOUSE.get("packing_game_file")
+    path = Path(str(raw_path)).expanduser() if raw_path else None
     if path:
         try:
             value = json.loads(path.read_text())
