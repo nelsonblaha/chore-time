@@ -40,6 +40,7 @@ class DemoState(Case):
                                            {"id": "sam", "name": "Sam", "icon": "1f9d1"}],
                             "households": [{"id": "a", "name": "A's house"}], "chores": [{"id": "dishes", "note": "private"}]},
                  "kid_where": {"ava": "a"}, "households": [1], "envelope": {"recipients": [{"label": "Cousin"}]},
+                 "present_kids": ["ava"],
                  "calendar": [{"title": "Private appointment", "start": "2026-11-20", "all_day": True}],
                  "packing_game": {"title": "Private trip", "items": ["Secret destination"]},
                  "music_block": {"effective": True, "blockers": [{"kid": "ava", "items": ["Private cleanup"]}]},
@@ -50,7 +51,7 @@ class DemoState(Case):
                  "chore_mode": {"on": True, "home": ["ava"]}, "goals": {"ava": "movie"}}
         d = s.demo_attrs(attrs)
         t = json.dumps(d)
-        for w in ("secret", "on the counter", "Cousin", "A's house", "home_entity", "kid_where", "notify.w", "Sam", "private", "Private appointment", "Secret destination", "Private cleanup"):
+        for w in ("secret", "on the counter", "Cousin", "A's house", "home_entity", "kid_where", "present_kids", "notify.w", "Sam", "private", "Private appointment", "Secret destination", "Private cleanup"):
             self.assertNotIn(w, t)
         self.assertEqual(d["goals"], {"ava": "movie"})
         self.assertEqual(d["board"]["dishes"]["price"], 3)

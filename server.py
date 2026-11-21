@@ -918,17 +918,23 @@ def chores_first_state(evs, kids, reports=None):
     def lift(k, v, until=None):   # the clean-up was reported after the block began and passed (before `until`)
         if not v["on"]:
             return v
-        ok = [r for r in (reports or {}).values() if r["chore"] == "cleanup_" + k and pos.get(r["id"], -1) > v["_at"]
+        target = v.get("chore") or "cleanup_" + k
+        ok = [r for r in (reports or {}).values() if r["chore"] == target and pos.get(r["id"], -1) > v["_at"]
               and r["status"] == "inspected" and not r.get("partial") and (until is None or passed_at.get(r["id"], 1e18) < until)]
+        marked = [e for e in evs if v.get("chore") and e.get("type") == "mark_clean" and e.get("chore") == target
+                  and pos[e["id"]] > v["_at"] and (until is None or pos[e["id"]] < until)]
+        if marked:
+            return dict(v, on=False, lifted={"by": marked[-1].get("by"), "ts": marked[-1]["ts"], "manual": True})
         return dict(v, on=False, lifted={"by": ok[-1].get("inspected_by"), "ts": ok[-1].get("inspected_ts")}) if ok else v
     for e in evs:
         if e["type"] == "chores_first" and e.get("kid") in out:
             prev = lift(e["kid"], out[e["kid"]], pos[e["id"]])
             if e.get("on") and prev["on"]:   # editing the list keeps the start time
-                out[e["kid"]] = dict(prev, items=list(e.get("items") or []))
+                out[e["kid"]] = dict(prev, items=list(e.get("items") or []),
+                                      chore=e.get("chore", prev.get("chore")), name=e.get("name", prev.get("name")))
             else:
                 out[e["kid"]] = {"on": bool(e.get("on")), "since": e["ts"], "_at": pos[e["id"]], "by": e.get("by"),
-                                 "items": list(e.get("items") or [])}
+                                 "items": list(e.get("items") or []), "chore": e.get("chore"), "name": e.get("name")}
                 if not e.get("on") and e.get("done"):
                     out[e["kid"]]["lifted"] = {"by": e.get("by"), "ts": e["ts"], "manual": True}
     return {k: {x: y for x, y in lift(k, v).items() if x != "_at"} for k, v in out.items()}
@@ -1039,8 +1045,10 @@ def music_block_state(evs, chores_first, must_first, present=None, reports=None,
     blockers = []
     for kid, gate in chores_first.items():
         if gate.get("on"):
-            blockers.append({"kid": kid, "kind": "cleanup", "name": "Mandatory chores",
-                             "items": list(gate.get("items") or [])})
+            blockers.append({"kid": kid, "kind": "required_room" if gate.get("chore") else "cleanup",
+                             "name": gate.get("name") or "Mandatory chores",
+                             "items": list(gate.get("items") or []),
+                             **({"chore": gate["chore"]} if gate.get("chore") else {})})
     for kid, gate in must_first.items():
         if gate.get("rewards"):
             blockers.append({"kid": kid, "kind": "must_do_first", "name": gate.get("name") or "Required chore",
@@ -1358,8 +1366,8 @@ def cf_board(c, evs, reports, board):
     for k, v in chores_first_state(evs, [x["id"] for x in c["kids"]], reports).items():
         b = board.get("cleanup_" + k)
         if b is not None:
-            b["blocked"] = v["on"]
-            if v["on"]:
+            b["blocked"] = bool(v["on"] and not v.get("chore"))
+            if b["blocked"]:
                 b["note"] = "\n".join(v["items"]) or None
                 b["note_by"] = None
     return board
@@ -2231,6 +2239,7 @@ def derive():
             "history": history[:200], "now": time.time(),
             "tidy_spaces": space_states(HOUSE.get("tidy_spaces", []), board, active, paused, evs, time.time()),
             "households": c.get("households") or [], "kid_where": {k["id"]: kid_where(c, k["id"]) for k in c["kids"]},
+            "present_kids": present,
             "dress": dress, "chores_first": chores_first,
             "must_do_first": must_first, "adult_first": assisted, "assist_requests": assist_requests,
             "pin_reset_open": pin_reset_open,
@@ -2306,7 +2315,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices", "hub_placement_review",
+DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices", "hub_placement_review",
              "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",
@@ -2432,6 +2441,7 @@ def push_state_sensor(state=None, last_result=None):
              "awards": state.get("awards"), "awards_seen": state.get("awards_seen"), "goals": state.get("goals"), "goal_since": state.get("goal_since"), "favorite": state.get("favorite"),
              "screen_break": state.get("screen_break"), "bedtime": state.get("bedtime"), "wind_down": state.get("wind_down"), "version": state.get("version"),
              "households": state.get("households"), "kid_where": state.get("kid_where"),
+             "present_kids": state.get("present_kids"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
              "music_block": state.get("music_block"),
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"), "papers": state.get("papers"),
@@ -3712,6 +3722,11 @@ class H(BaseHTTPRequestHandler):
             chore_ = b.get("chore") or (st.get("paused", {}).get(kid_) or {}).get("chore")
             if gate_.get("on") and chore_ != gate_.get("chore") and not (chores.get(chore_) or {}).get("bedtime_ok"):
                 return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
+            cleanup_gate_ = (st.get("chores_first") or {}).get(kid_) or {}
+            if cleanup_gate_.get("on") and cleanup_gate_.get("chore") and chore_ != cleanup_gate_["chore"] \
+                    and not (chores.get(chore_) or {}).get("bedtime_ok"):
+                return self.send(409, {"error": "%s first! Other chores come back when it passes inspection." %
+                                                (cleanup_gate_.get("name") or "Mandatory room")})
             routine_ = ((st.get("evening_routine") or {}).get(kid_) or {})
             if (st.get("evening_routine_window") or {}).get("on") and routine_.get("due") and chore_ not in routine_.get("items", []):
                 names_ = ["take a shower" if x == "shower" else "brush your teeth" for x in routine_["items"]]
@@ -3741,7 +3756,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/spend" and any(((st.get("chores_first") or {}).get(k_) or {}).get("on") for k_ in [b.get("kid")] + list(b.get("with") or [])):
             k_ = next(k_ for k_ in [b.get("kid")] + list(b.get("with") or []) if ((st.get("chores_first") or {}).get(k_) or {}).get("on"))
             nm_ = next((x["name"] for x in c["kids"] if x["id"] == k_), str(k_))
-            return self.send(409, {"error": ("" if k_ == b.get("kid") else nm_ + ": ") + "Chores first! Tidy up, then rewards come back."})
+            first_ = st["chores_first"][k_]
+            msg_ = ((first_.get("name") or "Mandatory room") + " first! Other chores and rewards come back when it passes inspection.") \
+                if first_.get("chore") else "Chores first! Tidy up, then rewards come back."
+            return self.send(409, {"error": ("" if k_ == b.get("kid") else nm_ + ": ") + msg_})
         if p == "/api/log":
             evs = b if isinstance(b, list) else [b]
             opened = {}
@@ -3819,7 +3837,11 @@ class H(BaseHTTPRequestHandler):
             if gate_.get("rewards"):
                 return self.send(409, {"error": (gate_.get("name") or "Priority chore") + " first! Rewards come back when it's done."})
             if ((st.get("chores_first") or {}).get(kid_) or {}).get("on"):
-                return self.send(409, {"error": "Chores first! Tidy up, then rewards come back."})
+                first_ = st["chores_first"][kid_]
+                return self.send(409, {"error": ((first_.get("name") or "Mandatory room") +
+                                                  " first! Other chores and rewards come back when it passes inspection.")
+                                                 if first_.get("chore") else
+                                                 "Chores first! Tidy up, then rewards come back."})
             if st["balance"].get(kid_, 0) < reward_cost(rw_):
                 return self.send(409, {"error": "not enough points"})
             ready_ = (st.get("reward_ready", {}).get(kid_) or {}).get(rid_, 0)
@@ -4656,6 +4678,21 @@ class H(BaseHTTPRequestHandler):
             jobs = space.get("chores", [])
             if any(job not in chores for job in jobs):
                 return self.send(409, {"error": "room chore configuration needs attention"})
+            requested_kids = b.get("block_kids") or []
+            if not isinstance(requested_kids, list):
+                return self.send(400, {"error": "blocking kids must be a list"})
+            block_kids = list(dict.fromkeys(x for x in requested_kids if x in kids))
+            if requested_kids and (b["tidy"] or len(block_kids) != len(set(requested_kids))):
+                return self.send(400, {"error": "blocking kids must be known and the room must be untidy"})
+            present_ = set(GUARD.get("home_now") or [])
+            if any(k not in present_ for k in block_kids):
+                return self.send(409, {"error": "only kids currently home can be given this mandatory room"})
+            assigned = {}
+            for kid_ in block_kids:
+                eligible_ = [job for job in jobs if not (chores[job].get("only") or []) or kid_ in chores[job]["only"]]
+                if not eligible_:
+                    return self.send(409, {"error": "this room has no chore available to one of the selected kids"})
+                assigned[kid_] = eligible_[0]
             if any(a.get("chore") in jobs for a in list(st["active"].values()) + list(st["paused"].values())) or any(st["board"].get(job, {}).get("pending_by") for job in jobs):
                 return self.send(409, {"error": "finish or inspect the room's existing job first"})
             if jobs:
@@ -4663,6 +4700,9 @@ class H(BaseHTTPRequestHandler):
                     ev = append({"type": "mark_clean" if b["tidy"] else "reopen", "chore": job, "by": b["by"]})
             else:
                 ev = append({"type": "space_tidy", "space": space["id"], "tidy": b["tidy"], "by": b["by"]})
+            for kid_, job_ in assigned.items():
+                ev = append({"type": "chores_first", "kid": kid_, "on": True, "items": ["Tidy " + space["name"]],
+                             "chore": job_, "name": chores[job_].get("name") or space["name"], "by": b["by"]})
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:
                 return self.send(400, {"error": "unknown inspector/chore"})

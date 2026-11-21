@@ -663,7 +663,7 @@ function renderKid(){
   $("barlbl").innerHTML=(p?E("1f50d")+" +"+p+" waiting for inspection &nbsp; ":"")+(b<gc?(gc-b)+" more "+E("2b50")+" to "+E(G.r.icon)+" "+G.r.name:E("1f389")+" You have enough for "+E(G.r.icon)+" "+G.r.name+"! "+E("1f389"));
   renderKidMenu();
   renderProjects();
-  var MF=((S.must_do_first||{})[kid])||{};$("mustban").style.display=MF.rewards?"block":"none";$("mustban").innerHTML=MF.rewards?E("1f4da")+' '+safeText(MF.name)+' first! '+(MF.on?'Other chores come back at '+hm12(MF.until)+'. ':'')+'Rewards come back when it is done.':"";
+  var MF=((S.must_do_first||{})[kid])||{},RFIRST=((S.chores_first||{})[kid])||{};$("mustban").style.display=MF.rewards?"block":"none";$("mustban").innerHTML=MF.rewards?E("1f4da")+' '+safeText(MF.name)+' first! '+(MF.on?'Other chores come back at '+hm12(MF.until)+'. ':'')+'Rewards come back when it is done.':"";
   var A=(S.active||{})[kid];
   if(A){var ac=S.config.chores.find(function(x){return x.id===A.chore})||{name:A.chore,icon:"2b50"};
     var tsz=(A.team||[]).length,Tm=((S.typical||{})[A.chore]||{}).minutes||ac.est_minutes||10,REC=(S.records||{})[tsz>1?A.chore+"@"+tsz:A.chore];
@@ -704,12 +704,13 @@ function renderKid(){
     if(c.each_daily&&(bd.done_today||[]).indexOf(kid)>=0&&(bd.pending_by||[]).indexOf(kid)<0)return false;   // done today (each kid once a day)
     return true});
   if(MF.on)vis=vis.filter(function(c){return c.id===MF.chore||c.bedtime_ok});
+  if(RFIRST.on&&RFIRST.chore)vis=vis.filter(function(c){return c.id===RFIRST.chore||c.bedtime_ok});
   var WD=(S.wind_down||{}).on,RW=(S.evening_routine_window||{}).on,SH=((S.shower||{})[kid]||{}),ER=((S.evening_routine||{})[kid]||{});
   if(RW&&ER.due)vis=vis.filter(function(c){return (ER.items||[]).indexOf(c.id)>=0});
   var PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
-  var lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)||(MF.on&&c.id===MF.chore)};   // mandatory jobs and, from wind-down, Brush teeth lead
-  var hero=function(c){return c.id.indexOf("help_")===0||(MF.on&&c.id===MF.chore)};   // robot rescue or the after-school priority
+  var lead=function(c){return c.cleanup_for||(WD&&c.bedtime_ok)||(MF.on&&c.id===MF.chore)||(RFIRST.on&&c.id===RFIRST.chore)};   // mandatory jobs and, from wind-down, Brush teeth lead
+  var hero=function(c){return c.id.indexOf("help_")===0||(MF.on&&c.id===MF.chore)||(RFIRST.on&&c.id===RFIRST.chore)};   // robot rescue or a priority chore
   vis=vis.filter(hero).concat(vis.filter(function(c){return !hero(c)&&lead(c)}),vis.filter(function(c){return !hero(c)&&!lead(c)}));   // then "Tidy up first!"
   var ch="";vis.slice(page*PER,page*PER+PER).forEach(function(c){
     var bd=S.board[c.id]||{price:c.points,pending_by:[]},cls="tile",badge="";
@@ -769,7 +770,7 @@ function renderKid(){
         ' <span class="cdk" data-ready="'+RR[r.id]+'">'+Math.floor(lft/60)+":"+("0"+Math.round(lft%60)%60).slice(-2)+'</span><div class="cbar"><div class="cfill wait" data-ready="'+RR[r.id]+'" data-tot="'+tot+'" style="width:'+pct+'%"></div></div></div></div>';return}
     if((S.requests||[]).some(function(q){return q.kid===kid&&q.reward===r.id})){rw+='<div class="rw" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="flex:1;font-size:20px;font-weight:900;line-height:1.15">'+E("1f64b")+' '+r.name+' is yours! A grown-up will start it</div></div>';return}
     rw+='<div class="rw'+(b>=r.cost?' can':'')+'" data-r="'+r.id+'"><div class="ic">'+E(r.icon)+'</div><div style="font-size:22px;font-weight:900;line-height:1.15">'+({show:"Show",movie:"Movie",games:"Games",vr:"VR 5 min"}[r.id]||r.name)+'<br>'+r.cost+' '+E("2b50")+'</div><div class="ring" style="--p:'+pc+'"><span>'+(b>=r.cost?E("2705"):Math.max(0,r.cost-b))+'</span></div></div>'});
-  var CF=((S.chores_first||{})[kid]||{}).on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' Chores first! Do <b>Tidy up first!</b> and get it checked. Then rewards come back.</div>':'';
+  var CF=RFIRST.on,banner=CF?'<div id="cfban" style="cursor:pointer;width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f9f9")+' '+(RFIRST.chore?'<b>'+safeText(RFIRST.name||"This room")+'</b> first! Other chores and rewards come back when it passes inspection.':'Chores first! Do <b>Tidy up first!</b> and get it checked. Then rewards come back.')+'</div>':'';
   if(MF.rewards){CF=true;banner='<div style="width:100%;background:#fff3c4;border:4px solid #f5b400;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f4da")+' '+safeText(MF.name)+' first! Rewards come back when it is done.</div>'}
   if(RW){banner='<div style="width:100%;background:#e8eaf6;border:4px solid #5c6bc0;border-radius:16px;padding:6px 12px;font-size:24px;font-weight:900;text-align:center">'+E("1f319")+' '+(ER.due?(SH.due?'Second night here: '+E("1f6bf")+' shower and '+E("1faa5")+' brush your teeth first.':'Brush your teeth first. Chores and allowed rewards come back when you are done.'):'Routine done! Chores and allowed rewards are open until 8:30.')+'</div>';if(ER.due)CF=true}
   if(CF)rw=rw.replace(/class="rw( can)?"/g,'class="rw" style="opacity:.45"');
@@ -777,7 +778,7 @@ function renderKid(){
   var canN=CF?0:S.config.rewards.filter(function(r){return here(r)&&!pastCutoff(r.before,r.before_from)&&b>=r.cost&&!(RR[r.id]&&RR[r.id]>S.now)}).length;
   $("tvnow").innerHTML=rfh+tvh;
   document.querySelectorAll("[data-refund]").forEach(function(n){n.onclick=function(e){e.stopPropagation();refundAsk(n.dataset.refund)}});
-  setTimeout(function(){if($("cfban"))$("cfban").onclick=function(e){e.stopPropagation();cleanupModal()}},0);   // TV time running stays in sight even when Buy is folded
+  setTimeout(function(){if($("cfban"))$("cfban").onclick=function(e){e.stopPropagation();if(RFIRST.chore)askChore(RFIRST.chore);else cleanupModal()}},0);   // TV time running stays in sight even when Buy is folded
   $("rewards").innerHTML=banner+RWL.slice(RWP*RPER,RWP*RPER+RPER).join("");$("rwpg").innerHTML=pagerSm("rw",RWP,rpages);
   $("buybody").style.display=FOLD.buy?"":"none";$("buychev").innerHTML=FOLD.buy?"&#9650;":"&#9660;";
   $("buysum").innerHTML=FOLD.buy?"":CF?E("1f9f9")+" chores first":canN?E("2705")+" "+canN+" you can buy":"tap to see";
@@ -918,7 +919,7 @@ function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id=
   var lastUse=(S.kid_open||{})[k]||0;
   if(maybePeerHelper(k))return;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
-  kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(((S.chores_first||{})[k]||{}).on){cleanupModal();return}if(remindJob(k,lastUse))return;
+  kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;var cf=(S.chores_first||{})[k]||{};if(cf.on){if(cf.chore)askChore(cf.chore);else cleanupModal();return}if(remindJob(k,lastUse))return;
     var fresh=newInspections(k);if(fresh.length){revealQueue(fresh)}else{if(!getSeen(k))setSeen(k,S.now);showNewAwards()}})})}
 // "Chores first": the grown-up's clean-up list, tick things off, then ONE big button sends it for inspection
 var cfTick={};

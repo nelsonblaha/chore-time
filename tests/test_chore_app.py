@@ -2822,6 +2822,43 @@ class MustDoFirst(Case):
 
 
 class ChoresFirst(Case):
+    def test_room_can_be_reopened_as_one_mandatory_job_for_selected_present_kids(self):
+        a = App(base_config())
+        a.s.GUARD["home_now"] = {"ava", "max"}
+        a.s.HOUSE["tidy_spaces"] = [{"id": "kitchen", "name": "Kitchen", "chores": ["kitchen"]}]
+        code, r = a.post("/api/space_tidy", {"space": "kitchen", "tidy": False,
+                                              "block_kids": ["ava", "max"], "by": "jordan"})
+        self.assertEqual(code, 200, r)
+        st = r["state"]
+        self.assertEqual(st["present_kids"], ["ava", "max"])
+        for kid in ("ava", "max"):
+            self.assertEqual(st["chores_first"][kid]["chore"], "kitchen")
+            self.assertEqual(st["chores_first"][kid]["name"], "Kitchen")
+            self.assertEqual(st["chores_first"][kid]["items"], ["Tidy Kitchen"])
+        self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "family_room"})[0], 409)
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 200)
+        rep = a.post("/api/report", {"kid": "ava", "chore": "kitchen", "feeling": "ok"})[1]["event"]
+        self.assertEqual(a.post("/api/inspect", {"ref": rep["id"], "by": "jordan", "ok": True, "points": 3})[0], 200)
+        self.assertFalse(a.state()["chores_first"]["ava"]["on"])
+        self.assertFalse(a.state()["chores_first"]["max"]["on"])
+        a.close()
+
+    def test_room_block_rejects_absent_kid_and_adult_tidy_lifts_it(self):
+        a = App(base_config())
+        a.s.GUARD["home_now"] = {"ava"}
+        a.s.HOUSE["tidy_spaces"] = [{"id": "kitchen", "name": "Kitchen", "chores": ["kitchen"]}]
+        self.assertEqual(a.post("/api/space_tidy", {"space": "kitchen", "tidy": False,
+                                                     "block_kids": ["max"], "by": "jordan"})[0], 409)
+        self.assertEqual(a.post("/api/space_tidy", {"space": "kitchen", "tidy": False,
+                                                     "block_kids": ["ava"], "by": "jordan"})[0], 200)
+        self.assertTrue(a.state()["chores_first"]["ava"]["on"])
+        self.assertEqual(a.post("/api/space_tidy", {"space": "kitchen", "tidy": True,
+                                                     "by": "jordan"})[0], 200)
+        gate = a.state()["chores_first"]["ava"]
+        self.assertFalse(gate["on"])
+        self.assertTrue(gate["lifted"]["manual"])
+        a.close()
+
     def test_rewards_blocked_until_the_clean_up_passes_inspection(self):
         a = App(base_config())
         a.event(type="adjust", kid="ava", points=20, reason="test")
