@@ -42,6 +42,19 @@ HA = HOUSE.get("home_assistant") or {}   # empty = no Home Assistant: TV locks, 
 REWARD_BLOCK_CACHE = {"ts": 0, "value": {"on": False, "items": []}}
 
 
+def packing_config():
+    """Private trip details may live outside house.json so they can be revised without touching code."""
+    path = house_path(HOUSE.get("packing_game_file")) if "house_path" in globals() else None
+    if path:
+        try:
+            value = json.loads(path.read_text())
+            if isinstance(value, dict):
+                return value
+        except (OSError, ValueError):
+            pass
+    return HOUSE.get("packing_game")
+
+
 def house_path(p):
     return Path(str(p)).expanduser() if p else None
 
@@ -2055,7 +2068,7 @@ def derive():
             "pin_reset_open": pin_reset_open,
             "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
             "shower": shower, "evening_routine": evening_routine,
-            "calendar": schedule.agenda(), "packing_game": HOUSE.get("packing_game"),
+            "calendar": schedule.agenda(), "packing_game": packing_config(),
             "papers": papers, "paper_scan_ready": bool((HOUSE.get("paper_scanner") or {}).get("ready")),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
