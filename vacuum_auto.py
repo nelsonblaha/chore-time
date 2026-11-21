@@ -861,11 +861,13 @@ class Pilot:
             changed.update(removed)
             if removed:
                 item["rooms"] = [room for room in (item.get("rooms") or []) if room not in selected]
-                if isinstance(item.get("requested_rooms"), list):
-                    # [] is the physical remote's native whole-floor shorthand.  Once that job has fallen back to
-                    # editable named segments, materialize the set before recording a room withdrawal.
-                    source_rooms = item["requested_rooms"] or (list(SEGMENTS) if item.get("native_requested") else [])
-                    item["requested_rooms"] = [room for room in source_rooms if room not in selected]
+                if item.get("native_requested") and not item.get("whole_floor"):
+                    # Once a native whole-floor request has become an editable segmented fallback, the first named
+                    # withdrawal freezes that exact remainder.  A later topology/tidiness refresh must never widen it.
+                    item["requested_rooms"] = list(item["rooms"])
+                    item["native_requested"] = False
+                elif isinstance(item.get("requested_rooms"), list):
+                    item["requested_rooms"] = [room for room in item["requested_rooms"] if room not in selected]
             if item.get("rooms"):
                 kept.append(item)
         D["manual_queue"] = kept

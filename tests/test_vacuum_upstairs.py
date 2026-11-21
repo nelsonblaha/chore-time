@@ -620,9 +620,12 @@ class Upstairs(unittest.TestCase):
         self.p.D["manual_queue"] = [item]
         result = self.button("map_now_off", ["Study"], "map-off-study")
         self.assertEqual(result["changed"], ["Study"])
-        self.assertEqual(item["requested_rooms"], [room for room in self.va.SEGMENTS if room != "Study"])
-        self.p.refresh_native_request(item)
-        self.assertNotIn("Study", item["rooms"])
+        self.assertEqual(item["requested_rooms"], ["Hall"])
+        self.assertFalse(item["native_requested"])
+        self.tidy["bath"] = {"state": "tidy"}                         # becoming safe cannot widen the frozen job
+        calls = self.tick()
+        launch = next(data for service, data in calls if service == "script.vacuum_clean_rooms")
+        self.assertEqual(launch["rooms"], ["Hall"])
 
     def test_button_merges_vacancy_rooms_then_promotes_only_when_all_are_already_flagged(self):
         self.button(rooms=["Bath"], request_id="one")
