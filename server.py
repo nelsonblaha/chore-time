@@ -525,6 +525,19 @@ def append(ev):
     return ev
 
 
+def record_vacuum_ready(floor, request_id, map_rooms, observed_at):
+    """Record one room-level confirmation per accepted operation, under the floor's planner lock."""
+    if any(ev.get("type") == "vacuum_ready" and ev.get("floor") == floor and ev.get("request_id") == request_id
+           for ev in read_events()):
+        return False
+    spaces = [space["id"] for space in HOUSE.get("tidy_spaces", [])
+              if map_rooms.intersection(space.get("map_rooms") or [space["id"]])]
+    if not spaces:
+        return False
+    append({"type": "vacuum_ready", "floor": floor, "request_id": request_id, "spaces": spaces, "ts": observed_at})
+    return True
+
+
 def shares(r, total):
     """Split points across a team. A custom split gives set amounts first ('he gets one point'),
     the rest is shared equally by the others; otherwise equal shares, odd points to the reporter first."""
@@ -3315,6 +3328,19 @@ class H(BaseHTTPRequestHandler):
                 return self.send(503, {"ok": False, "rooms": [], "why": "vacuum planner is starting"})
             with planner.lock:
                 result = planner.button_request(b)
+                if result.get("ok") and result.get("action") in ("map_vacant_on", "queued_when_vacant"):
+                    request_id = str(b["request_id"]).strip()[:160]
+                    receipt = planner.D["manual_seen"][request_id]
+                    rooms = (set(receipt["map_rooms"]) if "map_rooms" in receipt
+                             else planner.confirmed_map_rooms(b, result["rooms"]))
+                    try:
+                        recorded = record_vacuum_ready(floor, request_id, rooms, receipt["ts"])
+                    except OSError:
+                        return self.send(503, {"ok": False, "why": "vacancy queued; room confirmation needs retry"})
+                    if not rooms and b.get("gesture") == "map_vacant_on":
+                        result = dict(result, why=result["why"] + "; refresh the floorplan to confirm the tidy room")
+                    if recorded:
+                        threading.Thread(target=push_state_sensor, daemon=True).start()
             ilog({"src": "vacuum_button", "ip": self.client_address[0], "floor": floor,
                   "gesture": b.get("gesture"), "request_id": str(b.get("request_id") or "")[:160],
                   "result": result})

@@ -44,6 +44,19 @@ class RoomTidiness(unittest.TestCase):
         event = {'type':'space_tidy','space':'study','tidy':True,'ts':100,'by':'jordan'}
         self.assertEqual(space_states(spaces,{}, {}, {}, [event], 100+72*3600)['study']['state'], 'untidy')
 
+    def test_request_confirmation_respects_expiry_newer_manual_marks_and_inspections(self):
+        from tidy_spaces import space_states
+        spaces = self.app.s.HOUSE['tidy_spaces']
+        ready = {'type':'vacuum_ready', 'spaces':['study','kitchen'], 'ts':100}
+        board = {'kitchen': {'pending_by':['ava']}}
+        def rows(events, now):
+            return space_states(spaces, board, {}, {}, events, now)
+        self.assertEqual(rows([ready], 101)['kitchen']['state'], 'waiting')
+        self.assertEqual(rows([ready], 101)['study']['state'], 'tidy')
+        self.assertEqual(rows([ready], 100+72*3600)['study']['state'], 'untidy')
+        manual = {'type':'space_tidy', 'space':'study', 'tidy':False, 'ts':101}
+        self.assertEqual(rows([manual, ready], 102)['study']['state'], 'untidy')
+
     def test_room_controls_require_adult_and_known_room(self):
         for body in [{'space':'study','tidy':True,'by':'ava'}, {'space':'missing','tidy':True,'by':'jordan'}, {'space':'study','tidy':'yes','by':'jordan'}]:
             self.assertEqual(self.app.post('/api/space_tidy',body)[0],400)

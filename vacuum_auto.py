@@ -771,7 +771,7 @@ class Pilot:
         self.last_pub = None
         self.publish({"why": result["why"]}, self.get(VAC).get("state"), self.get(ROOM_SENSOR).get("state"))
 
-    def _map_vacancy_set(self, gesture, rooms, request_id, now):
+    def _map_vacancy_set(self, gesture, rooms, request_id, now, body):
         want = gesture == "map_vacant_on"
         requested = self.room_requests()
         changed = [room for room in rooms if (room not in requested) == want]
@@ -807,6 +807,8 @@ class Pilot:
         result = {"ok": True, "action": gesture, "rooms": rooms, "changed": changed, "already": already,
                   "active_finishing": active, "future_withdrawn": sorted(set(future_withdrawn)), "why": why}
         self._remember_button_result(request_id, result, now)
+        if want:
+            self.D["manual_seen"][request_id]["map_rooms"] = sorted(self.confirmed_map_rooms(body, rooms))
         self.log("map_clean_when_vacant_set", request_id=request_id, on=want, rooms=rooms, changed=changed,
                  active_finishing=active, future_withdrawn=sorted(set(future_withdrawn)))
         self.save()
@@ -922,6 +924,24 @@ class Pilot:
         self.save()
         return result
 
+    def segment_rooms(self, seg, chores):
+        return SEG_ROOMS.get(seg) or sorted({room for ch in chores if ch["id"] in SEG_CHORE.get(seg, ())
+                                             for room in (ch.get("map_rooms") or ())})
+
+    def confirmed_map_rooms(self, body, accepted):
+        if body.get("map_room") is not None:
+            return {body["map_room"]}
+        selected = [seg for seg in accepted if not body.get("rooms") or seg in body["rooms"]]
+        chores = (self.g["derive"]().get("config", {}).get("chores", [])
+                  if any(seg not in SEG_ROOMS for seg in selected) else [])
+        footprints = [set(self.segment_rooms(seg, chores)) for seg in selected]
+        if body.get("gesture") == "map_vacant_on":
+            # Older floorplans supplied only robot segments. Several can share
+            # a unique tile, but one broad segment cannot identify the tapped tile.
+            common = set.intersection(*footprints) if footprints else set()
+            return common if len(common) == 1 else set()
+        return set().union(*footprints)
+
     def button_request(self, body):
         """Apply the physical Clean button's idle→vacancy→now progression, idempotently."""
         gesture = str(body.get("gesture") or "")
@@ -938,6 +958,11 @@ class Pilot:
         unknown = [r for r in supplied if r not in SEGMENTS]
         if unknown:
             return {"ok": False, "rooms": [], "why": "unknown room: " + unknown[0]}
+        tile = body.get("map_room")
+        if tile is not None:
+            if (gesture != "map_vacant_on" or not isinstance(tile, str) or not supplied or
+                    any(tile not in self.confirmed_map_rooms({}, [seg]) for seg in supplied)):
+                return {"ok": False, "rooms": [], "why": "room does not belong to the selected vacuum segments"}
         D = self.D
         D.setdefault("manual_queue", [])
         seen = D.setdefault("manual_seen", {})
@@ -964,7 +989,7 @@ class Pilot:
         # busy-floor cancel/dock behavior and never change the other kind of request.
         if gesture in map_gestures:
             if gesture.startswith("map_vacant_"):
-                return self._map_vacancy_set(gesture, supplied, request_id, now)
+                return self._map_vacancy_set(gesture, supplied, request_id, now, body)
             if gesture == "map_now_on":
                 return self._map_now_on(supplied, request_id, now)
             return self._map_now_off(supplied, request_id, now)
@@ -1004,6 +1029,7 @@ class Pilot:
                       "why": "queued for the next vacancy" +
                              ("; skipped " + ", ".join(skipped) if skipped else "")}
             self._remember_button_result(request_id, result, now)
+            self.D["manual_seen"][request_id]["map_rooms"] = sorted(self.confirmed_map_rooms(body, rooms))
             self.log("physical_clean_when_vacant", request_id=request_id, gesture=gesture, rooms=rooms,
                      skipped=skipped)
             self.save()
@@ -1278,7 +1304,7 @@ class Pilot:
         cleans reset the clock. Never while a kid's job there is in progress or waiting for a check."""
         st = self.g["derive"]()
         b = st["board"]
-        chs = {c["id"]: c for c in st.get("config", {}).get("chores", [])}
+        chores = st.get("config", {}).get("chores", [])
         busy = {a.get("chore") for a in st["active"].values()} | {z.get("chore") for z in st["paused"].values()}
         now = time.time()
         requests = self.room_requests()
@@ -1290,7 +1316,7 @@ class Pilot:
             cids = list(SEG_CHORE.get(seg) or [])
             # the map rooms this robot area really covers: explicit in house.json (a kids' job can span several robot
             # areas, e.g. "front hall + dining"), else derived from its jobs
-            rooms = SEG_ROOMS.get(seg) or sorted({r for c in cids for r in (chs.get(c, {}).get("map_rooms") or [])})
+            rooms = self.segment_rooms(seg, chores)
             confirmed = self.D["visits"].get(seg, 0)
             last = max(confirmed, self.D.get("prior_schedule_dates", {}).get(seg, 0))
             sch = SCHEDULE.get(seg) or {}

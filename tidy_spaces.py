@@ -2,6 +2,14 @@
 
 
 def space_states(spaces, board, active, paused, events, now):
+    ready = {}
+    changed = {}
+    for event in events:
+        if event.get('type') == 'vacuum_ready':
+            for sid in event['spaces']:
+                ready[sid] = max(ready.get(sid, 0), event['ts'])
+        elif event.get('type') == 'reopen':
+            changed[event['chore']] = event['ts']
     result = {}
     for space in spaces:
         key = space['id']
@@ -27,5 +35,17 @@ def space_states(spaces, board, active, paused, events, now):
                 row['last_tidy'] = latest['ts'] if latest.get('tidy') else 0
                 row['tidy_until'] = latest['ts'] + float(space.get('cooldown_h', 72)) * 3600 if latest.get('tidy') else 0
                 row['state'] = 'tidy' if row['tidy_until'] > now else 'untidy'
+        # A resident can confirm the floor is picked up without completing a
+        # shared chore or resolving a child's active job or pending inspection.
+        if key in ready and row['state'] in ('unknown', 'untidy', 'tidy'):
+            stamp = ready[key]
+            until = stamp + float(space.get('cooldown_h', 72)) * 3600
+            latest_change = max((changed.get(job, 0) for job in jobs), default=0)
+            if not jobs and latest:
+                latest_change = latest['ts']
+            if stamp > max(row['last_tidy'], latest_change):
+                until = max(until, row['tidy_until'])
+                row.update(state='tidy' if now < until else 'untidy', last_tidy=stamp,
+                           tidy_until=until, by='vacuum_request')
         result[key] = row
     return result
