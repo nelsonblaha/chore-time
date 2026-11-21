@@ -1172,6 +1172,15 @@ class Vacuum(unittest.TestCase):
         self.assertIn(("vacuum.return_to_base", {"entity_id": self.va.VAC}), self.calls)
         self.assertEqual(self.p.D.get("manual_queue", []), [])
 
+    def test_downstairs_idle_maintenance_probe_is_non_scheduling(self):
+        result = self.p.button_request({"gesture": "maintenance_probe", "rooms": [],
+                                        "request_id": "down-maintenance"})
+        self.assertEqual(result["action"], "maintenance_allowed")
+        self.assertEqual(result["rooms"], [])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.p.D.get("manual_queue", []), [])
+        self.assertEqual(self.p.room_requests(), {})
+
     def test_vacuum_rooms_before_mop_rooms_and_suction_by_who_is_home(self):
         self.tick()
         g = self.p.D["groups"]

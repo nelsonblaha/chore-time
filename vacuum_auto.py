@@ -429,7 +429,7 @@ class Pilot:
         gesture = str(body.get("gesture") or "")
         request_id = str(body.get("request_id") or "").strip()[:160]
         supplied = body.get("rooms")
-        if gesture not in ("single", "double", "long", "cancel"):
+        if gesture not in ("single", "double", "long", "cancel", "maintenance_probe"):
             return {"ok": False, "rooms": [], "why": "unknown gesture"}
         if not request_id:
             return {"ok": False, "rooms": [], "why": "request_id is required"}
@@ -455,8 +455,26 @@ class Pilot:
             if supplied:
                 return {"ok": False, "rooms": [], "why": "floor cancellation takes no room selection"}
             return self._cancel_button_work(request_id, now, list(self.room_requests()))
+        if gesture == "maintenance_probe" and supplied:
+            return {"ok": False, "rooms": [], "why": "maintenance probe takes no room selection"}
         if gesture != "long" and not supplied:
-            return {"ok": False, "rooms": [], "why": "this gesture selected no rooms"}
+            if gesture != "maintenance_probe":
+                return {"ok": False, "rooms": [], "why": "this gesture selected no rooms"}
+
+        # Committed work has precedence over room accessibility. In particular, a long press on an active floor
+        # must dock the robot even when every room in that long-press selection is currently protected or untidy.
+        vs = self.get(VAC).get("state")
+        incl = self.get(IN_CLEAN).get("state")
+        busy = self._button_work(vs, incl, now)
+        if busy:
+            return self._cancel_button_work(request_id, now, supplied)
+        if gesture == "maintenance_probe":
+            result = {"ok": True, "action": "maintenance_allowed", "rooms": [],
+                      "why": "%s robot has no committed or preparing work" % FLOOR.title()}
+            self._remember_button_result(request_id, result, now)
+            self.log("maintenance_allowed", request_id=request_id)
+            self.save()
+            return result
 
         skipped = []
         if gesture == "long":
@@ -468,12 +486,6 @@ class Pilot:
             if skipped:
                 why += ": " + "; ".join(skipped)
             return {"ok": False, "rooms": [], "why": why}
-
-        vs = self.get(VAC).get("state")
-        incl = self.get(IN_CLEAN).get("state")
-        busy = self._button_work(vs, incl, now)
-        if busy:
-            return self._cancel_button_work(request_id, now, rooms)
 
         requested = self.room_requests()
         if not all(room in requested for room in rooms):

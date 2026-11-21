@@ -357,6 +357,35 @@ class Upstairs(unittest.TestCase):
         self.assertEqual(self.p.room_requests(), {})
         self.assertIn(("vacuum.return_to_base", {"entity_id": "vacuum.up"}), self.calls)
 
+    def test_busy_precedes_an_empty_long_selection(self):
+        self.va.SLEEP_PROTECTION = {name: "binary_sensor.everyone_sleeping" for name in self.va.SEGMENTS}
+        self.S("binary_sensor.everyone_sleeping", "on")
+        self.S("vacuum.up", "cleaning")
+        self.S("binary_sensor.up_cleaning", "on")
+        result = self.button("long", [], "busy-long")
+        self.assertEqual(result["action"], "cancelled_and_docking")
+        self.assertIn(("vacuum.return_to_base", {"entity_id": "vacuum.up"}), self.calls)
+
+    def test_idle_maintenance_probe_allows_without_scheduling_and_retry_is_stable(self):
+        result = self.button("maintenance_probe", [], "maint-idle")
+        self.assertEqual(result, {"ok": True, "action": "maintenance_allowed", "rooms": [],
+                                  "why": "Upstairs robot has no committed or preparing work"})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.p.D["manual_queue"], [])
+        self.assertEqual(self.p.room_requests(), {})
+        self.S("vacuum.up", "cleaning")
+        self.assertEqual(self.button("maintenance_probe", [], "maint-idle"), result)
+        self.assertEqual(self.calls, [])
+
+    def test_busy_maintenance_probe_cancels_once_and_retries_without_another_command(self):
+        self.S("vacuum.up", "paused")
+        self.S("binary_sensor.up_cleaning", "on")
+        result = self.button("maintenance_probe", [], "maint-busy")
+        self.assertEqual(result["action"], "cancelled_and_docking")
+        self.assertEqual([svc for svc, _ in self.calls], ["vacuum.return_to_base"])
+        self.assertEqual(self.button("maintenance_probe", [], "maint-busy"), result)
+        self.assertEqual([svc for svc, _ in self.calls], ["vacuum.return_to_base"])
+
     def test_failed_manual_launch_stays_at_fifo_head_and_retries(self):
         self.H[OCC]["attributes"]["floors"]["upstairs"]["since"] = self.now[0] - self.va.START_QUIET_S
         self.clean_now(rooms=["Bath"])
