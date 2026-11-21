@@ -84,7 +84,8 @@ class App:
         s.ha_call = lambda svc, data, tok: self.calls.append((svc, data))
         s.ha_fire_event = lambda event, data, tok: self.calls.append(("event." + event, data))
         s.ha_post_state = lambda *a, **k: None
-        self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting", "announce", "push_state_sensor") if hasattr(s, n)}
+        self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting", "announce", "push_state_sensor",
+                                                "send_adult_request") if hasattr(s, n)}
         for n in ("announce", "notify_report", "notify_inspecting", "notify_started", "send_adult_request",
                   "clear_adult_request", "push_state_sensor", "push_ha", "after_change"):
             if hasattr(s, n):
@@ -283,7 +284,43 @@ class SoundSettings(Case):
         self.assertFalse(self.s.adult_buzz_allowed("jordan", "test"))
         self.app.set("binary_sensor.jordan_left_bedroom_today", "on")
         self.assertTrue(self.s.adult_buzz_allowed("jordan", "test"))
+        self.app.set("binary_sensor.jordan_left_bedroom_today", "on", ago=90000)
+        self.assertFalse(self.s.adult_buzz_allowed("jordan", "test"))
         self.assertTrue(self.s.adult_buzz_allowed("casey", "test"))
+
+    def test_pre_gate_actionable_phone_notice_is_ongoing_and_direct_watch_stays_quiet(self):
+        s = self.s
+        gate = "binary_sensor.jordan_left_bedroom_today"
+        s.ADULTS["jordan"]["buzz_gate"] = {"entity": gate, "states": ["on"]}
+        s.ADULT_BUZZ_NOTIFY["jordan"] = ["notify.jordan_watch"]
+        s.ADULT_REQ["quiet123"] = {"who": "jordan", "ip": "127.0.0.1", "ts": time.time(),
+                                   "status": "pending", "purpose": "pin_reset", "kid": "ava"}
+        self.app.set(gate, "off")
+        self.app.orig["send_adult_request"]("quiet123", "jordan", "test Hub")
+        phone = next(data for svc, data in self.app.calls if svc == "notify.mobile_app_jordans_phone")
+        self.assertIs(phone["data"]["persistent"], True)
+        self.assertFalse(any(svc == "notify.jordan_watch" for svc, data in self.app.calls))
+        self.app.calls.clear()
+        self.app.set(gate, "on")
+        self.app.states[gate]["attributes"]["cycle_started_at"] = time.time()
+        self.app.orig["send_adult_request"]("quiet123", "jordan", "test Hub")
+        phone = next(data for svc, data in self.app.calls if svc == "notify.mobile_app_jordans_phone")
+        self.assertNotIn("persistent", phone["data"])
+        self.assertTrue(any(svc == "notify.jordan_watch" for svc, data in self.app.calls))
+
+    def test_pre_gate_ephemeral_phone_notice_stays_dashboard_only(self):
+        gate = "binary_sensor.jordan_left_bedroom_today"
+        self.s.ADULTS["jordan"]["buzz_gate"] = {"entity": gate, "states": ["on"]}
+        self.app.set(gate, "unavailable")
+        self.assertIsNone(self.s.phone_notice_data("jordan", {"tag": "chore-doing-ava"}, "test"))
+
+    def test_abandoned_adult_request_expires_without_waiting_for_the_kid_to_poll(self):
+        now = time.time()
+        self.s.ADULT_REQ["oldreq"] = {"who": "jordan", "ip": "127.0.0.1",
+                                      "ts": now - self.s.ADULT_REQUEST_TTL_S - 1,
+                                      "status": "pending", "purpose": "pin_reset", "kid": "ava"}
+        self.assertEqual(self.s.expire_adult_requests(now), ["oldreq"])
+        self.assertEqual(self.s.ADULT_REQ["oldreq"]["status"], "timeout")
 
     def test_house_can_mute_every_kids_interface_sound_effect(self):
         s=self.s;s.HOUSE["sound_effects"] = False

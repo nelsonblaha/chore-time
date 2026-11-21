@@ -2466,9 +2466,11 @@ def notify_parents(ev):
         ilog({"src": "notify", "action": "skipped_quiet_or_away", "what": "spend", "ref": ev.get("id")})
         return
     for svc in PARENT_NOTIFY:
-        ha_call(svc, {"title": "Chores: TV time", "message": msg,
-                      "data": {"clickAction": "/lovelace/chores", "tag": "chore-tv-" + str(ev.get("tv")), "group": "chores",
-                               "priority": "high", "ttl": 0, "actions": acts}}, tok)
+        data = phone_notice_data(LEAD_ADULT, {"clickAction": "/lovelace/chores",
+                                 "tag": "chore-tv-" + str(ev.get("tv")), "group": "chores",
+                                 "priority": "high", "ttl": 0, "actions": acts}, tok)
+        if data is not None:
+            ha_call(svc, {"title": "Chores: TV time", "message": msg, "data": data}, tok)
 
 
 def notify_request(ev):
@@ -2482,12 +2484,16 @@ def notify_request(ev):
         ilog({"src": "notify", "action": "skipped_quiet_or_away", "what": "request", "ref": ev.get("id")})
         return
     for svc in PARENT_NOTIFY:
-        ha_call(svc, {"title": "Chores: %s bought %s" % (k["name"], ev.get("reward_name", ev["reward"])),
-                      "message": "Paid %d⭐. Set it up with them, then tap Start to begin the %s-minute timer." % (
-                          ev["cost"], next((r.get("minutes") for r in cfg()["rewards"] if r["id"] == ev["reward"]), "")),
-                      "data": {"clickAction": "/lovelace/chores", "tag": "chore-req-" + ev["id"], "group": "chores", "priority": "high", "ttl": 0,
-                               "actions": [{"action": "CHORE_REQOK_" + ev["id"], "title": "Start the timer"},
-                                           {"action": "CHORE_REQNO_" + ev["id"], "title": "Not now (refund)"}]}}, tok)
+        data = phone_notice_data(LEAD_ADULT, {"clickAction": "/lovelace/chores", "tag": "chore-req-" + ev["id"],
+                                 "group": "chores", "priority": "high", "ttl": 0,
+                                 "actions": [{"action": "CHORE_REQOK_" + ev["id"], "title": "Start the timer"},
+                                             {"action": "CHORE_REQNO_" + ev["id"], "title": "Not now (refund)"}]},
+                                 tok, durable=True)
+        if data is not None:
+            ha_call(svc, {"title": "Chores: %s bought %s" % (k["name"], ev.get("reward_name", ev["reward"])),
+                          "message": "Paid %d⭐. Set it up with them, then tap Start to begin the %s-minute timer." % (
+                              ev["cost"], next((r.get("minutes") for r in cfg()["rewards"] if r["id"] == ev["reward"]), "")),
+                          "data": data}, tok)
 
 
 # The phone carries action buttons. Optional buzz_notify targets alert Wear OS directly,
@@ -2551,20 +2557,20 @@ def send_adult_request(nonce, who, where):
                    {"action": "CHORE_NO_" + nonce, "title": "Not me"}]
     accepted = []
     for svc in ADULT_NOTIFY.get(who, []):
-        if ha_call(svc, {"title": title, "message": message,
-                         "data": {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
-                                  "actions": actions}}, tok):
+        data = phone_notice_data(who, {"tag": "chore-adult-" + nonce, "priority": "high", "ttl": 0,
+                                      "actions": actions}, tok, durable=True)
+        if data is not None and ha_call(svc, {"title": title, "message": message, "data": data}, tok):
             accepted.append(svc)
     buzzed = []
-    if adult_buzz_allowed(who, tok):
-        for svc in ADULT_BUZZ_NOTIFY.get(who, []):
+    for svc in ADULT_BUZZ_NOTIFY.get(who, []):
+        if adult_buzz_allowed(who, tok):   # re-read immediately before every direct watch service
             if ha_call(svc, {"title": title, "message": message + " Open the phone or parent Chores dashboard to answer.",
                              "data": {"tag": "chore-adult-" + nonce + "-buzz", "priority": "high", "ttl": 0,
                                       "channel": "Chore approvals", "importance": "high"}}, tok):
                 buzzed.append(svc)
-    elif ADULT_BUZZ_NOTIFY.get(who):
-        ilog({"src": "notify", "action": "watch_buzz_suppressed", "nonce": nonce,
-              "purpose": req.get("purpose"), "who": who})
+        else:
+            ilog({"src": "notify", "action": "watch_buzz_suppressed", "nonce": nonce,
+                  "purpose": req.get("purpose"), "who": who, "service": svc})
     ilog({"src": "notify", "action": "adult_request_accepted_by_ha" if accepted else "adult_request_failed",
           "nonce": nonce, "purpose": req.get("purpose"), "to": accepted, "buzz": buzzed})
 
@@ -2585,13 +2591,60 @@ def adult_home(who, tok):
 
 
 def adult_buzz_allowed(who, tok):
-    """Optional HA gate for a direct watch buzz. Unknown/offline fails quiet; phone/dashboard paths remain available."""
+    """Optional daily HA gate for a watch buzz. Unknown, offline, or a stale previous cycle fails quiet."""
     gate = (ADULTS.get(who) or {}).get("buzz_gate") or {}
     if not gate.get("entity"):
         return True
-    state = str((ha_get(gate["entity"], tok) or {}).get("state") or "").lower()
+    snapshot = ha_get(gate["entity"], tok) or {}
+    state = str(snapshot.get("state") or "").lower()
     allowed = {str(x).lower() for x in gate.get("states") or ["on"]}
-    return state in allowed
+    if state not in allowed:
+        return False
+    try:
+        from datetime import datetime, timedelta
+        now = datetime.now().astimezone()
+        boundary_h = int((HOUSE.get("hours") or {}).get("bed_end", 5)) % 24
+        boundary = now.replace(hour=boundary_h, minute=0, second=0, microsecond=0)
+        if now < boundary:
+            boundary -= timedelta(days=1)
+        changed = datetime.fromisoformat(str(snapshot.get("last_changed") or "").replace("Z", "+00:00"))
+        if changed.tzinfo is None:
+            changed = changed.replace(tzinfo=now.tzinfo)
+        if changed.astimezone(now.tzinfo) < boundary:
+            return False
+        cycle = (snapshot.get("attributes") or {}).get("cycle_started_at")
+        if cycle:
+            cycle_at = (datetime.fromtimestamp(float(cycle), now.tzinfo)
+                        if isinstance(cycle, (int, float))
+                        else datetime.fromisoformat(str(cycle).replace("Z", "+00:00")))
+            if cycle_at.tzinfo is None:
+                cycle_at = cycle_at.replace(tzinfo=now.tzinfo)
+            if cycle_at.astimezone(now.tzinfo) < boundary:
+                return False
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def phone_notice_data(who, data, tok, durable=False):
+    """Prevent Android from bridging a pre-gate phone notice to Wear OS.
+
+    Actionable notices with a reliable clear path become ongoing on the phone;
+    Android Wear excludes those from bridging. Ephemeral notices without a
+    clear path remain dashboard-only until the daily gate opens.
+    """
+    payload = dict(data or {})
+    if adult_buzz_allowed(who, tok):
+        payload.pop("persistent", None)
+        return payload
+    if durable and payload.get("tag"):
+        payload["persistent"] = True
+        ilog({"src": "notify", "action": "phone_notice_ongoing_no_wear", "who": who,
+              "tag": payload.get("tag")})
+        return payload
+    ilog({"src": "notify", "action": "phone_notice_dashboard_only", "who": who,
+          "tag": payload.get("tag")})
+    return None
 
 
 def notify_hub_placement_review():
@@ -2604,17 +2657,19 @@ def notify_hub_placement_review():
     title = "Chores: check both kid Nest Hubs"
     message = "A kid Nest Hub stopped checking in. Verify both Hubs are back in their proper rooms before restoring kid-to-kid PIN resets."
     if not HUB_PLACEMENT.get("phone_notified"):
-        accepted = [svc for svc in ADULT_NOTIFY.get(who, []) if ha_call(
-            svc, {"title": title, "message": message,
-                  "data": {"tag": "chore-hub-placement", "priority": "high", "ttl": 0,
-                           "clickAction": "/lovelace/chore-inspection",
-                           "actions": [{"action": "CHORE_HUBS_OK_" + nonce,
-                                        "title": "I checked both are in place"}]}}, tok)]
+        accepted = []
+        for svc in ADULT_NOTIFY.get(who, []):
+            data = phone_notice_data(who, {"tag": "chore-hub-placement", "priority": "high", "ttl": 0,
+                                        "clickAction": "/lovelace/chore-inspection",
+                                        "actions": [{"action": "CHORE_HUBS_OK_" + nonce,
+                                                     "title": "I checked both are in place"}]}, tok, durable=True)
+            if data is not None and ha_call(svc, {"title": title, "message": message, "data": data}, tok):
+                accepted.append(svc)
         if accepted:
             HUB_PLACEMENT["phone_notified"] = True
             save_hub_placement()
-    if not HUB_PLACEMENT.get("watch_notified") and adult_buzz_allowed(who, tok):
-        accepted = [svc for svc in ADULT_BUZZ_NOTIFY.get(who, []) if ha_call(
+    if not HUB_PLACEMENT.get("watch_notified"):
+        accepted = [svc for svc in ADULT_BUZZ_NOTIFY.get(who, []) if adult_buzz_allowed(who, tok) and ha_call(
             svc, {"title": title, "message": message + " Open the parent Chores dashboard after you physically check them.",
                   "data": {"tag": "chore-hub-placement-watch", "priority": "high", "ttl": 0,
                            "channel": "Chore approvals", "importance": "high"}}, tok)]
@@ -2737,10 +2792,11 @@ def notify_report(ev, st, force=False):
             actions = [{"action": "CHORE_ADD1_" + ev["id"], "title": "+1"},
                        {"action": "CHORE_ADD2_" + ev["id"], "title": "+2"}, reply]
     for svc in PARENT_NOTIFY:
-        ha_call(svc, {"title": "Chores: ready to inspect", "message": msg,
-                      "data": {"tag": "chore-insp-" + ev["id"], "group": "chores", "priority": "high", "ttl": 0,
-                               "channel": "Chores", "importance": "high",
-                               "clickAction": "/lovelace/chores", "actions": actions}}, tok)
+        data = phone_notice_data(LEAD_ADULT, {"tag": "chore-insp-" + ev["id"], "group": "chores",
+                                 "priority": "high", "ttl": 0, "channel": "Chores", "importance": "high",
+                                 "clickAction": "/lovelace/chores", "actions": actions}, tok, durable=True)
+        if data is not None:
+            ha_call(svc, {"title": "Chores: ready to inspect", "message": msg, "data": data}, tok)
     ilog({"src": "notify", "action": "sent", "ref": ev["id"], "to": PARENT_NOTIFY})
 
 
@@ -2764,8 +2820,10 @@ def notify_started(kid, chore_id, team=None, what="started"):
     if not parent_available(tok):
         return
     for svc in PARENT_NOTIFY:
-        ha_call(svc, {"title": "Chores", "message": msg,
-                      "data": {"tag": "chore-doing-" + kid, "group": "chores", "clickAction": "/lovelace/chores"}}, tok)
+        data = phone_notice_data(LEAD_ADULT, {"tag": "chore-doing-" + kid, "group": "chores",
+                                 "clickAction": "/lovelace/chores"}, tok)
+        if data is not None:
+            ha_call(svc, {"title": "Chores", "message": msg, "data": data}, tok)
 
 
 def notify_inspecting(r, by):
@@ -2782,9 +2840,12 @@ def notify_inspecting(r, by):
         [{"action": "CHORE_FIX_" + r["id"], "title": "✍️ Not yet: fix…", "behavior": "textInput"},
          {"action": "CHORE_PTS_" + r["id"], "title": "✍️ Points…", "behavior": "textInput"}]
     for svc in PARENT_NOTIFY:
-        ha_call(svc, {"title": "Chores: inspecting", "message": f"🔍 Inspecting {who}: {r.get('chore_name')}",
-                      "data": {"tag": "chore-insp-" + r["id"], "group": "chores", "priority": "high", "ttl": 0,
-                               "chronometer": True, "when": int(time.time()), "actions": acts}}, tok)
+        data = phone_notice_data(LEAD_ADULT, {"tag": "chore-insp-" + r["id"], "group": "chores",
+                                 "priority": "high", "ttl": 0, "chronometer": True,
+                                 "when": int(time.time()), "actions": acts}, tok, durable=True)
+        if data is not None:
+            ha_call(svc, {"title": "Chores: inspecting", "message": f"🔍 Inspecting {who}: {r.get('chore_name')}",
+                          "data": data}, tok)
 
 
 def clear_report_notice(ref):
@@ -2796,6 +2857,15 @@ def clear_report_notice(ref):
         ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-insp-" + ref}}, tok)
 
 
+def clear_reward_request_notice(ref):
+    try:
+        tok = ha_token()
+    except OSError:
+        return
+    for svc in PARENT_NOTIFY:
+        ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-req-" + ref}}, tok)
+
+
 def clear_adult_request(nonce, who):
     try:
         tok = ha_token()
@@ -2805,6 +2875,23 @@ def clear_adult_request(nonce, who):
         ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-adult-" + nonce}}, tok)
     for svc in ADULT_BUZZ_NOTIFY.get(who, []):
         ha_call(svc, {"message": "clear_notification", "data": {"tag": "chore-adult-" + nonce + "-buzz"}}, tok)
+
+
+def expire_adult_requests(now=None):
+    """Close timed-out actionable notices even if the child walked away from the waiting screen."""
+    now = time.time() if now is None else float(now)
+    expired = []
+    for nonce, row in ADULT_REQ.items():
+        ttl = ADULT_REQUEST_TTL_S if row.get("purpose") in ("assist", "reward", "pin_reset") else 120
+        if row.get("status") == "pending" and now - float(row.get("ts") or 0) > ttl:
+            row["status"] = "timeout"
+            expired.append((nonce, row.get("who")))
+    if expired:
+        save_adult_requests()
+        after_change()
+        for nonce, who in expired:
+            threading.Thread(target=clear_adult_request, args=(nonce, who), daemon=True).start()
+    return [nonce for nonce, who in expired]
 
 
 def resolve_assist_request(nonce, ok, by):
@@ -4566,6 +4653,8 @@ class H(BaseHTTPRequestHandler):
             threading.Thread(target=notify_report, args=(ev, derive()), daemon=True).start()
         if ev.get("type") in ("inspect", "undo") and ev.get("ref"):
             threading.Thread(target=clear_report_notice, args=(ev["ref"],), daemon=True).start()
+        if p == "/api/request_answer" and ev.get("ref"):
+            threading.Thread(target=clear_reward_request_notice, args=(ev["ref"],), daemon=True).start()
         self.send(200, {"ok": True, "event": ev, "state": derive()})
 
 
@@ -5301,10 +5390,14 @@ def watch_tvs():
                     announce((f"{who}, " if who else "") + f"five minutes of TV time left on the {TVS[tid]['name'].replace(' TV', '')} TV.", tok)
                     if parent_available(tok):
                         for svc in PARENT_NOTIFY:
-                            ha_call(svc, {"title": "Chores: 5 min of TV left", "message": f"{TVS[tid]['name']}" + (f" ({who})" if who else "") + " locks in 5 minutes.",
-                                          "data": {"tag": "chore-tv-" + tid, "group": "chores", "priority": "high", "ttl": 0,
-                                                   "actions": [{"action": "CHORE_TVPLUS_" + tid, "title": "+10 min"},
-                                                               {"action": "CHORE_TVLOCK_" + tid, "title": "Lock now"}]}}, tok)
+                            data = phone_notice_data(LEAD_ADULT, {"tag": "chore-tv-" + tid, "group": "chores",
+                                                     "priority": "high", "ttl": 0,
+                                                     "actions": [{"action": "CHORE_TVPLUS_" + tid, "title": "+10 min"},
+                                                                 {"action": "CHORE_TVLOCK_" + tid, "title": "Lock now"}]}, tok)
+                            if data is not None:
+                                ha_call(svc, {"title": "Chores: 5 min of TV left",
+                                              "message": f"{TVS[tid]['name']}" + (f" ({who})" if who else "") + " locks in 5 minutes.",
+                                              "data": data}, tok)
             for tid, t in TVS.items():
                 if active_spotify_interruption(t.get("room") or tid):
                     GUARD["status"][tid] = {"what": "music_block", "dur": 0, "at": time.time()}
@@ -6270,6 +6363,7 @@ def watch_ha_actions():
             last = val
             beat += 1
             if beat % 7 == 0:  # ~10 s: the grown-up got home -> send the jobs still waiting for inspection
+                expire_adult_requests()
                 home = parent_available(tok)
                 if home and GUARD.get("ben_was_home") is False:
                     st_ = derive()
