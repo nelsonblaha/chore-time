@@ -81,6 +81,7 @@ class App:
         s = self.s
         s.ha_get = lambda e, tok: self.states.get(e, {"state": "unavailable", "attributes": {}})
         s.ha_call = lambda svc, data, tok: self.calls.append((svc, data))
+        s.ha_fire_event = lambda event, data, tok: self.calls.append(("event." + event, data))
         s.ha_post_state = lambda *a, **k: None
         self.orig = {n: getattr(s, n) for n in ("notify_report", "notify_inspecting", "announce", "push_state_sensor") if hasattr(s, n)}
         for n in ("announce", "notify_report", "notify_inspecting", "notify_started", "send_adult_request",
@@ -251,6 +252,17 @@ class SharedVsExclusive(Case):
 
 
 class SoundSettings(Case):
+    def test_watch_buzz_gate_fails_quiet_until_ha_confirms_it(self):
+        self.s.ADULTS["jordan"]["buzz_gate"] = {"entity": "binary_sensor.jordan_left_bedroom_today",
+                                                    "states": ["on"]}
+        self.app.set("binary_sensor.jordan_left_bedroom_today", "unavailable")
+        self.assertFalse(self.s.adult_buzz_allowed("jordan", "test"))
+        self.app.set("binary_sensor.jordan_left_bedroom_today", "off")
+        self.assertFalse(self.s.adult_buzz_allowed("jordan", "test"))
+        self.app.set("binary_sensor.jordan_left_bedroom_today", "on")
+        self.assertTrue(self.s.adult_buzz_allowed("jordan", "test"))
+        self.assertTrue(self.s.adult_buzz_allowed("casey", "test"))
+
     def test_house_can_mute_every_kids_interface_sound_effect(self):
         s=self.s;s.HOUSE["sound_effects"] = False
         self.assertIs(self.app.state()["sound_effects"], False)
@@ -1751,6 +1763,28 @@ class TwoHouseholds(Case):
         self.assertEqual(self.app.post("/api/start", {"kid": "zoe", "chore": "mom_dishes"})[0], 200)
         self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "mom_dishes"})[0], 409)  # Ava is at Dad's
 
+    def test_login_on_a_known_hub_immediately_uses_that_hubs_house_and_room(self):
+        self.at("mom")
+        self.s.HUBS["family_hub"] = {"ip": "127.0.0.1", "room": "family_room", "household": "dad"}
+        config = json.loads((self.app.dir / "chores.json").read_text())
+        next(k for k in config["kids"] if k["id"] == "zoe")["pin_hash"] = self.s.make_kid_pin_hash("2468")
+        (self.app.dir / "chores.json").write_text(json.dumps(config))
+        code, reply = self.app.post("/api/kid_unlock", {"kid": "zoe", "pin": "2468"})
+        self.assertEqual((code, reply["state"]["kid_where"]["zoe"]), (200, "dad"))
+        evidence = self.s.GUARD["kid_display_where"]["zoe"]
+        self.assertEqual((evidence["household"], evidence["room"], evidence["display_id"], evidence["schema"]),
+                         ("dad", "family_room", "family_hub", 1))
+        self.assertEqual(evidence["source"], "verified_kid_pin")
+        self.assertGreater(evidence["valid_until"], evidence["observed_at"])
+        self.assertEqual(self.app.post("/api/start", {"kid": "zoe", "chore": "mom_dishes"})[0], 409)
+
+    def test_unknown_or_unlabelled_display_does_not_override_house_tracking(self):
+        self.at("mom")
+        self.s.HUBS["family_hub"] = {"ip": "127.0.0.1", "room": "family_room"}
+        code, reply = self.app.post("/api/kid_unlock", {"kid": "zoe"})
+        self.assertEqual((code, reply["state"]["kid_where"]["zoe"]), (200, "mom"))
+        self.assertNotIn("zoe", self.s.GUARD.get("kid_display_where", {}))
+
     def test_homework_counts_at_either_house_and_stars_are_one_balance(self):
         for house in ("mom", "dad"):
             self.at(house)
@@ -2957,6 +2991,8 @@ class WindDown(Case):
         c = base_config()
         c.update(routine_at="00:00", bedtime="23:59")
         a = App(c)
+        # This exercises the routine gate, not the independent overnight bedtime gate.
+        a.s.bedtime_state = lambda config, events: {"on": False, "since": 0, "by": None, "at": "23:59"}
         a.event(type="report", kid="ava", chore="shower", feeling="ok", points=2, ts=time.time() - 86400)
         self.assertTrue(a.state()["evening_routine"]["ava"]["due"])
         self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "other"})[0], 409)

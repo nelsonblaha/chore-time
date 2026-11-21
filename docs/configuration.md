@@ -122,11 +122,11 @@ Every section is optional. A missing section means that feature is off. `example
 | Section | Turns on |
 |---|---|
 | `home_assistant` | `url`, `token_file` (a long-lived token), plus entity names for the chore-time switch, the action relay and `sun`. `announce` = a TTS speaker for "five minutes left" |
-| `adults` | per grown-up: `presence` entity + `home_state`, and `notify` services. The first one with `notify` gets the watch pings |
+| `adults` | per grown-up: `presence` entity + `home_state`, `notify` phone services, optional `buzz_notify` watch services, and optional fail-quiet `buzz_gate: {entity, states}` (the watch is contacted only in an allowed state; phone/dashboard requests remain available). The first one with `notify` is the lead adult |
 | `quiet_hours` | `[{"weekdays": [5, 6], "until": "08:00"}]`: no pings before then |
-| `hours` | `chore_start`, `chore_end` (hours the TV guard and Hubs are active), `bed_end` |
+| `hours` | `chore_start`, `chore_end` (hours the TV guard and Hubs are active), `bed_end` (overnight bedtime boundary; default 5) |
 | `tvs` | per TV: `name`, `icon`, `ip`, `kind` (`sony`, `vizio` or other), `television`, `players`, `remote`. `finish_show: true` if its player reports playback position. `home_first` = a remote that must press Home before a cast (Vizio) |
-| `hubs` | per Hub: `ip`, `entity`, `from_h` (don't light it up before this hour, e.g. in a bedroom) |
+| `hubs` | per Hub: `ip`, `entity`, `room`, optional `household`, and `from_h` (don't light it up before this hour, e.g. in a bedroom). In a two-house family, a successful kid login on a household-labelled display immediately selects that house for 15 minutes and fires an expiring `chore_kid_display_presence` HA event with the kid, house, room and display id |
 | `launchers` | an HA `input_button` → `{ip, path}`: an on-demand "chore board" button |
 | `casting` | `catt` path, `hub_volume` |
 | `lights` | `chore_rooms`: job → `{modes: [input_select…], covers: [cover…]}`. `signal_bulbs`: room → `{bulbs, pick, pool, ref}` for the kid-colour bulbs |

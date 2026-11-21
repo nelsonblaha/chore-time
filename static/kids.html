@@ -882,7 +882,7 @@ function pinPad(who,title,sub,onDone,forgot){
   draw();
 }
 function kidPin(k){var who=S.config.kids.find(function(x){return x.id===k});pinPad(who,who.name+"'s PIN","",function(pin,fail){
-  busy=true;api("/api/kid_unlock",{kid:k,pin:pin}).then(function(r){busy=false;if(r.ok){L("kid_pin",{to:k,ok:true});closeModal();openKid(k,true)}else{L("kid_pin",{to:k,ok:false});fail(r.error)}}).catch(function(){busy=false;fail("Try again.")})
+  busy=true;api("/api/kid_unlock",{kid:k,pin:pin}).then(function(r){busy=false;if(r.ok){if(r.state)S=r.state;L("kid_pin",{to:k,ok:true});closeModal();openKid(k,true)}else{L("kid_pin",{to:k,ok:false});fail(r.error)}}).catch(function(){busy=false;fail("Try again.")})
 },function(){busy=true;api("/api/kid_pin_reset_request",{kid:k}).then(function(r){busy=false;modal('<div id="pinresetwait"><div class="big">'+E("1f64b")+E("1f9d1")+'</div><div class="q">Asking a grown-up for a reset</div><div class="q" style="font-size:23px;opacity:.8">Stay here. When they allow it, you can choose the new PIN.</div></div>');
     (function poll(){if(!$("pinresetwait"))return;setTimeout(function(){api("/api/adult_status",{nonce:r.nonce}).then(function(x){if(!$("pinresetwait"))return;if(x.status==="pending")return poll();if(x.state)S=x.state;if(x.status==="ok"){L("kid_pin_reset_ready",{to:k});changeKidPin(true,k)}else if(x.status==="timeout"){modal('<div class="big">'+E("23f3")+'</div><div class="q">No grown-up answered yet</div><div class="q" style="font-size:23px">You can ask again.</div>');addOk()}else{modal('<div class="big">'+E("1f6ab")+'</div><div class="q">The reset was not opened</div>');addOk()}}).catch(function(){if($("pinresetwait"))poll()})},1500)})()
   }).catch(function(){busy=false})})}
@@ -893,7 +893,7 @@ function changeKidPin(reset,target){target=target||kid;var who=S.config.kids.fin
   if(reset){chooseNew();return}
   pinPad(who,"Enter your current PIN","Then you can choose a new one",function(value,fail){busy=true;api("/api/kid_unlock",{kid:target,pin:value}).then(function(r){busy=false;if(!r.ok){fail(r.error);return}current=value;chooseNew()}).catch(function(){busy=false;fail("Try again.")})})
 }
-function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id===k});if(who&&who.pin_required&&!unlocked&&!HA_MODE){if((S.pin_reset_open||{})[k])changeKidPin(true,k);else kidPin(k);return}if(who&&who.pin_required)PIN_OK[k]=S.pin_epoch;L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id===k});if(who&&!who.pin_required&&!unlocked&&!HA_MODE){busy=true;api("/api/kid_unlock",{kid:k}).then(function(r){busy=false;if(r.state)S=r.state;openKid(k,true)}).catch(function(){busy=false});return}if(who&&who.pin_required&&!unlocked&&!HA_MODE){if((S.pin_reset_open||{})[k])changeKidPin(true,k);else kidPin(k);return}if(who&&who.pin_required)PIN_OK[k]=S.pin_epoch;L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
   var lastUse=(S.kid_open||{})[k]||0;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
   kidNews(k,function(){kidAnnounce(k,function(){if(kid!==k)return;if(kidNote(k))return;if(((S.chores_first||{})[k]||{}).on){cleanupModal();return}if(remindJob(k,lastUse))return;

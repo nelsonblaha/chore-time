@@ -1377,8 +1377,34 @@ def home_of(c):
 
 def kid_where(c, kid):
     """Which household a kid is at now: kids[].where = {"entity", "on": household, "off": household} (Home Assistant),
-    refreshed by watch_kid_where; without it, the default household."""
+    refreshed by watch_kid_where; a recent login on a household-labelled display is stronger evidence."""
+    seen = (((GUARD.get("kid_display_where") or {}).get(kid) or {}) if "GUARD" in globals() else {})
+    if float(seen.get("valid_until") or 0) > time.time() and seen.get("household") in {
+            h.get("id") for h in c.get("households") or []}:
+        return seen["household"]
     return ((GUARD.get("kid_where") or {}) if "GUARD" in globals() else {}).get(kid) or home_of(c)
+
+
+def record_kid_display_presence(c, kid, ip, verified=False, now=None):
+    """Use a known kid display as short-lived house/room evidence and give HA the same expiring observation."""
+    display = display_for_ip(ip)
+    household_ids = {h.get("id") for h in c.get("households") or []}
+    if not display or display.get("household") not in household_ids:
+        return None
+    now = time.time() if now is None else float(now)
+    ttl = max(30, min(3600, int((HOUSE.get("kid_display_presence") or {}).get("valid_seconds", 900))))
+    row = {"schema": 1, "kid": kid, "household": display["household"], "room": display.get("room"),
+           "display_id": display.get("id"), "display_kind": display.get("kind"),
+           "source": "verified_kid_pin" if verified else "kid_profile_open",
+           "observed_at": now, "valid_until": now + ttl}
+    GUARD.setdefault("kid_display_where", {})[kid] = row
+    ilog({"src": "kid_display_presence", "kid": kid, "ip": ip, "household": row["household"],
+          "room": row.get("room"), "display": row.get("display_id"), "verified": bool(verified),
+          "valid_until": row["valid_until"]})
+    threading.Thread(target=ha_fire_event,
+                     args=((HOUSE.get("kid_display_presence") or {}).get("event") or "chore_kid_display_presence",
+                           row, ha_token()), daemon=True).start()
+    return row
 
 
 def is_here(item, c, kid):
@@ -1410,7 +1436,7 @@ def watch_kid_where():
         time.sleep(30)
 
 
-BED_END_H = int((HOUSE.get("hours") or {}).get("bed_end", 6))   # bedtime holds until then; jobs held at bedtime resume
+BED_END_H = int((HOUSE.get("hours") or {}).get("bed_end", 5))   # bedtime holds until then; jobs held at bedtime resume
 
 
 def bedtime_hold(st):
@@ -1533,8 +1559,7 @@ def must_do_first_state(c, board, now=None, arrivals=None):
 
 
 def bedtime_state(c, evs):
-    """Bedtime: from c["bedtime"] (default 20:30) until 6 AM, or when a parent presses
-    Bedtime; a parent's latest press since 5 AM wins over the clock."""
+    """Bedtime: from c["bedtime"] (default 20:30) until configured BED_END_H, or when a parent presses it."""
     from datetime import datetime, timedelta
     now = datetime.now()
     day0 = (now if now.hour >= BED_END_H else now - timedelta(days=1)).replace(hour=BED_END_H, minute=0, second=0, microsecond=0)
@@ -2388,11 +2413,15 @@ def send_adult_request(nonce, who, where):
                                   "actions": actions}}, tok):
             accepted.append(svc)
     buzzed = []
-    for svc in ADULT_BUZZ_NOTIFY.get(who, []):
-        if ha_call(svc, {"title": title, "message": message + " Open the phone or parent Chores dashboard to answer.",
-                         "data": {"tag": "chore-adult-" + nonce + "-buzz", "priority": "high", "ttl": 0,
-                                  "channel": "Chore approvals", "importance": "high"}}, tok):
-            buzzed.append(svc)
+    if adult_buzz_allowed(who, tok):
+        for svc in ADULT_BUZZ_NOTIFY.get(who, []):
+            if ha_call(svc, {"title": title, "message": message + " Open the phone or parent Chores dashboard to answer.",
+                             "data": {"tag": "chore-adult-" + nonce + "-buzz", "priority": "high", "ttl": 0,
+                                      "channel": "Chore approvals", "importance": "high"}}, tok):
+                buzzed.append(svc)
+    elif ADULT_BUZZ_NOTIFY.get(who):
+        ilog({"src": "notify", "action": "watch_buzz_suppressed", "nonce": nonce,
+              "purpose": req.get("purpose"), "who": who})
     ilog({"src": "notify", "action": "adult_request_accepted_by_ha" if accepted else "adult_request_failed",
           "nonce": nonce, "purpose": req.get("purpose"), "to": accepted, "buzz": buzzed})
 
@@ -2410,6 +2439,16 @@ def parent_quiet():
 def adult_home(who, tok):
     a = ADULTS.get(who) or {}
     return bool(a.get("presence")) and ha_get(a["presence"], tok).get("state") == a.get("home_state", "home")
+
+
+def adult_buzz_allowed(who, tok):
+    """Optional HA gate for a direct watch buzz. Unknown/offline fails quiet; phone/dashboard paths remain available."""
+    gate = (ADULTS.get(who) or {}).get("buzz_gate") or {}
+    if not gate.get("entity"):
+        return True
+    state = str((ha_get(gate["entity"], tok) or {}).get("state") or "").lower()
+    allowed = {str(x).lower() for x in gate.get("states") or ["on"]}
+    return state in allowed
 
 
 def parent_available(tok):
@@ -3074,7 +3113,10 @@ class H(BaseHTTPRequestHandler):
             if not kid_:
                 return self.send(404, {"error": "unknown kid"})
             if not kid_.get("pin_hash"):
-                return self.send(200, {"ok": True})
+                evidence_ = record_kid_display_presence(c, kid_["id"], self.client_address[0], verified=False)
+                if evidence_:
+                    after_change()
+                return self.send(200, {"ok": True, "state": derive()})
             now_, ip_ = time.time(), self.client_address[0]
             attempts_ = [x for x in GUARD.setdefault("kid_pin_failures", {}).get(ip_, []) if now_ - x < 60]
             if len(attempts_) >= 5:
@@ -3085,7 +3127,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send(403, {"error": "That PIN did not match."})
             GUARD["kid_pin_failures"].pop(ip_, None)
             ilog({"src": "kid_pin", "kid": kid_["id"], "ip": ip_, "ok": True})
-            return self.send(200, {"ok": True})
+            evidence_ = record_kid_display_presence(c, kid_["id"], ip_, verified=True)
+            if evidence_:
+                after_change()
+            return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/kid_pin_reset_request":
             kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
             if not kid_:
@@ -4478,15 +4523,20 @@ def refresh_spotify_interruption(tok):
 
 
 def display_for_ip(ip):
+    def found(kind, display_id, cfg_):
+        row = {"kind": kind, "id": display_id, "room": cfg_.get("room") or display_id}
+        if cfg_.get("household"):
+            row["household"] = cfg_["household"]
+        return row
     for display_id, cfg_ in HUBS.items():
         if cfg_.get("ip") == ip:
-            return {"kind": "hub", "id": display_id, "room": cfg_.get("room") or display_id}
+            return found("hub", display_id, cfg_)
     for display_id, cfg_ in TVS.items():
         if cfg_.get("ip") == ip:
-            return {"kind": "tv", "id": display_id, "room": cfg_.get("room") or display_id}
+            return found("tv", display_id, cfg_)
     for display_id, cfg_ in (HOUSE.get("display_aliases") or {}).items():
         if cfg_.get("ip") == ip:
-            return {"kind": cfg_.get("kind") or "display", "id": display_id, "room": cfg_.get("room") or display_id}
+            return found(cfg_.get("kind") or "display", display_id, cfg_)
     return None
 
 
@@ -4503,6 +4553,21 @@ def ha_post_state(ent, state, attrs, tok):
     req = urllib.request.Request(f"{HA_URL}/api/states/{ent}", data=body,
                                  headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}, method="POST")
     urllib.request.urlopen(req, timeout=10).read()
+
+
+def ha_fire_event(event, data, tok):
+    """Publish a bounded observation for HA consumers; failure must never delay or reject the kid's login."""
+    if not HA_URL:
+        return None
+    req = urllib.request.Request(f"{HA_URL}/api/events/{event}", data=json.dumps(data).encode(),
+                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+                                 method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=10).read()
+        return True
+    except Exception as ex:  # noqa: BLE001
+        print("HA event failed", event, ex, flush=True)
+        return False
 
 
 def ha_call(svc, data, tok):
