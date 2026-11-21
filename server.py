@@ -3253,6 +3253,11 @@ class H(BaseHTTPRequestHandler):
             hub_ = next((h for h, x in (HOUSE.get("hubs") or {}).items() if x.get("ip") == self.client_address[0]), None)
             st["hub"], st["hub_motion"] = hub_, (GUARD.get("hub_motion") or {}).get(hub_)
             display_ = display_for_ip(self.client_address[0])
+            coin_cfg_ = HOUSE.get("coin_flip") or {}
+            coin_location_ = ha_get(coin_cfg_.get("location_entity"), ha_token()) \
+                if coin_cfg_.get("location_entity") and display_ and st.get("present_kids") else None
+            st["coin_flip"] = coin_flip_state(st["config"], st.get("present_kids"), display_, coin_location_,
+                                                 now=st.get("now"), settings=coin_cfg_)
             st["peer_pin_reset"] = peer_pin_reset_public(self.client_address[0])
             st["peer_pin_reset_capable"] = bool(peer_reset_display(self.client_address[0]))
             interrupt_ = active_spotify_interruption((display_ or {}).get("room"))
@@ -5147,6 +5152,58 @@ def display_for_ip(ip):
         if cfg_.get("ip") == ip:
             return found(cfg_.get("kind") or "display", display_id, cfg_)
     return None
+
+
+def coin_flip_state(c, present, display, location_state=None, now=None, settings=None):
+    """Choose the eligible pool for the login-screen coin flip.
+
+    Room filtering is all-or-nothing: only fresh evidence that unambiguously
+    locates every child currently home may narrow the pool to this display's
+    room. Uncertain evidence falls back to every child home.
+    """
+    settings = settings if settings is not None else (HOUSE.get("coin_flip") or {})
+    now = time.time() if now is None else float(now)
+    configured = [k["id"] for k in c.get("kids") or []]
+    home_set = set(present or [])
+    home = [k for k in configured if k in home_set]
+    out = {"kids": home, "scope": "home"}
+    if not home or not display or not display.get("room") or not settings:
+        return out
+    attrs = (location_state or {}).get("attributes") or {}
+    try:
+        observed = float(attrs.get("observed_at"))
+        valid_until = float(attrs.get("valid_until"))
+    except (TypeError, ValueError):
+        return out
+    max_age = max(5, min(600, int(settings.get("max_age_seconds") or 120)))
+    if observed > now + 5 or now - observed > max_age or valid_until <= now:
+        return out
+    aliases = {str(k): str(v) for k, v in (settings.get("room_aliases") or {}).items()}
+    canon = lambda room: aliases.get(str(room), str(room))
+    threshold = max(0.5, min(1.0, float(settings.get("min_probability") or 0.8)))
+    located = {}
+    people = attrs.get("people") if isinstance(attrs.get("people"), list) else []
+    for kid in home:
+        rows = [p for p in people if isinstance(p, dict) and p.get("person_key") == kid
+                and p.get("confirmed") is True and p.get("located") is True]
+        if len(rows) != 1:
+            return out
+        rooms = []
+        for room in rows[0].get("rooms") or []:
+            try:
+                if float(room.get("probability") or 0) >= threshold and float(room.get("valid_until") or 0) > now:
+                    rooms.append(canon(room.get("room")))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        rooms = list(dict.fromkeys(rooms))
+        if len(rooms) != 1:
+            return out
+        located[kid] = rooms[0]
+    display_room = canon(display["room"])
+    in_room = [kid for kid in home if located.get(kid) == display_room]
+    if in_room:
+        return {"kids": in_room, "scope": "room", "room": display["room"]}
+    return out
 
 
 def active_spotify_interruption(room):

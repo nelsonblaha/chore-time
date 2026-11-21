@@ -138,6 +138,33 @@ class App:
         return r["event"]
 
 
+class CoinFlipEligibilityTests(unittest.TestCase):
+    def test_room_pool_requires_fresh_unambiguous_locations_for_every_kid_home(self):
+        app = App()
+        self.addCleanup(app.close)
+        settings = {"max_age_seconds": 120, "min_probability": .8,
+                    "room_aliases": {"den_hub": "den"}}
+        now = 1000
+        display = {"kind": "hub", "id": "den", "room": "den_hub"}
+        tracked = {"attributes": {"observed_at": 990, "valid_until": 1060, "people": [
+            {"person_key": "ava", "confirmed": True, "located": True,
+             "rooms": [{"room": "den", "probability": 1, "valid_until": 1060}]},
+            {"person_key": "max", "confirmed": True, "located": True,
+             "rooms": [{"room": "kitchen", "probability": 1, "valid_until": 1060}]},
+        ]}}
+        room = app.s.coin_flip_state(base_config(), ["ava", "max"], display, tracked, now, settings)
+        self.assertEqual(room, {"kids": ["ava"], "scope": "room", "room": "den_hub"})
+
+        tracked["attributes"]["people"][1]["located"] = False
+        unknown = app.s.coin_flip_state(base_config(), ["ava", "max"], display, tracked, now, settings)
+        self.assertEqual(unknown, {"kids": ["ava", "max"], "scope": "home"})
+
+        tracked["attributes"]["people"][1]["located"] = True
+        tracked["attributes"]["observed_at"] = 800
+        stale = app.s.coin_flip_state(base_config(), ["ava", "max"], display, tracked, now, settings)
+        self.assertEqual(stale, {"kids": ["ava", "max"], "scope": "home"})
+
+
 class StaticUiRegressions(unittest.TestCase):
     """Small wiring checks for browser-only failures the fake DOM cannot click through."""
 
@@ -166,6 +193,13 @@ class StaticUiRegressions(unittest.TestCase):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Choose TV &amp; viewers", html)
         self.assertIn("Choose the TV and everyone who will watch. No points are spent yet.", html)
+
+    def test_login_coin_flip_is_separate_visual_spoken_celebration(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        self.assertIn('id="coinflip"', kids)
+        self.assertIn('"The winner is "+winner.name+"."', kids)
+        self.assertIn("SpeechSynthesisUtterance", kids)
+        self.assertIn("confetti(260);speakWinner", kids)
 
     def test_give_away_a_toy_is_an_earning_job_not_a_buy_button(self):
         html = (REPO / "static" / "kids.html").read_text()

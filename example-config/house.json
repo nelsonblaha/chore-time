@@ -13,6 +13,12 @@
       "speaker": "media_player.family_room_speaker"
     }
   },
+  "coin_flip": {
+    "location_entity": "sensor.occupant_tracks",
+    "max_age_seconds": 120,
+    "min_probability": 0.8,
+    "room_aliases": {}
+  },
   "mail_delivery": {
     "entity": "sensor.google_home_camera_front_porch",
     "chore": "mail",

@@ -250,11 +250,14 @@ canvas#fx{position:absolute;inset:0;pointer-events:none;z-index:30}
   .chores{grid-template-columns:repeat(3,1fr)}
 }
 html.locked #exit,html.locked #home,html.locked #bedadult,html.locked #adult{display:none!important}
+.coinflip{position:absolute;top:10px;right:12px;font-size:26px;font-weight:900;background:#fff8d6;border:3px solid #d9a300;border-radius:18px;padding:4px 14px;box-shadow:0 3px 0 rgba(0,0,0,.14);color:#604500;display:flex;align-items:center;gap:7px;cursor:pointer;z-index:4}
+.coinflip .e{height:31px;width:31px}
 </style></head>
 <body>
 <div id="bed" style="display:none;position:fixed;inset:0;z-index:60;background:radial-gradient(circle at 50% 30%,#1b2a5e,#070b1f);color:#fff;text-align:center;flex-direction:column;align-items:center;justify-content:center;gap:2vh"></div>
 <section id="pick" class="screen on">
   <div id="exit" style="position:absolute;top:10px;left:12px;font-size:26px;font-weight:900;background:#fff;border-radius:16px;padding:4px 16px;box-shadow:0 3px 0 rgba(0,0,0,.12);color:#555"><span class="eh" data-c="274c"></span> Exit</div>
+  <div id="coinflip" class="coinflip" aria-label="Flip a coin between the kids who are here"><span class="eh" data-c="1fa99"></span> Coin</div>
   <h1><span class="eh" data-c="2b50"></span> Who are you? <span class="eh" data-c="2b50"></span></h1>
   <div class="row" id="kids"></div>
 </section>
@@ -544,6 +547,17 @@ function render(){
 
 var MENU=false,DETAIL=null;
 function safeText(x){return String(x==null?"":x).replace(/[&<>\"]/g,function(ch){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]})}
+function coinKids(){var ids=(S&&S.coin_flip&&S.coin_flip.kids)||(S&&S.present_kids)||[];
+  return ids.map(function(id){return (S.config.kids||[]).find(function(k){return k.id===id})}).filter(Boolean)}
+function fairPick(xs){if(!xs.length)return null;try{var n=xs.length,lim=Math.floor(4294967296/n)*n,a=new Uint32Array(1),v;
+    do{crypto.getRandomValues(a);v=a[0]}while(v>=lim);return xs[v%n]}catch(e){return xs[Math.floor(Math.random()*xs.length)]}}
+function speakWinner(name){try{if(!window.speechSynthesis||!window.SpeechSynthesisUtterance)return;window.speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance("The winner is "+name+".");u.rate=.9;u.pitch=1;u.volume=1;window.speechSynthesis.speak(u)}catch(e){}}
+function flipCoin(){var choices=coinKids(),winner=fairPick(choices);if(!winner){
+    modal('<div class="big">'+E("1fa99")+'</div><div class="q">No kids are home to choose from right now.</div>');addOk();return}
+  var phrase="The winner is "+winner.name+".";L("coin_flip",{winner:winner.id,scope:(S.coin_flip||{}).scope||"home",eligible:choices.map(function(k){return k.id})});
+  modal('<div class="celebrate"><div class="big">'+E(winner.icon)+'</div><div class="q">'+safeText(phrase)+'</div></div><div class="faces"><div class="btn yes" id="coinagain" style="font-size:34px;font-weight:900;padding:10px 24px">'+E("1fa99")+' Flip again</div></div>');
+  confetti(260);speakWinner(winner.name);$("coinagain").onclick=flipCoin}
 function streakInfo(){openDetail("streak")}
 var CALWEEK=null;
 function calKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
@@ -1636,6 +1650,7 @@ function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.c
 function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
   L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;DETAIL=null;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");$("detail").classList.remove("on");$("packing").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
 $("home").onclick=goHome;
+$("coinflip").onclick=function(e){e.stopPropagation();flipCoin()};
 $("menubtn").onclick=function(e){e.stopPropagation();MENU=!MENU;L("menu",{open:MENU});renderKidMenu()};
 $("detback").onclick=closeDetail;
 $("paperclose").onclick=closePaper;
