@@ -2171,6 +2171,9 @@ def demo_attrs(attrs):
                 b.pop(k, None)
     if isinstance(d.get("chore_mode"), dict):
         d["chore_mode"]["home"] = []
+    for tv_ in ((d.get("tv") or {}).get("tvs") or {}).values():
+        if isinstance(tv_, dict):
+            tv_.pop("adult_presence", None)
     for k in ("dress", "chores_first"):
         if isinstance(d.get(k), dict):
             d[k].pop("items", None)
@@ -4615,6 +4618,52 @@ def tv_status(t, tok):
     return "stream", dur
 
 
+def tv_adult_presence(t, tok, now=None):
+    """Validate a short, room-local adult-viewing lease from the house camera controller.
+
+    Presence at home, motion, a stale face, or an identity from another room never
+    substitutes for this purpose-limited contract. The guard calls this every pass,
+    so expiry revokes the exemption even when Home Assistant sends no new event.
+    """
+    spec = t.get("adult_presence") or {}
+    entity, room = spec.get("entity"), spec.get("room")
+    privacy_away_field = spec.get("privacy_away_field")
+    people = set(spec.get("people") or [])
+    out = {"allowed": False, "reason": "not_configured"}
+    if not entity or not room or not people or not privacy_away_field:
+        return out
+    raw = ha_get(entity, tok) or {}
+    attrs = raw.get("attributes") or {}
+    if raw.get("state") != "present":
+        return {"allowed": False, "reason": "not_present"}
+    checks = (
+        (attrs.get("schema_version") == 1, "schema"),
+        (attrs.get("authority") == "chore_tv_only", "authority"),
+        (attrs.get("room") == room, "room"),
+        (attrs.get("person_key") in people, "person"),
+        (attrs.get("confidence") == "high", "confidence"),
+        (isinstance(attrs.get("kid_home"), list) and bool(attrs.get("kid_home")), "no_kid_home"),
+        (attrs.get(privacy_away_field) is True, "privacy_presence"),
+        (attrs.get("privacy_clear") is True, "privacy_hold"),
+        (attrs.get("continuous_occupancy") is True, "room_not_continuously_occupied"),
+    )
+    failed = next((reason for ok, reason in checks if not ok), None)
+    if failed:
+        return {"allowed": False, "reason": failed}
+    try:
+        continuous = float(attrs["continuous_since"])
+        face = float(attrs["face_at"])
+        observed = float(attrs["observed_at"])
+        valid = float(attrs["valid_until"])
+        current = time.time() if now is None else float(now)
+    except (KeyError, TypeError, ValueError):
+        return {"allowed": False, "reason": "bad_time"}
+    if not (continuous < face <= observed <= current < valid <= observed + 15.001):
+        return {"allowed": False, "reason": "stale_or_inconsistent"}
+    return {"allowed": True, "reason": "fresh_adult_in_room", "valid_until": valid,
+            "observed_at": observed}
+
+
 def tv_grants(evs, now=None):
     """Per TV: active unlocks [{id, until, kinds, kid, what, by, maxdur, ts}] after adult adjustments."""
     now = now or time.time()
@@ -4867,6 +4916,7 @@ def watch_tvs():
                     GUARD["status"][tid] = {"what": "music_block", "dur": 0, "at": time.time()}
                     continue   # HA paused Spotify; do not cast, lock, announce, or change volume over its explanation
                 what, dur = tv_status(t, tok)
+                adult_presence = tv_adult_presence(t, tok)
                 allowed = False
                 if dress_on:   # no TV time for anyone until they're dressed: straight to the clothes screen
                     unl = {}
@@ -4899,6 +4949,8 @@ def watch_tvs():
                         GUARD["grace"].pop(tid, None)
                     elif what in ("stream", "cast"):
                         allowed = True
+                if adult_presence["allowed"] and what in ("stream", "cast", "hdmi"):
+                    allowed = True
                 # finish the show: when the time runs out mid-episode on a TV that reliably reports
                 # position+length, keep it open to the end of THAT title (never past an hour into it); a new
                 # title (autoplay), pause, app switch or a parent's Lock now ends it. Unreliable TVs lock on the timer.
@@ -4933,11 +4985,13 @@ def watch_tvs():
                 if unl.get(tid):
                     GUARD.setdefault("last_grants", {})[tid] = unl[tid]
                 prev = GUARD["status"].get(tid, {})
-                if prev.get("what") != what or prev.get("allowed") != allowed:
-                    ilog({"src": "tv", "tv": tid, "what": what, "allowed": allowed, "app": app_of(t, tok)})
+                if prev.get("what") != what or prev.get("allowed") != allowed \
+                        or (prev.get("adult_presence") or {}).get("allowed") != adult_presence["allowed"]:
+                    ilog({"src": "tv", "tv": tid, "what": what, "allowed": allowed,
+                          "adult_present": adult_presence["allowed"], "app": app_of(t, tok)})
                 GUARD["status"][tid] = {"what": what, "allowed": allowed, "duration": dur,
                                         "grace_until": (GUARD["grace"].get(tid) or {}).get("until"),
-                                        "finish": fin.get(tid)}
+                                        "finish": fin.get(tid), "adult_presence": adult_presence}
                 if what not in ("stream", "hdmi", "cast") or allowed:
                     GUARD.setdefault("fails", {})[tid] = 0
                 prev_what = (GUARD.setdefault("prev", {})).get(tid)

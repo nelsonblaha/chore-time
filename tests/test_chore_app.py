@@ -673,6 +673,81 @@ class SonyInputs(Case):
         self.assertFalse(self.s.external_display_active(self.t,players,'x'))
 
 
+class AdultRoomPresence(Case):
+    """An adult face in this room may exempt this TV, but no looser household signal may."""
+
+    def setUp(self):
+        super().setUp()
+        self.t = self.s.TVS["livingroom"]
+        self.t["adult_presence"] = {
+            "entity": "sensor.living_room_adult_presence",
+            "room": "living_room",
+            "people": ["jordan"],
+            "privacy_away_field": "privacy_adult_away",
+        }
+        self.now = time.time()
+        self.attrs = {
+            "schema_version": 1,
+            "authority": "chore_tv_only",
+            "room": "living_room",
+            "person_key": "jordan",
+            "confidence": "high",
+            "kid_home": ["ava"],
+            "privacy_adult_away": True,
+            "privacy_clear": True,
+            "continuous_occupancy": True,
+            "continuous_since": self.now - 120,
+            "face_at": self.now - 30,
+            "observed_at": self.now - 1,
+            "valid_until": self.now + 14,
+        }
+
+    def result(self, state="present", **patch):
+        self.app.set("sensor.living_room_adult_presence", state, **{**self.attrs, **patch})
+        return self.s.tv_adult_presence(self.t, "x", self.now)
+
+    def test_fresh_purpose_limited_room_identity_allows_the_tv(self):
+        self.assertTrue(self.result()["allowed"])
+
+    def test_absent_unknown_and_offline_never_allow(self):
+        for state in ("absent", "unknown", "unavailable"):
+            with self.subTest(state=state):
+                self.assertFalse(self.result(state)["allowed"])
+
+    def test_every_identity_and_privacy_field_is_fail_closed(self):
+        bad = {
+            "schema_version": 2,
+            "authority": "general_presence",
+            "room": "kitchen",
+            "person_key": "casey",
+            "confidence": "medium",
+            "kid_home": [],
+            "privacy_adult_away": False,
+            "privacy_clear": False,
+            "continuous_occupancy": False,
+        }
+        for field, value in bad.items():
+            with self.subTest(field=field):
+                self.assertFalse(self.result(**{field: value})["allowed"])
+
+    def test_stale_future_and_inconsistent_times_never_allow(self):
+        bad = [
+            {"continuous_since": self.attrs["face_at"]},
+            {"face_at": self.attrs["observed_at"] + 1},
+            {"observed_at": self.now + 1},
+            {"valid_until": self.now},
+            {"valid_until": self.attrs["observed_at"] + 15.1},
+        ]
+        for patch in bad:
+            with self.subTest(patch=patch):
+                self.assertFalse(self.result(**patch)["allowed"])
+
+    def test_public_demo_does_not_publish_room_adult_presence(self):
+        self.s.GUARD["status"]["livingroom"] = {"adult_presence": self.result()}
+        demo = self.s.demo_attrs(self.s.derive())
+        self.assertNotIn("adult_presence", demo["tv"]["tvs"]["livingroom"])
+
+
 class FinishTheShow(Case):
     def test_netflix_reports_no_end_so_no_finishing(self):
         t = self.s.TVS["livingroom"]
