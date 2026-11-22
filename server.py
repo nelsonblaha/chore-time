@@ -4042,8 +4042,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "Packing is not open for this packer."})
             is_child_ = packer_ in (profile_.get("kids") or [])
             ha_child_ = is_child_ and allowed_kids is not None and packer_ in allowed_kids
+            adult_child_ = is_child_ and verified_ha_adult(self.headers, b.get("by"))
             adult_ = not is_child_ and verified_ha_adult(self.headers, b.get("by")) and b.get("by") == packer_
-            if not adult_ and not ha_child_ and not valid_kid_session(b.get("kid_session"), packer_, display_ip_):
+            if not adult_ and not adult_child_ and not ha_child_ \
+                    and not valid_kid_session(b.get("kid_session"), packer_, display_ip_):
                 return self.send(403, {"error": "Open your profile with your PIN first." if is_child_
                                                    else "Use the signed-in grown-up Chore dashboard."})
             clean_ = sanitize_packing_progress(game_, packer_, b.get("progress") or {})

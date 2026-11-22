@@ -392,6 +392,8 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         packing = (REPO / "static" / "packing.html").read_text()
         self.assertIn("Family packing", packing)
         self.assertIn('api("/api/packing_admin"', packing)
+        self.assertIn('data-present="', packing)
+        self.assertIn('data-missing="', packing)
 
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -544,6 +546,24 @@ class PackingRewardGateTests(unittest.TestCase):
         }))
         progress = self.app.state()["packing_game"]["progress"]["ava"]
         self.assertEqual(progress["interacted_at"], 123)
+
+    def test_authenticated_parent_can_mark_a_child_item_present_or_missing(self):
+        a = self.app
+        a.s.HA["user_adults"] = {"jordan-ha": "jordan"}
+        body = {"packer": "ava", "by": "jordan",
+                "progress": self.stage(["shirt", "hair"], "inspect", 20)}
+        self.assertEqual(a.post("/api/packing_update", body)[0], 403)
+        code, present = a.post("/api/packing_update", body, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, present)
+        self.assertEqual(present["state"]["packing_game"]["progress"]["ava"]["phase"], "inspect")
+        missing = self.stage(["shirt", "hair"], "layout", 21)
+        missing["ready"].pop("hair")
+        missing["checked"] = {"shirt": "pass", "hair": "fix"}
+        code, handed_back = a.post("/api/packing_update", {"packer": "ava", "by": "jordan",
+                                                           "progress": missing},
+                                          {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, handed_back)
+        self.assertEqual(handed_back["state"]["packing_game"]["progress"]["ava"]["checked"]["hair"], "fix")
 
     def test_private_packing_editor_preserves_version_and_saved_progress(self):
         a = self.app
