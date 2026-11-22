@@ -223,6 +223,13 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Your movie is paused.", locked)
         self.assertIn("You’ll get the rest of your movie time later.", locked)
 
+    def test_parent_chore_page_has_independent_spotify_volume_cap_slider(self):
+        grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn('id="spotifycap" min="0" max="100" step="1"', grown)
+        self.assertIn("Maximum Spotify volume", grown)
+        self.assertIn("mandatory-chores switch above remains independent", grown)
+        self.assertIn('post("/api/spotify_volume_cap",{cap:cap}', grown)
+
     def test_paused_reward_lock_page_never_borrows_another_rooms_reward(self):
         locked = (REPO / "static" / "tvlock.html").read_text()
         helper = re.search(r"function rewardPauseFor\(S,search\)\{.*?\n\}", locked, re.S)
@@ -3255,6 +3262,49 @@ class ChoresFirst(Case):
                                                "items": ["Dishes"]}])
         self.assertEqual(a.post("/api/music_block", {"on": False, "by": "jordan"})[0], 200)
         self.assertFalse(a.state()["music_block"]["effective"])
+
+    def test_spotify_volume_cap_is_parent_verified_durable_and_published_in_manifest(self):
+        a = App(base_config())
+        self.assertEqual(a.state()["spotify_volume_cap"], 100)
+        self.assertEqual(a.post("/api/spotify_volume_cap", {"cap": 37, "by": "jordan"})[0], 403)
+        self.assertEqual(a.post("/api/spotify_volume_cap", {"cap": 37, "by": "casey"},
+                                {"X-HA-User": "home-assistant-user-id"})[0], 403)
+        for bad in (-1, 101, 37.5, "37", True):
+            self.assertEqual(a.post("/api/spotify_volume_cap", {"cap": bad, "by": "jordan"},
+                                    {"X-HA-User": "home-assistant-user-id"})[0], 400)
+        changed = []
+        a.s.after_change = lambda: changed.append(a.s.derive()["spotify_volume_cap"])
+        code, saved = a.post("/api/spotify_volume_cap", {"cap": 37, "by": "jordan"},
+                             {"X-HA-User": "home-assistant-user-id"})
+        self.assertEqual(code, 200, saved)
+        self.assertEqual((saved["state"]["spotify_volume_cap"], changed), (37, [37]))
+
+        # A fresh interpreter reads the append-only ledger, rather than relying on process memory.
+        restarted = subprocess.run(
+            [sys.executable, "-c", "import server; print(server.derive()['spotify_volume_cap'])"],
+            cwd=REPO, env={**os.environ, "CHORE_DATA": str(a.dir), "PYTHONPATH": str(REPO)},
+            text=True, capture_output=True)
+        self.assertEqual(restarted.returncode, 0, restarted.stderr)
+        self.assertEqual(restarted.stdout.strip().splitlines()[-1], "37")
+
+        sent, old_post = [], a.s.ha_post_state
+        a.s.ha_post_state = lambda entity, value, attrs, tok: sent.append(
+            {"entity": entity, "state": value, "attributes": attrs})
+        try:
+            a.s.GUARD.pop("state_sig", None)
+            a.orig["push_state_sensor"](saved["state"])
+        finally:
+            a.s.ha_post_state = old_post
+        manifest = next(x["attributes"] for x in reversed(sent) if x["entity"] == "sensor.chore_state")
+        self.assertEqual(manifest["spotify_volume_cap"], 37)
+        self.assertEqual(manifest["music_block"], saved["state"]["music_block"])
+        self.assertAlmostEqual(manifest["now"], saved["state"]["now"], delta=.01)
+        parts = sorted((x["attributes"] for x in sent if x["attributes"].get("revision") == manifest["revision"]
+                        and "payload" in x["attributes"]), key=lambda x: x["part"])
+        full = json.loads("".join(x["payload"] for x in parts))
+        self.assertEqual(full["spotify_volume_cap"], 37)
+        self.assertEqual(full["music_block"], saved["state"]["music_block"])
+        a.close()
 
     def test_spotify_block_includes_scheduled_mandatory_jobs(self):
         state = self.s.music_block_state(

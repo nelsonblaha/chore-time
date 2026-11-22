@@ -1147,6 +1147,15 @@ def music_block_state(evs, chores_first, must_first, present=None, reports=None,
             "blockers": blockers}
 
 
+def spotify_volume_cap_state(evs):
+    """Latest grown-up Spotify cap; old households have unrestricted volume until one is saved."""
+    cap = 100
+    for e in evs:
+        if e.get("type") == "spotify_volume_cap" and type(e.get("cap")) is int and 0 <= e["cap"] <= 100:
+            cap = e["cap"]
+    return cap
+
+
 def kid_notes(evs):
     """grown-ups' one-time messages to a kid ("we gave your stars back"): unseen ones, shown when they open their screen"""
     seen = {e["ref"] for e in evs if e["type"] == "kid_note_seen"}
@@ -2368,6 +2377,7 @@ def derive():
             "papers": papers, "paper_scan_ready": bool((HOUSE.get("paper_scanner") or {}).get("ready")),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
+            "spotify_volume_cap": spotify_volume_cap_state(evs),
             "reward_block": reward_block_state(),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
@@ -2562,6 +2572,7 @@ def push_state_sensor(state=None, last_result=None):
              "present_kids": state.get("present_kids"),
              "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
              "music_block": state.get("music_block"),
+             "spotify_volume_cap": state.get("spotify_volume_cap", 100),
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"), "papers": state.get("papers"),
              "paper_scan_ready": state.get("paper_scan_ready"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
@@ -2598,7 +2609,9 @@ def push_state_sensor(state=None, last_result=None):
             print("demo state push failed", ex, flush=True)
     try:
         publish_chunked_state("sensor.chore_state", attrs, tok, "state_sig",
-                              {"version": attrs.get("version"), "last_result": attrs.get("last_result")})
+                              {"version": attrs.get("version"), "last_result": attrs.get("last_result"),
+                               "now": state.get("now"), "music_block": attrs.get("music_block"),
+                               "spotify_volume_cap": attrs.get("spotify_volume_cap", 100)})
     except Exception as ex:  # noqa: BLE001
         print("HA state push failed", ex, flush=True)
 
@@ -4982,6 +4995,13 @@ class H(BaseHTTPRequestHandler):
             if b.get("by") not in insp:
                 return self.send(400, {"error": "grown-ups only"})
             ev = append({"type": "music_block", "on": bool(b.get("on")), "by": b["by"]})
+        elif p == "/api/spotify_volume_cap":   # HA owns enforcement; only its signed-in grown-up relay may save it
+            if not verified_ha_adult(self.headers, b.get("by")):
+                return self.send(403, {"error": "Use the signed-in grown-up Chore dashboard."})
+            cap_ = b.get("cap")
+            if type(cap_) is not int or not 0 <= cap_ <= 100:
+                return self.send(400, {"error": "Spotify volume must be a whole number from 0 to 100."})
+            ev = append({"type": "spotify_volume_cap", "cap": cap_, "by": b["by"]})
         elif p == "/api/space_tidy":
             space = next((x for x in HOUSE.get("tidy_spaces", []) if x["id"] == b.get("space")), None)
             if b.get("by") not in insp or space is None or type(b.get("tidy")) is not bool:
