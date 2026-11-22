@@ -249,6 +249,14 @@ class ReplayManifestTest(unittest.TestCase):
         self.assertFalse(broken["ledger"]["tail_complete"])
         self.assertFalse(broken["ledger"]["json_valid"])
 
+    def test_manifest_accepts_current_dynamic_authoritative_state(self):
+        for name in ("packing_progress.json", "envelope_grocy_sync.json", "ha-token"):
+            (self.tmp / name).write_text("fixture\n")
+        current = self.manifest()
+        self.assertTrue(current["ok"])
+        for name in ("packing_progress.json", "envelope_grocy_sync.json", "ha-token"):
+            self.assertEqual(current["files"][name]["class"], "authoritative_optional")
+
 
 if __name__ == "__main__":
     unittest.main()

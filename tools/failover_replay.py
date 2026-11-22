@@ -24,9 +24,10 @@ LEDGER_SCHEMA = "chore-ledger-jsonl-v1"
 REQUIRED = {"chores.json", "house.json", "ledger.jsonl"}
 AUTHORITATIVE_OPTIONAL = {
     "adult_requests.json", "chore_override.json", "chore_pause.json", "chore_time_until.json",
-    "envelope-load.jpg", "envelopes_printed.json", "grocy_sync.json", "home_arrivals.json",
+    "envelope-load.jpg", "envelope_grocy_sync.json", "envelopes_printed.json", "grocy_sync.json",
+    "ha-token", "home_arrivals.json",
     "home_days.json", "house_tasks.json", "hub_placement.json", "packing_game.json",
-    "paper_scans.json", "peer_pin_resets.json", "photos/robot_sensors.jpg",
+    "packing_progress.json", "paper_scans.json", "peer_pin_resets.json", "photos/robot_sensors.jpg",
     "robot-camera-sun_room.json", "robot-location-training.jsonl", "robot_map.json",
     "room-eye-capture.token", "room_eye/state.json", "signal_bulbs.json",
     "sun-room-robot-floor.npz", "vacuum-button.token", "vacuum_auto.json",
