@@ -1924,6 +1924,19 @@ def inspection_seen_snapshots(kid, now=None):
     return out
 
 
+def inspection_watermarks(kid, now=None):
+    """Compact, stable preview contract consumed by the HA read-only wrapper."""
+    rows = inspection_seen_snapshots(kid, now)
+    return {
+        "default_display": rows[0]["display_id"] if rows else None,
+        "displays": [{"id": row["display_id"], "label": row["room"],
+                      # A real stored zero must survive; missing/absent is deliberately null.
+                      "seen": row["value"] if row["observed"] and row["present"] else None,
+                      "observed_at": row["observed_at"], "age": row["age_s"]}
+                     for row in rows],
+    }
+
+
 def save_inspection_seen_snapshot(ip, payload, now=None):
     """Copy, but never alter, local inspection pointers from a configured physical Hub."""
     display = next(((display_id, config) for display_id, config in (HOUSE.get("hubs") or {}).items()
@@ -1962,10 +1975,19 @@ def kid_preview_state(kid):
     if kid not in {row["id"] for row in state["config"]["kids"]}:
         return None
     add_seen_projection(state, "kid:" + kid, "ann:kid:" + kid)
+    snapshots = inspection_seen_snapshots(kid)
     state.update({
         "preview": {"kid": kid, "read_only": True, "skip_pin": True,
                     "canonical_state": True, "mutation_transport": None,
-                    "inspection_seen_displays": inspection_seen_snapshots(kid)},
+                    "inspection_watermarks": {
+                        "default_display": snapshots[0]["display_id"] if snapshots else None,
+                        "displays": [{"id": row["display_id"], "label": row["room"],
+                                      "seen": row["value"] if row["observed"] and row["present"] else None,
+                                      "observed_at": row["observed_at"], "age": row["age_s"]}
+                                     for row in snapshots],
+                    },
+                    # Kept for one release so an older wrapper can still consume the richer rows.
+                    "inspection_seen_displays": snapshots},
         "hub": None, "hub_motion": None, "display": None, "music_interruption": None,
         "coin_flip": None, "peer_pin_reset": None, "peer_pin_reset_capable": False,
         "pin_reset_open": {},

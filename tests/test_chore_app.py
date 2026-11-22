@@ -518,6 +518,7 @@ class KidPreviewProjectionTests(Case):
         self.assertEqual(reply, {"ok": True, "kid": "ava", "read_only": True, "state": state})
         self.assertEqual(state["preview"], {"kid": "ava", "read_only": True, "skip_pin": True,
                                              "canonical_state": True, "mutation_transport": None,
+                                             "inspection_watermarks": self.s.inspection_watermarks("ava"),
                                              "inspection_seen_displays": self.s.inspection_seen_snapshots("ava")})
         self.assertTrue(state["news_unseen"])
         self.assertEqual(state["news_seen_kids"]["ava"], "older-news")
@@ -561,6 +562,14 @@ class KidPreviewProjectionTests(Case):
         self.assertIsNotNone(snapshots[0]["age_s"])
         max_snap = self.preview("max")[1]["state"]["preview"]["inspection_seen_displays"][0]
         self.assertEqual((max_snap["observed"], max_snap["present"], max_snap["value"]), (True, False, None))
+        watermarks = self.preview()[1]["state"]["preview"]["inspection_watermarks"]
+        self.assertEqual(watermarks["default_display"], "test_hub")
+        self.assertEqual({k: watermarks["displays"][0][k] for k in ("id", "label", "seen")},
+                         {"id": "test_hub", "label": "Play room", "seen": 0.0})
+        self.assertIsNotNone(watermarks["displays"][0]["observed_at"])
+        self.assertIsNotNone(watermarks["displays"][0]["age"])
+        missing = self.preview("max")[1]["state"]["preview"]["inspection_watermarks"]["displays"][0]
+        self.assertIsNone(missing["seen"])
         self.assertNotIn("inspection_seen_displays", self.app.state())
         self.assertEqual(self.app.post_from("127.0.0.3", "/api/inspection_seen_snapshot",
                                             {"kids": {"ava": {"present": True, "value": 99}}})[0], 403)
