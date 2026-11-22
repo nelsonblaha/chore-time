@@ -271,9 +271,18 @@ def packing_milestones_reached(game, packer, progress):
     return reached
 
 
+def active_packing_award_events(game):
+    """Packing awards still active after append-only undo events, keyed by event id."""
+    events = read_events()
+    undone = {e.get("ref") for e in events if e.get("type") == "undo"}
+    return {e["id"]: e for e in events if e.get("type") == "adjust" and e.get("id") not in undone
+            and e.get("packing_version") == game.get("version")}
+
+
 def packing_progress(game):
     saved = load_private_json(PACKING_PROGRESS_FILE, {})
     rows = saved.get("kids") or {} if saved.get("version") == game.get("version") else {}
+    active_awards = active_packing_award_events(game)
     out = {}
     for profile in game.get("profiles") or []:
         for packer in packing_packer_ids(profile):
@@ -286,7 +295,7 @@ def packing_progress(game):
                 plan = packing_award_plan(profile)
                 award_refs = saved_row.get("awards") if isinstance(saved_row.get("awards"), dict) else {}
                 clean["awards"] = {stage: plan[stage] for stage in PACKING_AWARD_STAGES
-                                   if award_refs.get(stage) and plan[stage]}
+                                   if award_refs.get(stage) in active_awards and plan[stage]}
                 clean["awarded_points"] = sum(clean["awards"].values())
                 clean["award_total"] = sum(plan.values())
                 clean["complete_prize"] = plan.get("complete", 0)
@@ -424,6 +433,18 @@ def packing_chore_gate(state, kid, chore_id):
     return {"kid": kid, "name": name,
             "message": "Pack for the train first! You can still do mandatory jobs, get dressed, and brush your teeth.",
             "allowed_chores": sorted(x for x in allowed if x)}
+
+
+def kid_workflow_open(state):
+    """A child is actively using the chore flow, so a dismissed Hub should return promptly."""
+    if state.get("active"):
+        return True
+    game = state.get("packing_game") or {}
+    if not game.get("activated"):
+        return False
+    progress = game.get("progress") or {}
+    return any(not (progress.get(kid) or {}).get("complete")
+               for profile in (game.get("profiles") or []) for kid in (profile.get("kids") or []))
 
 
 def save_peer_pin_resets():
@@ -3321,7 +3342,7 @@ def send_adult_request(nonce, who, where):
     buzzed = []
     for svc in ADULT_BUZZ_NOTIFY.get(who, []):
         # A forgotten-PIN request is an attended child safety/recovery action, not an ordinary chore nudge.
-        # Ben explicitly expects it on the watch even while the daily routine buzz gate is quiet.
+        # Forgotten-PIN recovery must reach the configured watch even while the daily routine buzz gate is quiet.
         if req.get("purpose") == "pin_reset" or adult_buzz_allowed(who, tok):
             if ha_call(svc, {"title": title, "message": message + " Open the phone or parent Chores dashboard to answer.",
                              "data": {"tag": "chore-adult-" + nonce + "-buzz", "priority": "high", "ttl": 0,
@@ -4065,6 +4086,12 @@ class H(BaseHTTPRequestHandler):
                 if saved_.get("version") != game_.get("version"):
                     saved_ = {"version": game_.get("version"), "kids": {}}
                 old_ = (saved_.get("kids") or {}).get(packer_) or {}
+                if is_child_ and not adult_child_ and (
+                        clean_.get("checked") != (old_.get("checked") or {})
+                        or clean_.get("finals") != (old_.get("finals") or {})
+                        or (old_.get("phase") == "inspect" and clean_.get("phase") == "pack")
+                        or clean_.get("phase") == "complete"):
+                    return self.send(403, {"error": "Grown-up inspection happens in the parent Chores page."})
                 incoming_is_newer_ = int(old_.get("seq") or 0) <= int(clean_.get("seq") or 0)
                 if int(old_.get("seq") or 0) > int(clean_.get("seq") or 0):
                     clean_ = old_   # a slower response from an earlier tap cannot rewind the packing flow
@@ -4076,10 +4103,11 @@ class H(BaseHTTPRequestHandler):
                 clean_["started_at"] = old_.get("started_at") or now_
                 clean_["updated_at"] = now_ if incoming_is_newer_ else old_.get("updated_at") or now_
                 clean_["interacted_at"] = now_ if interacted_ else old_.get("interacted_at")
-                events_ = [e for e in read_events() if e.get("type") == "adjust"
-                           and e.get("packing_version") == game_.get("version") and e.get("kid") == packer_]
+                events_ = [e for e in active_packing_award_events(game_).values() if e.get("kid") == packer_]
                 legacy_awarded_ = bool(old_.get("awarded")) or any(not e.get("packing_milestone") for e in events_)
-                award_refs_ = dict(old_.get("awards") or {}) if isinstance(old_.get("awards"), dict) else {}
+                active_ids_ = {e["id"] for e in events_}
+                award_refs_ = {stage_: ref_ for stage_, ref_ in (old_.get("awards") or {}).items()
+                               if ref_ in active_ids_} if isinstance(old_.get("awards"), dict) else {}
                 for event_ in events_:
                     if event_.get("packing_milestone") in PACKING_AWARD_STAGES:
                         award_refs_[event_["packing_milestone"]] = event_["id"]
@@ -4655,6 +4683,11 @@ class H(BaseHTTPRequestHandler):
             kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
             if not kid_:
                 return self.send(404, {"error": "That profile does not have a PIN."})
+            approved_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset"
+                              and r.get("kid") == kid_["id"] and r.get("status") == "ok" and not r.get("used")
+                              and float(r.get("until") or 0) > time.time()), None)
+            if approved_:
+                return self.send(200, {"ok": True, "nonce": approved_, "state": derive()})
             old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset"
                          and r.get("kid") == kid_["id"] and r.get("status") == "pending"
                          and time.time() - r["ts"] < ADULT_REQUEST_TTL_S), None)
@@ -4690,7 +4723,10 @@ class H(BaseHTTPRequestHandler):
                 target_["pin_hash"] = new_hash_
                 save_cfg(c_)
             if reset_:
-                reset_["used"] = True
+                for row_ in ADULT_REQ.values():
+                    if row_.get("purpose") == "pin_reset" and row_.get("kid") == kid_["id"] \
+                            and row_.get("status") == "ok":
+                        row_["used"] = True
                 save_adult_requests()
             ilog({"src": "kid_pin", "kid": kid_["id"], "ip": display_ip_,
                   "action": "changed_after_reset" if reset_ else "changed"})
@@ -6077,7 +6113,10 @@ def keep_hubs_on_chores(tok):
             continue   # just exited and nothing has played yet
         hc = GUARD.setdefault("hub_casts", {}).setdefault(hid, [])
         hc[:] = [t for t in hc if now - t < 600]
-        gap = 300 if len(hc) >= 3 and not hub_showing_chores(h["ip"]) else 60   # back off if casts aren't sticking
+        # During an active job or packing trip, recover an accidentally dismissed screen after one missed
+        # polling window. The explicit Exit grace and real music/playback holds above still take priority.
+        gap = 15 if GUARD.get("kid_workflow_open") else \
+            (300 if len(hc) >= 3 and not hub_showing_chores(h["ip"]) else 60)
         if not hub_showing_chores(h["ip"]) and (not hc or now - hc[-1] > gap) and \
                 now - GUARD.setdefault("launch_ts", {}).get(h["ip"], 0) > 15:   # a launcher cast is already loading
             hc.append(now)
@@ -6793,6 +6832,7 @@ def watch_tvs():
                 (datetime.combine(n_.date() + (timedelta(days=1) if n_.hour >= AUTO_END_H else timedelta()), datetime.min.time()).replace(hour=AUTO_START_H))
             # chill: lots done recently -> stop nagging (no persistent chore screens), locks still apply
             st_ = derive()
+            GUARD["kid_workflow_open"] = kid_workflow_open(st_)
             recent = [r for r in st_["history"] if r.get("type") == "report" and r.get("status") == "inspected" and not r.get("partial")
                       and (r.get("inspected_ts") or 0) > time.time() - 3 * 3600]
             chill = len(recent) >= CHILL_JOBS or sum(int(r.get("awarded") or 0) for r in recent) >= CHILL_POINTS
