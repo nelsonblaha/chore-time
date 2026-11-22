@@ -1807,7 +1807,7 @@ def derive():
     refundable = {k["id"]: [] for k in c["kids"]}
     for e in raw_evs:
         if e["type"] == "spend" and e["id"] not in undone and not e.get("with_buyer") \
-                and e.get("by") != "share_join" and time.time() - e["ts"] <= 120:
+                and e.get("by") not in ("share_join", "share_resume") and time.time() - e["ts"] <= 120:
             refundable.setdefault(e["kid"], []).append({k: e.get(k) for k in ("id", "ts", "reward", "reward_name", "reward_icon", "cost", "tv", "group")})
     evs = [e for e in raw_evs if e["id"] not in undone]
     chores = {x["id"]: x for x in c["chores"]}
@@ -3515,6 +3515,107 @@ class H(BaseHTTPRequestHandler):
                       "position_restore_requested": bool(saved_.get("playback"))})
                 return self.send(200, {"ok": True, "event": ev_, "remaining_s": remaining_,
                                        "position_restore_requested": bool(saved_.get("playback")), "state": derive()})
+        if p == "/api/tv/reward_resume_child":
+            session_, tv_, kid_ = str(b.get("session_id") or ""), str(b.get("tv") or ""), b.get("kid")
+            if not session_ or tv_ not in TVS or kid_ not in kids:
+                return self.send(400, {"error": "unknown saved movie / TV"})
+            with TV_REWARD_LOCK:
+                raw_ = read_events()
+                saved_ = next((x for x in saved_tv_rewards(raw_)
+                               if x["session_id"] == session_ and x["tv"] == tv_), None)
+                if not saved_:
+                    live_ = [x for x in tv_grants(raw_).get(tv_, [])
+                             if (x.get("group") or x["id"]) == session_]
+                    if live_ and any(x.get("kid") == kid_ for x in live_):
+                        return self.send(200, {"ok": True, "already": True, "state": derive()})
+                    return self.send(409, {"error": "That saved movie is no longer waiting."})
+                current_ = list(saved_.get("kids") or [])
+                if kid_ not in current_:
+                    return self.send(403, {"error": "That saved movie belongs to someone else."})
+                joiners_ = [x for x in dict.fromkeys(b.get("with") or []) if x in kids and x not in current_]
+                participants_ = current_ + joiners_
+                if joiners_:
+                    if not valid_shared_reward_sessions(b, participants_, self.client_address[0]):
+                        return self.send(403, {"error": "Everyone sharing must enter their own PIN."})
+                elif not valid_kid_session(b.get("kid_session"), kid_, self.client_address[0]):
+                    return self.send(403, {"error": "Open your profile with your PIN first."})
+
+                reward_ = rewards.get(saved_["reward"])
+                fresh_ = derive()
+                if not reward_ or saved_["reward"] not in ("show", "movie", "games"):
+                    return self.send(409, {"error": "That saved reward cannot be started here."})
+                if fresh_["bedtime"]["on"] or reward_closed(reward_):
+                    return self.send(409, {"error": "Movie time is not open now. Your saved time is safe."})
+                blocked_ = reward_block_state(fresh=True)
+                if blocked_["on"]:
+                    return self.send(409, {"error": blocked_["items"][0]["message"]})
+                if any(not is_here(reward_, c, who_) for who_ in participants_):
+                    return self.send(409, {"error": "Everyone sharing must be at this house."})
+                if fresh_.get("present_kids") and any(who_ not in fresh_["present_kids"] for who_ in participants_):
+                    return self.send(409, {"error": "Everyone sharing must be home."})
+                for who_ in participants_:
+                    if (fresh_.get("dress") or {}).get("on") \
+                            and (fresh_["dress"]["kids"].get(who_) or "ready") != "ready":
+                        return self.send(409, {"error": "Put on your clothes first!"})
+                    gate_ = ((fresh_.get("must_do_first") or {}).get(who_) or {})
+                    if gate_.get("rewards"):
+                        return self.send(409, {"error": (gate_.get("name") or "Mandatory chore") +
+                                                       " must be done first. Your saved time is safe."})
+                    if ((fresh_.get("chores_first") or {}).get(who_) or {}).get("on"):
+                        return self.send(409, {"error": "Finish the chores-first job before movie time. Your saved time is safe."})
+                for who_ in joiners_:
+                    ready_ = (fresh_.get("reward_ready") or {}).get(who_, {}).get(saved_["reward"], 0)
+                    if ready_ > time.time():
+                        return self.send(409, {"error": "The kid joining needs a screen break first.",
+                                               "ready_at": ready_})
+                competing_ = [x for x in tv_grants(raw_).get(tv_, [])
+                              if (x.get("group") or x["id"]) != session_ and x.get("what") != "vr"]
+                if competing_:
+                    return self.send(409, {"error": "Another reward is using this TV. Your saved time is safe."})
+
+                refunds_, cost_each_ = {}, None
+                if joiners_:
+                    undone_ = {e["ref"] for e in raw_ if e.get("type") == "undo" and e.get("ref")}
+                    old_spends_ = [e for e in raw_ if e.get("type") == "spend" and e["id"] not in undone_
+                                   and (e.get("group") or e["id"]) == session_]
+                    old_spends_ = list({e["id"]: e for e in old_spends_}.values())
+                    if {e.get("kid") for e in old_spends_} != set(current_):
+                        return self.send(409, {"error": "That saved movie changed. Refresh and try again."})
+                    cost_each_ = reward_cost(reward_, len(participants_))
+                    old_costs_ = {e["kid"]: int(e["cost"]) for e in old_spends_}
+                    for who_ in participants_:
+                        adjustment_ = cost_each_ - old_costs_.get(who_, 0)
+                        if fresh_["balance"].get(who_, 0) < adjustment_:
+                            name_ = next((x["name"] for x in c["kids"] if x["id"] == who_), who_)
+                            return self.send(409, {"error": name_ + " does not have enough stars to watch."})
+                    for old_ in old_spends_:
+                        append({"type": "undo", "ref": old_["id"], "by": "share_resume"})
+
+                now_, remaining_ = time.time(), float(saved_["remaining_s"])
+                until_ = now_ + remaining_
+                if joiners_:
+                    primary_ = current_[0]
+                    for who_ in participants_:
+                        append({"type": "spend", "kid": who_, "reward": saved_["reward"], "cost": cost_each_,
+                                "tv": tv_, "until": until_, "minutes": remaining_ / 60,
+                                "started_at": now_, "group": session_, "together": participants_,
+                                "by": "share_resume", **({"with_buyer": primary_} if who_ != primary_ else {}),
+                                "reward_name": reward_["name"], "reward_icon": reward_["icon"]})
+                    refunds_ = {who_: max(0, old_costs_.get(who_, 0) - cost_each_) for who_ in current_}
+                ev_ = append({"type": "tv_reward_resume", "session": session_, "tv": tv_,
+                              "remaining_s": remaining_, "until": until_,
+                              "playback": saved_.get("playback"), "by": kid_,
+                              **({"together": participants_} if joiners_ else {})})
+                GUARD.setdefault("hard_lock", {}).pop(tv_, None)
+                GUARD.setdefault("standby", {})[tv_] = False
+                queue_tv_reward_resume(tv_, saved_.get("playback"))
+                after_change()
+                ilog({"src": "tv_reward", "action": "child_resume", "tv": tv_, "session": session_,
+                      "remaining_s": round(remaining_), "kid": kid_, "participants": participants_,
+                      "cost_each": cost_each_})
+                return self.send(200, {"ok": True, "event": ev_, "remaining_s": remaining_,
+                                       "participants": participants_, "refunds": refunds_,
+                                       "cost_each": cost_each_, "state": derive()})
         if p == "/api/project/context_approve":
             ch_ = chores.get(b.get("chore")) or {}
             if b.get("by") not in insp or not stepped_jobs.definition(ch_):

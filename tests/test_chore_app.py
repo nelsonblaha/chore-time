@@ -223,6 +223,16 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Your movie is paused.", locked)
         self.assertIn("You’ll get the rest of your movie time later.", locked)
 
+    def test_kid_gets_easy_saved_movie_news_and_can_resume_or_share_it(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("Your movie is waiting!", kids)
+        self.assertIn("You can keep watching the movie from yesterday.", kids)
+        self.assertIn("Watch now", kids)
+        self.assertIn("savedRewardNews(k)", kids)
+        self.assertIn('api("/api/tv/reward_resume_child"', kids)
+        self.assertIn("sharedRewardPins(all", kids)
+        self.assertIn("Watching now costs no more stars.", kids)
+
     def test_parent_chore_page_has_independent_spotify_volume_cap_slider(self):
         grown = (REPO / "static" / "inspect.html").read_text()
         self.assertIn('id="spotifycap" min="0" max="100" step="1"', grown)
@@ -977,6 +987,53 @@ class TvRewardPauseAndSave(Case):
         self.assertIn("saved time is still safe", blocked["error"])
         self.assertEqual(self.app.state()["tv"]["tvs"]["livingroom"]["paused_reward"]["session_id"],
                          self.purchase["id"])
+
+    def test_child_can_resume_saved_movie_without_another_charge(self):
+        before = self.app.state()
+        balance = before["balance"]["ava"]
+        remaining = before["tv"]["tvs"]["livingroom"]["grants"][0]["until"] - time.time()
+        self.assertEqual(self.action("/api/tv/reward_pause")[0], 200)
+        denied = self.app.post("/api/tv/reward_resume_child", {
+            "kid": "ava", "tv": "livingroom", "session_id": self.purchase["id"]})
+        self.assertEqual(denied[0], 403)
+        token = self.app.kid_sessions("ava")["ava"]
+        code, resumed = self.app.post("/api/tv/reward_resume_child", {
+            "kid": "ava", "tv": "livingroom", "session_id": self.purchase["id"],
+            "kid_session": token})
+        self.assertEqual(code, 200, resumed)
+        self.assertEqual(resumed["participants"], ["ava"])
+        self.assertEqual(resumed["state"]["balance"]["ava"], balance)
+        audience = resumed["state"]["tv"]["tvs"]["livingroom"]["reward_audiences"][0]
+        self.assertEqual((audience["session_id"], audience["expected_kids"], audience["state"]),
+                         (self.purchase["id"], ["ava"], "active"))
+        self.assertAlmostEqual(audience["valid_until"] - time.time(), remaining, delta=2)
+        self.assertEqual(self.physical[-1][0:2], ("resume", "livingroom"))
+
+    def test_child_can_add_sibling_at_shared_price_without_extending_saved_time(self):
+        config_path = self.app.dir / "chores.json"
+        config = json.loads(config_path.read_text())
+        movie = next(x for x in config["rewards"] if x["id"] == "movie")
+        movie["together_cost"] = {"2": 12}
+        config_path.write_text(json.dumps(config))
+        self.app.event(type="adjust", kid="max", points=30, by="jordan", reason="test")
+        before = self.app.state()
+        remaining = before["tv"]["tvs"]["livingroom"]["grants"][0]["until"] - time.time()
+        self.assertEqual(self.action("/api/tv/reward_pause")[0], 200)
+        tokens = self.app.kid_sessions("ava", "max")
+        code, resumed = self.app.post("/api/tv/reward_resume_child", {
+            "kid": "ava", "tv": "livingroom", "session_id": self.purchase["id"],
+            "with": ["max"], "kid_sessions": tokens})
+        self.assertEqual(code, 200, resumed)
+        self.assertEqual(resumed["participants"], ["ava", "max"])
+        self.assertEqual(resumed["cost_each"], 12)
+        self.assertEqual(resumed["refunds"], {"ava": 3})
+        self.assertEqual((resumed["state"]["balance"]["ava"], resumed["state"]["balance"]["max"]),
+                         (38, 18))
+        audience = resumed["state"]["tv"]["tvs"]["livingroom"]["reward_audiences"][0]
+        self.assertEqual((audience["session_id"], audience["expected_kids"], audience["state"]),
+                         (self.purchase["id"], ["ava", "max"], "active"))
+        self.assertAlmostEqual(audience["valid_until"] - time.time(), remaining, delta=2)
+        self.assertEqual(resumed["state"]["refundable"]["ava"], [])
 
     def test_isolated_physical_lock_path_pauses_player_then_casts_explanation(self):
         calls = []
