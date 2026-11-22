@@ -107,7 +107,8 @@ class RehearsalServerTest(unittest.TestCase):
         (self.tmp / "house.json").write_text(json.dumps({
             "port": self.port,
             "failover": {"enabled": True, "node_id": "nelnet-test", "rehearsal": True,
-                         "allow_probe": True, "max_lease_seconds": 60},
+                         "allow_probe": True, "max_lease_seconds": 60,
+                         "allow_absent_empty_ledger": True},
         }))
         self.base = "http://127.0.0.1:%d" % self.port
         self.proc = None
@@ -153,9 +154,12 @@ class RehearsalServerTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def get(self, path):
-        with urllib.request.urlopen(self.base + path, timeout=3) as response:
-            raw = response.read()
-            return response.status, json.loads(raw) if response.headers.get_content_type() == "application/json" else raw
+        try:
+            with urllib.request.urlopen(self.base + path, timeout=3) as response:
+                raw = response.read()
+                return response.status, json.loads(raw) if response.headers.get_content_type() == "application/json" else raw
+        except urllib.error.HTTPError as ex:
+            return ex.code, json.loads(ex.read())
 
     def post(self, path, body, token=None):
         headers = {"Content-Type": "application/json"}
@@ -174,9 +178,12 @@ class RehearsalServerTest(unittest.TestCase):
         self.assertEqual(public["role"], "primary")
         self.assertTrue(public["effects_suppressed"])
         health = self.get("/health")[1]
-        self.assertEqual(health["checkpoint"]["contract"], "chore-core-checkpoint-v1")
+        self.assertEqual(health["checkpoint"]["contract"], "chore-core-checkpoint-v2")
+        self.assertTrue(health["checkpoint"]["ready"])
+        self.assertFalse(health["checkpoint"]["ledger"]["present"])
+        self.assertTrue(health["checkpoint"]["ledger"]["read_ok"])
         self.assertEqual(health["checkpoint"]["ledger"]["event_count"], 0)
-        self.assertTrue(health["checkpoint"]["ledger"]["tail_complete"])
+        self.assertIsNone(health["checkpoint"]["ledger"]["tail_complete"])
         self.assertEqual(len(health["checkpoint"]["core_sha256"]), 64)
         self.assertEqual(self.get("/kids")[0], 200)
 
@@ -215,6 +222,18 @@ class RehearsalServerTest(unittest.TestCase):
         self.restart_as("nelnet-test", 42)
         self.assertFalse(self.get("/health")[1]["failover"]["writable"])
         self.assertEqual(self.post("/api/failover/probe", body, "http-probe-secret")[0], 503)
+
+    def test_health_fails_closed_when_a_required_checkpoint_file_cannot_be_read(self):
+        house = self.tmp / "house.json"
+        house.unlink()
+        house.mkdir()
+        status, health = self.get("/health")
+        self.assertEqual(status, 503)
+        self.assertFalse(health["ok"])
+        self.assertFalse(health["checkpoint"]["ready"])
+        self.assertTrue(health["checkpoint"]["house"]["present"])
+        self.assertFalse(health["checkpoint"]["house"]["read_ok"])
+        self.assertIsNone(health["checkpoint"]["core_sha256"])
 
 
 class ReplayManifestTest(unittest.TestCase):

@@ -600,21 +600,49 @@ def read_events():
 
 def core_state_checkpoint():
     """Payload-free identity for the quiesced state that every writer must share."""
+    allow_absent_ledger = (not AUTHORITY.enabled or
+                           bool(AUTHORITY.config.get("allow_absent_empty_ledger")))
     with LOCK:
         rows = {}
         for name, path in (("ledger", LEDGER), ("chores", CONFIG), ("house", HOUSE_FILE)):
             try:
+                path.stat()
+            except FileNotFoundError:
+                allowed = name == "ledger" and allow_absent_ledger
+                rows[name] = {"present": False, "read_ok": allowed,
+                              "absence_allowed": allowed,
+                              "absence_policy": "explicit_empty_ledger" if allowed else None,
+                              "error": None if allowed else "missing"}
+                if allowed:
+                    rows[name].update(sha256=hashlib.sha256(b"").hexdigest(), bytes=0,
+                                      event_count=0, tail_complete=None)
+                continue
+            except OSError as ex:
+                rows[name] = {"present": None, "read_ok": False, "absence_allowed": False,
+                              "absence_policy": None,
+                              "error": "stat_%s" % (getattr(ex, "errno", None) or "failed")}
+                continue
+            try:
                 raw = path.read_bytes()
-            except OSError:
-                raw = b""
-            rows[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+            except OSError as ex:
+                rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
+                              "absence_policy": None,
+                              "error": "read_%s" % (getattr(ex, "errno", None) or "failed")}
+                continue
+            rows[name] = {"present": True, "read_ok": True, "absence_allowed": False,
+                          "absence_policy": None, "error": None,
+                          "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
             if name == "ledger":
                 rows[name]["event_count"] = sum(1 for line in raw.splitlines() if line.strip())
                 rows[name]["tail_complete"] = not raw or raw.endswith(b"\n")
-        joined = "\n".join("%s:%s" % (name, rows[name]["sha256"])
-                           for name in ("ledger", "chores", "house")).encode()
-    return {"contract": "chore-core-checkpoint-v1", "app_revision": APP_REVISION,
-            "core_sha256": hashlib.sha256(joined).hexdigest(), **rows}
+        ready = all(rows[name].get("read_ok") for name in ("ledger", "chores", "house")) \
+            and rows["ledger"].get("tail_complete") is not False
+        joined = "\n".join("%s:%s:%s" % (name, int(bool(rows[name].get("present"))),
+                                            rows[name].get("sha256"))
+                           for name in ("ledger", "chores", "house")).encode() if ready else None
+    return {"contract": "chore-core-checkpoint-v2", "app_revision": APP_REVISION,
+            "ready": ready, "core_sha256": hashlib.sha256(joined).hexdigest() if joined else None,
+            **rows}
 
 
 def _write_event_locked(ev):
@@ -3628,8 +3656,10 @@ class H(BaseHTTPRequestHandler):
                                                                                   if x["camera"] == c_ and x["label"] == lab)
                                                                            for lab in ("tidy", "untidy")} for c_ in e_.cfg["cameras"]}})
         if p == "/health":
-            return self.send(200, {"ok": True, "failover": AUTHORITY.public_status(),
-                                   "checkpoint": core_state_checkpoint()})
+            checkpoint_ = core_state_checkpoint()
+            return self.send(200 if checkpoint_["ready"] else 503,
+                             {"ok": checkpoint_["ready"], "failover": AUTHORITY.public_status(),
+                              "checkpoint": checkpoint_})
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
