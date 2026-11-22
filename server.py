@@ -172,21 +172,31 @@ def save_private_json(path, value):
     os.chmod(path, 0o600)
 
 
-def packing_profile(game, kid):
-    """The one packing profile assigned to a child; grown-up-only profiles never become child blockers."""
-    return next((p for p in (game.get("profiles") or []) if kid in (p.get("kids") or [])), None)
+def packing_packer_ids(profile):
+    """All people assigned to a list. ``kids`` retains its separate gate/award meaning."""
+    ids = list(profile.get("kids") or [])
+    for packer in profile.get("packers") or []:
+        packer_id = packer.get("id") if isinstance(packer, dict) else packer
+        if packer_id and packer_id not in ids:
+            ids.append(str(packer_id))
+    return ids
 
 
-def packing_item_ids(profile, kid):
+def packing_profile(game, packer):
+    """The one packing profile assigned to a child or authenticated grown-up packer."""
+    return next((p for p in (game.get("profiles") or []) if packer in packing_packer_ids(p)), None)
+
+
+def packing_item_ids(profile, packer):
     return {x["id"] for pile in (profile.get("piles") or []) for x in (pile.get("items") or [])
-            if x.get("id") and (not x.get("only") or kid in x["only"])}
+            if x.get("id") and (not x.get("only") or packer in x["only"])}
 
 
-def sanitize_packing_progress(game, kid, raw):
-    profile = packing_profile(game, kid)
+def sanitize_packing_progress(game, packer, raw):
+    profile = packing_profile(game, packer)
     if not profile or not isinstance(raw, dict):
         return None
-    item_ids = packing_item_ids(profile, kid)
+    item_ids = packing_item_ids(profile, packer)
     final_ids = {x["id"] for x in (profile.get("final_checks") or []) if x.get("id")}
     bools = lambda name, allowed: {str(k): True for k, v in (raw.get(name) or {}).items()
                                    if str(k) in allowed and v is True}
@@ -199,17 +209,17 @@ def sanitize_packing_progress(game, kid, raw):
         seq = max(0, int(raw.get("seq") or 0))
     except (TypeError, ValueError):
         seq = 0
-    return {"version": str(game.get("version") or ""), "profile": profile.get("id"), "packer": kid,
+    return {"version": str(game.get("version") or ""), "profile": profile.get("id"), "packer": packer,
             "seq": seq,
             "phase": phase, "ready": bools("ready", item_ids), "checked": checks("checked", item_ids),
             "packed": bools("packed", item_ids), "finals": checks("finals", final_ids)}
 
 
-def packing_complete(game, kid, progress):
-    profile = packing_profile(game, kid)
+def packing_complete(game, packer, progress):
+    profile = packing_profile(game, packer)
     if not profile or not progress or progress.get("phase") != "complete":
         return False
-    items = packing_item_ids(profile, kid)
+    items = packing_item_ids(profile, packer)
     finals = {x["id"] for x in (profile.get("final_checks") or []) if x.get("id")}
     return (all(progress.get("checked", {}).get(x) == "pass" and progress.get("packed", {}).get(x) is True
                 for x in items)
@@ -240,11 +250,11 @@ def packing_award_plan(profile):
             for stage in PACKING_AWARD_STAGES}
 
 
-def packing_milestones_reached(game, kid, progress):
-    profile = packing_profile(game, kid)
+def packing_milestones_reached(game, packer, progress):
+    profile = packing_profile(game, packer)
     if not profile or not progress:
         return set()
-    items = packing_item_ids(profile, kid)
+    items = packing_item_ids(profile, packer)
     ready = all(progress.get("ready", {}).get(x) is True
                 or progress.get("checked", {}).get(x) == "pass" for x in items)
     inspected = ready and all(progress.get("checked", {}).get(x) == "pass" for x in items)
@@ -256,7 +266,7 @@ def packing_milestones_reached(game, kid, progress):
         reached.add("inspect")
     if packed and progress.get("phase") in ("final", "complete"):
         reached.add("pack")
-    if packing_complete(game, kid, progress):
+    if packing_complete(game, packer, progress):
         reached.add("complete")
     return reached
 
@@ -266,13 +276,13 @@ def packing_progress(game):
     rows = saved.get("kids") or {} if saved.get("version") == game.get("version") else {}
     out = {}
     for profile in game.get("profiles") or []:
-        for kid in profile.get("kids") or []:
-            if kid not in rows:
+        for packer in packing_packer_ids(profile):
+            if packer not in rows:
                 continue
-            clean = sanitize_packing_progress(game, kid, rows.get(kid) or {})
+            clean = sanitize_packing_progress(game, packer, rows.get(packer) or {})
             if clean:
-                clean["complete"] = packing_complete(game, kid, clean)
-                saved_row = rows.get(kid) or {}
+                clean["complete"] = packing_complete(game, packer, clean)
+                saved_row = rows.get(packer) or {}
                 plan = packing_award_plan(profile)
                 award_refs = saved_row.get("awards") if isinstance(saved_row.get("awards"), dict) else {}
                 clean["awards"] = {stage: plan[stage] for stage in PACKING_AWARD_STAGES
@@ -284,8 +294,77 @@ def packing_progress(game):
                 seq_time = float(clean.get("seq") or 0) / 1000 if float(clean.get("seq") or 0) >= 1e12 else None
                 clean["started_at"] = saved_row.get("started_at") or seq_time
                 clean["updated_at"] = saved_row.get("updated_at") or seq_time
-                out[kid] = clean
+                clean["interacted_at"] = saved_row.get("interacted_at")
+                out[packer] = clean
     return out
+
+
+def packing_activity_changed(old, new):
+    """Sequence/open heartbeats are not physical packing interactions."""
+    fields = ("phase", "ready", "checked", "packed", "finals")
+    empty_open = not old and new.get("phase") == "layout" and not any(new.get(k) for k in fields[1:])
+    return not empty_open and any((old or {}).get(k) != new.get(k) for k in fields)
+
+
+def packing_private_config():
+    """Return the editable private source and its configured path, never a public-code fallback."""
+    raw_path = HOUSE.get("packing_game_file")
+    path = Path(str(raw_path)).expanduser() if raw_path else None
+    if not path:
+        return None, None
+    value = load_private_json(path, {})
+    return (value, path) if value else (None, path)
+
+
+def packing_edit_config(game, body):
+    """Apply one bounded category/item edit while retaining the trip version and saved progress."""
+    action = str(body.get("action") or "")
+    profiles = game.get("profiles") or []
+    profile = next((p for p in profiles if p.get("id") == body.get("profile")), None)
+    if not profile:
+        raise ValueError("unknown packing list")
+
+    def text_value(name, default="", limit=160):
+        value = str(body.get(name, default) or "").strip()
+        if name in ("title", "name") and not value:
+            raise ValueError("a name is required")
+        return value[:limit]
+
+    piles = profile.setdefault("piles", [])
+    pile = next((x for x in piles if x.get("id") == body.get("pile")), None)
+    if action == "add_category":
+        piles.append({"id": "pile_" + uuid.uuid4().hex[:10], "title": text_value("title"),
+                      "icon": text_value("icon", "1f9f3", 40), "note": text_value("note", limit=240),
+                      "items": []})
+        return
+    if not pile:
+        raise ValueError("unknown packing category")
+    if action == "edit_category":
+        pile.update({"title": text_value("title", pile.get("title")),
+                     "icon": text_value("icon", pile.get("icon") or "1f9f3", 40),
+                     "note": text_value("note", pile.get("note") or "", 240)})
+        return
+    if action == "remove_category":
+        piles.remove(pile)
+        return
+    items = pile.setdefault("items", [])
+    item = next((x for x in items if x.get("id") == body.get("item")), None)
+    if action == "add_item":
+        items.append({"id": "item_" + uuid.uuid4().hex[:10], "name": text_value("name"),
+                      "icon": text_value("icon", pile.get("icon") or "1f4e6", 40),
+                      "note": text_value("note", limit=240)})
+        return
+    if not item:
+        raise ValueError("unknown packing item")
+    if action == "edit_item":
+        item.update({"name": text_value("name", item.get("name")),
+                     "icon": text_value("icon", item.get("icon") or pile.get("icon") or "1f4e6", 40),
+                     "note": text_value("note", item.get("note") or "", 240)})
+        return
+    if action == "remove_item":
+        items.remove(item)
+        return
+    raise ValueError("unknown packing edit")
 
 
 def packing_public(game):
@@ -3792,6 +3871,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, (HERE / "static/now.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/inspect":
             return self.send(200, (HERE / "static/inspect.html").read_bytes(), "text/html; charset=utf-8")
+        if p == "/packing":
+            return self.send(200, (HERE / "static/packing.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/api/envelope_status":   # the kids' screen follows its print job (and sees a jam)
             job = (urllib.parse.parse_qs(self.path.partition("?")[2]).get("job") or [""])[0]
             try:
@@ -3951,35 +4032,40 @@ class H(BaseHTTPRequestHandler):
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
         if p == "/api/packing_update":
-            kid_ = b.get("kid")
+            packer_ = b.get("packer") or b.get("kid")
             game_ = packing_config() or {}
-            profile_ = packing_profile(game_, kid_)
+            profile_ = packing_profile(game_, packer_)
             if not game_.get("activated") or not profile_:
-                return self.send(409, {"error": "Packing is not open for this kid."})
-            ha_child_ = allowed_kids is not None and kid_ in allowed_kids
-            if not ha_child_ and not valid_kid_session(b.get("kid_session"), kid_, display_ip_):
-                return self.send(403, {"error": "Open your profile with your PIN first."})
-            clean_ = sanitize_packing_progress(game_, kid_, b.get("progress") or {})
+                return self.send(409, {"error": "Packing is not open for this packer."})
+            is_child_ = packer_ in (profile_.get("kids") or [])
+            ha_child_ = is_child_ and allowed_kids is not None and packer_ in allowed_kids
+            adult_ = not is_child_ and verified_ha_adult(self.headers, b.get("by")) and b.get("by") == packer_
+            if not adult_ and not ha_child_ and not valid_kid_session(b.get("kid_session"), packer_, display_ip_):
+                return self.send(403, {"error": "Open your profile with your PIN first." if is_child_
+                                                   else "Use the signed-in grown-up Chore dashboard."})
+            clean_ = sanitize_packing_progress(game_, packer_, b.get("progress") or {})
             if not clean_:
                 return self.send(400, {"error": "That packing update did not make sense."})
-            if clean_["phase"] == "complete" and not packing_complete(game_, kid_, clean_):
+            if clean_["phase"] == "complete" and not packing_complete(game_, packer_, clean_):
                 return self.send(409, {"error": "Every packed item and final check must pass first."})
             with PACKING_LOCK:
                 saved_ = load_private_json(PACKING_PROGRESS_FILE, {})
                 if saved_.get("version") != game_.get("version"):
                     saved_ = {"version": game_.get("version"), "kids": {}}
-                old_ = (saved_.get("kids") or {}).get(kid_) or {}
+                old_ = (saved_.get("kids") or {}).get(packer_) or {}
                 incoming_is_newer_ = int(old_.get("seq") or 0) <= int(clean_.get("seq") or 0)
                 if int(old_.get("seq") or 0) > int(clean_.get("seq") or 0):
                     clean_ = old_   # a slower response from an earlier tap cannot rewind the packing flow
-                if packing_complete(game_, kid_, old_):
+                if packing_complete(game_, packer_, old_):
                     clean_ = old_   # completion is durable; a stray Reset cannot relock rewards or repay points
-                complete_ = packing_complete(game_, kid_, clean_)
+                complete_ = packing_complete(game_, packer_, clean_)
                 now_ = time.time()
+                interacted_ = packing_activity_changed(old_, clean_) if incoming_is_newer_ else False
                 clean_["started_at"] = old_.get("started_at") or now_
                 clean_["updated_at"] = now_ if incoming_is_newer_ else old_.get("updated_at") or now_
+                clean_["interacted_at"] = now_ if interacted_ else old_.get("interacted_at")
                 events_ = [e for e in read_events() if e.get("type") == "adjust"
-                           and e.get("packing_version") == game_.get("version") and e.get("kid") == kid_]
+                           and e.get("packing_version") == game_.get("version") and e.get("kid") == packer_]
                 legacy_awarded_ = bool(old_.get("awarded")) or any(not e.get("packing_milestone") for e in events_)
                 award_refs_ = dict(old_.get("awards") or {}) if isinstance(old_.get("awards"), dict) else {}
                 for event_ in events_:
@@ -3988,12 +4074,12 @@ class H(BaseHTTPRequestHandler):
                 plan_ = packing_award_plan(profile_)
                 labels_ = profile_.get("award_labels") if isinstance(profile_.get("award_labels"), dict) else {}
                 if not legacy_awarded_:
-                    reached_ = packing_milestones_reached(game_, kid_, clean_)
+                    reached_ = packing_milestones_reached(game_, packer_, clean_)
                     for stage_ in PACKING_AWARD_STAGES:
                         points_ = plan_[stage_]
                         if stage_ not in reached_ or not points_ or award_refs_.get(stage_):
                             continue
-                        award_event_ = append({"type": "adjust", "kid": kid_, "points": points_,
+                        award_event_ = append({"type": "adjust", "kid": packer_, "points": points_,
                                                "reason": labels_.get(stage_) or (
                                                    game_.get("award_reason") if stage_ == "complete" else None
                                                ) or PACKING_AWARD_DEFAULT_LABELS[stage_],
@@ -4005,10 +4091,27 @@ class H(BaseHTTPRequestHandler):
                 clean_["awarded"] = legacy_awarded_ or (
                     complete_ and all(not plan_[stage_] or award_refs_.get(stage_)
                                       for stage_ in PACKING_AWARD_STAGES))
-                saved_.setdefault("kids", {})[kid_] = clean_
+                saved_.setdefault("kids", {})[packer_] = clean_
                 save_private_json(PACKING_PROGRESS_FILE, saved_)
-            ilog({"src": "packing", "kid": kid_, "phase": clean_["phase"],
-                  "complete": packing_complete(game_, kid_, clean_)})
+            ilog({"src": "packing", "packer": packer_, "phase": clean_["phase"],
+                  "complete": packing_complete(game_, packer_, clean_), "interaction": interacted_})
+            after_change()
+            return self.send(200, {"ok": True, "state": derive()})
+        if p == "/api/packing_admin":
+            by_ = b.get("by")
+            if not verified_ha_adult(self.headers, by_):
+                return self.send(403, {"error": "Use the signed-in grown-up Chore dashboard."})
+            with PACKING_LOCK:
+                private_, private_path_ = packing_private_config()
+                if not private_ or not private_path_:
+                    return self.send(409, {"error": "Packing edits require a private packing_game_file."})
+                try:
+                    packing_edit_config(private_, b)
+                except ValueError as ex:
+                    return self.send(400, {"error": str(ex)})
+                save_private_json(private_path_, private_)
+            ilog({"src": "packing_admin", "by": by_, "action": str(b.get("action") or ""),
+                  "profile": str(b.get("profile") or "")})
             after_change()
             return self.send(200, {"ok": True, "state": derive()})
         if p in ("/api/tv/reward_pause", "/api/tv/reward_resume"):

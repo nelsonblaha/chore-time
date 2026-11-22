@@ -382,6 +382,16 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn("x.icon_for&&x.icon_for[who]", kids)
         self.assertIn("!x.only||x.only.indexOf(who)>=0", kids)
         self.assertIn('data-ppacker="', kids)
+        self.assertIn("function packFamilyProgress(c)", kids)
+        self.assertIn("S.config.inspectors", kids)
+        grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn("Item-by-item progress", grown)
+        self.assertIn("last actual packing", grown)
+        self.assertIn('id="packadminview"', grown)
+        self.assertIn("openPackingWorkspace", grown)
+        packing = (REPO / "static" / "packing.html").read_text()
+        self.assertIn("Family packing", packing)
+        self.assertIn('api("/api/packing_admin"', packing)
 
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -405,7 +415,11 @@ class PackingRewardGateTests(unittest.TestCase):
                           "piles": [{"id": "bag", "items": [
                               {"id": "shirt", "name": "Shirt"},
                               {"id": "hair", "name": "Hair things", "only": ["ava"]}]}],
-                          "final_checks": [{"id": "zip", "name": "Bag zipped"}]}]}
+                          "final_checks": [{"id": "zip", "name": "Bag zipped"}]},
+                         {"id": "adult", "packers": ["jordan"], "points": 0,
+                          "piles": [{"id": "grownup_bag", "items": [
+                              {"id": "charger", "name": "Charger"}]}],
+                          "final_checks": [{"id": "adult_zip", "name": "Bag zipped"}]}]}
 
     @staticmethod
     def complete(items, seq=10):
@@ -496,6 +510,50 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(done["state"]["packing_game"]["progress"]["max"]["awarded_points"], 10)
         self.assertIsNone(a.s.packing_reward_gate(done["state"], ["zoe"]))
         self.assertIsNone(a.s.packing_chore_gate(done["state"], "zoe", "kitchen"))
+
+    def test_authenticated_adult_has_progress_without_a_star_balance_or_fake_interaction_clock(self):
+        a = self.app
+        a.s.HA["user_adults"] = {"jordan-ha": "jordan"}
+        opened = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan", "phase": "layout",
+                  "seq": 1, "ready": {}, "checked": {}, "packed": {}, "finals": {}}
+        self.assertEqual(a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                        "progress": opened})[0], 403)
+        code, first = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                     "progress": opened}, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, first)
+        self.assertIsNone(first["state"]["packing_game"]["progress"]["jordan"]["interacted_at"])
+        packed = dict(opened, seq=2, phase="pack", ready={"charger": True},
+                      checked={"charger": "pass"}, packed={"charger": True})
+        code, changed = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                       "progress": packed}, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, changed)
+        self.assertIsNotNone(changed["state"]["packing_game"]["progress"]["jordan"]["interacted_at"])
+        finished = dict(packed, seq=3, phase="complete", finals={"adult_zip": "pass"})
+        code, done = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                    "progress": finished}, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, done)
+        self.assertTrue(done["state"]["packing_game"]["progress"]["jordan"]["complete"])
+        self.assertNotIn("jordan", done["state"]["balance"])
+        self.assertFalse([e for e in a.s.read_events() if e.get("kid") == "jordan"])
+
+    def test_private_packing_editor_preserves_version_and_saved_progress(self):
+        a = self.app
+        a.s.HA["user_adults"] = {"jordan-ha": "jordan"}
+        private = a.dir / "packing_game.json"
+        private.write_text(json.dumps(a.s.HOUSE["packing_game"]))
+        os.chmod(private, 0o600)
+        a.s.HOUSE["packing_game_file"] = str(private)
+        progress = {"version": "trip-test-v1", "kids": {"ava": {"seq": 4, "phase": "layout"}}}
+        (a.dir / "packing_progress.json").write_text(json.dumps(progress))
+        body = {"by": "jordan", "action": "add_category", "profile": "adult", "title": "Day bag"}
+        self.assertEqual(a.post("/api/packing_admin", body)[0], 403)
+        code, result = a.post("/api/packing_admin", body, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, result)
+        saved = json.loads(private.read_text())
+        self.assertEqual(saved["version"], "trip-test-v1")
+        self.assertEqual(saved["profiles"][1]["piles"][-1]["title"], "Day bag")
+        self.assertEqual(json.loads((a.dir / "packing_progress.json").read_text()), progress)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o600)
 
 
 class Case(unittest.TestCase):
