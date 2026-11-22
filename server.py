@@ -353,10 +353,15 @@ def packing_edit_config(game, body):
     items = pile.setdefault("items", [])
     item = next((x for x in items if x.get("id") == body.get("item")), None)
     if action == "add_item":
-        items.append({"id": "item_" + uuid.uuid4().hex[:10], "name": text_value("name"),
-                      "icon": text_value("icon", pile.get("icon") or "1f4e6", 40),
-                      "note": text_value("note", limit=240)})
-        return
+        item_id = "item_" + uuid.uuid4().hex[:10]
+        new_item = {"id": item_id, "name": text_value("name"),
+                    "icon": text_value("icon", pile.get("icon") or "1f4e6", 40),
+                    "note": text_value("note", limit=240)}
+        only = str(body.get("only") or "")
+        if only and only in packing_packer_ids(profile):
+            new_item["only"] = [only]
+        items.append(new_item)
+        return {"item": item_id, "only": only or None}
     if not item:
         raise ValueError("unknown packing item")
     if action == "edit_item":
@@ -4111,10 +4116,26 @@ class H(BaseHTTPRequestHandler):
                 if not private_ or not private_path_:
                     return self.send(409, {"error": "Packing edits require a private packing_game_file."})
                 try:
-                    packing_edit_config(private_, b)
+                    edit_ = packing_edit_config(private_, b)
                 except ValueError as ex:
                     return self.send(400, {"error": str(ex)})
                 save_private_json(private_path_, private_)
+                if str(b.get("action") or "") == "add_item":
+                    saved_ = load_private_json(PACKING_PROGRESS_FILE, {})
+                    profile_ = next((x for x in (private_.get("profiles") or [])
+                                     if x.get("id") == b.get("profile")), None)
+                    targets_ = [edit_["only"]] if edit_ and edit_.get("only") else packing_packer_ids(profile_ or {})
+                    changed_ = False
+                    for packer_ in targets_:
+                        row_ = (saved_.get("kids") or {}).get(packer_)
+                        if not row_ or packing_complete(private_, packer_, row_):
+                            continue
+                        row_["phase"] = "layout"
+                        row_["seq"] = max(int(row_.get("seq") or 0) + 1, int(time.time() * 1000))
+                        row_["updated_at"] = time.time()
+                        changed_ = True
+                    if changed_:
+                        save_private_json(PACKING_PROGRESS_FILE, saved_)
             ilog({"src": "packing_admin", "by": by_, "action": str(b.get("action") or ""),
                   "profile": str(b.get("profile") or "")})
             after_change()

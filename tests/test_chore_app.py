@@ -584,6 +584,30 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(json.loads((a.dir / "packing_progress.json").read_text()), progress)
         self.assertEqual(private.stat().st_mode & 0o777, 0o600)
 
+    def test_forgotten_item_can_be_added_for_one_child_and_returns_only_that_child_to_gathering(self):
+        a = self.app
+        a.s.HA["user_adults"] = {"jordan-ha": "jordan"}
+        private = a.dir / "packing_game.json"
+        private.write_text(json.dumps(a.s.HOUSE["packing_game"]))
+        os.chmod(private, 0o600)
+        a.s.HOUSE["packing_game_file"] = str(private)
+        ava = self.stage(["shirt", "hair"], "pack", 30)
+        max_row = self.stage(["shirt"], "pack", 31)
+        (a.dir / "packing_progress.json").write_text(json.dumps({
+            "version": "trip-test-v1", "kids": {"ava": ava, "max": max_row}
+        }))
+        code, result = a.post("/api/packing_admin", {
+            "by": "jordan", "action": "add_item", "profile": "kid", "pile": "bag",
+            "name": "Forgotten thing", "only": "ava"
+        }, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, result)
+        saved = json.loads(private.read_text())
+        item = saved["profiles"][0]["piles"][0]["items"][-1]
+        self.assertEqual(item["only"], ["ava"])
+        progress = json.loads((a.dir / "packing_progress.json").read_text())["kids"]
+        self.assertEqual(progress["ava"]["phase"], "layout")
+        self.assertEqual(progress["max"]["phase"], "pack")
+
 
 class Case(unittest.TestCase):
     config = None
