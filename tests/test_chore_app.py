@@ -868,7 +868,7 @@ class SoundSettings(Case):
         self.assertFalse(self.s.adult_buzz_allowed("jordan", "test"))
         self.assertTrue(self.s.adult_buzz_allowed("casey", "test"))
 
-    def test_pre_gate_actionable_phone_notice_is_ongoing_and_direct_watch_stays_quiet(self):
+    def test_pre_gate_pin_reset_phone_is_ongoing_but_watch_still_buzzes(self):
         s = self.s
         gate = "binary_sensor.jordan_left_bedroom_today"
         s.ADULTS["jordan"]["buzz_gate"] = {"entity": gate, "states": ["on"]}
@@ -879,7 +879,7 @@ class SoundSettings(Case):
         self.app.orig["send_adult_request"]("quiet123", "jordan", "test Hub")
         phone = next(data for svc, data in self.app.calls if svc == "notify.mobile_app_jordans_phone")
         self.assertIs(phone["data"]["persistent"], True)
-        self.assertFalse(any(svc == "notify.jordan_watch" for svc, data in self.app.calls))
+        self.assertTrue(any(svc == "notify.jordan_watch" for svc, data in self.app.calls))
         self.app.calls.clear()
         self.app.set(gate, "on")
         self.app.states[gate]["attributes"]["cycle_started_at"] = time.time()

@@ -3320,7 +3320,9 @@ def send_adult_request(nonce, who, where):
             accepted.append(svc)
     buzzed = []
     for svc in ADULT_BUZZ_NOTIFY.get(who, []):
-        if adult_buzz_allowed(who, tok):   # re-read immediately before every direct watch service
+        # A forgotten-PIN request is an attended child safety/recovery action, not an ordinary chore nudge.
+        # Ben explicitly expects it on the watch even while the daily routine buzz gate is quiet.
+        if req.get("purpose") == "pin_reset" or adult_buzz_allowed(who, tok):
             if ha_call(svc, {"title": title, "message": message + " Open the phone or parent Chores dashboard to answer.",
                              "data": {"tag": "chore-adult-" + nonce + "-buzz", "priority": "high", "ttl": 0,
                                       "channel": "Chore approvals", "importance": "high"}}, tok):
