@@ -536,6 +536,15 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertNotIn("jordan", done["state"]["balance"])
         self.assertFalse([e for e in a.s.read_events() if e.get("kid") == "jordan"])
 
+    def test_legacy_physical_progress_uses_its_last_update_as_the_interaction_clock(self):
+        row = self.stage(["shirt", "hair"], "inspect", 10)
+        row.update({"started_at": 100, "updated_at": 123})
+        (self.app.dir / "packing_progress.json").write_text(json.dumps({
+            "version": "trip-test-v1", "kids": {"ava": row}
+        }))
+        progress = self.app.state()["packing_game"]["progress"]["ava"]
+        self.assertEqual(progress["interacted_at"], 123)
+
     def test_private_packing_editor_preserves_version_and_saved_progress(self):
         a = self.app
         a.s.HA["user_adults"] = {"jordan-ha": "jordan"}

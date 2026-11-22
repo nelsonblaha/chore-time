@@ -294,7 +294,10 @@ def packing_progress(game):
                 seq_time = float(clean.get("seq") or 0) / 1000 if float(clean.get("seq") or 0) >= 1e12 else None
                 clean["started_at"] = saved_row.get("started_at") or seq_time
                 clean["updated_at"] = saved_row.get("updated_at") or seq_time
-                clean["interacted_at"] = saved_row.get("interacted_at")
+                had_physical_progress = (clean.get("phase") != "layout"
+                                         or any(clean.get(k) for k in ("ready", "checked", "packed", "finals")))
+                clean["interacted_at"] = saved_row.get("interacted_at") or (
+                    clean["updated_at"] if had_physical_progress else None)
                 out[packer] = clean
     return out
 
