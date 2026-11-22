@@ -235,6 +235,9 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('laid out":phase==="inspect"', grown)
         self.assertIn("data-openitem", grown)
         self.assertIn('mark:{item:item,value:value}', grown)
+        self.assertIn('stage:stage', grown)
+        self.assertIn("Inspection passed", grown)
+        self.assertIn('if(packWasOpen&&PACK)packRender()', kids)
         self.assertIn('q.push("v="+Date.now())', inspect)
 
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
@@ -620,6 +623,16 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(code, 200, present)
         self.assertEqual(present["state"]["packing_game"]["progress"]["ava"]["phase"], "inspect")
         self.assertEqual(present["state"]["packing_game"]["progress"]["ava"]["checked"]["shirt"], "pass")
+        code, all_present = a.post("/api/packing_update", {
+            "packer": "ava", "by": "jordan", "mark": {"item": "hair", "value": "present"}},
+            {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, all_present)
+        self.assertEqual(all_present["state"]["packing_game"]["progress"]["ava"]["phase"], "inspect")
+        stage = {"packer": "ava", "by": "jordan", "stage": "pack"}
+        self.assertEqual(a.post("/api/packing_update", stage)[0], 403)
+        code, packing = a.post("/api/packing_update", stage, {"X-HA-User": "jordan-ha"})
+        self.assertEqual(code, 200, packing)
+        self.assertEqual(packing["state"]["packing_game"]["progress"]["ava"]["phase"], "pack")
         code, handed_back = a.post("/api/packing_update", {
             "packer": "ava", "by": "jordan", "mark": {"item": "hair", "value": "missing"}},
             {"X-HA-User": "jordan-ha"})

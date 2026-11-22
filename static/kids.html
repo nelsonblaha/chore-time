@@ -451,12 +451,13 @@ if(SANDBOX!=null){
 }
 var lastSig=null;
 function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");leaveHubForeground(function(){location.href=adultPage(s.adult_go)});return}   // approved on the watch, even if this page reloaded meanwhile
-  var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
+  var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s,packWasOpen=$("packing").classList.contains("on");
+  if(packWasOpen&&kid){var remotePack=((S.packing_game||{}).progress||{})[kid];if(remotePack)PACK=JSON.parse(JSON.stringify(remotePack))}
   if(kid){var protectedKid=S.config.kids.find(function(x){return x.id===kid&&x.pin_required});if(protectedKid&&PIN_OK[kid]!==S.pin_epoch){L("kid_pin_session_closed",{kid:kid});kid=null;MENU=false;DETAIL=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");hubHeartbeat()}}
   if(inspModalRef){var ir=S.history.find(function(h){return h.id===inspModalRef});
     if(!ir||ir.status!=="pending"){inspModalRef=null;if($("m").classList.contains("on"))closeModal()}}
   checkAttention();
-  if(sig!==lastSig){lastSig=sig;render();liveCelebrate()}syncTimers();return s})}
+  if(sig!==lastSig){lastSig=sig;render();if(packWasOpen&&PACK)packRender();liveCelebrate()}syncTimers();return s})}
 var seenInspecting={},inspModalRef=null;
 function liveCelebrate(){ // inspections/awards that land while a kid is on their own screen pop up right away
   if(!kid||!$("kid").classList.contains("on"))return;
