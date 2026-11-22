@@ -639,6 +639,38 @@ class HubChildSessions(Case):
         self.assertIsNone(picker["great_room"]["kid"])
         self.assertIsNotNone(picker["great_room"]["last_observed"])
 
+    def test_fast_heartbeats_use_one_global_public_refresh_clock(self):
+        start = time.time()
+        first = self.s.observe_hub_child(self.HUB_ONE, now=start)
+        second = self.s.observe_hub_child(self.HUB_TWO, now=start + 1)
+        self.assertTrue(first["publish"])
+        self.assertTrue(second["publish"])
+
+        quiet_one = self.s.observe_hub_child(self.HUB_ONE, now=start + 20)
+        quiet_two = self.s.observe_hub_child(self.HUB_TWO, now=start + 21)
+        self.assertFalse(quiet_one["publish"])
+        self.assertFalse(quiet_two["publish"])
+        before = self.s.hub_child_sessions_manifest(start + 21)
+        self.assertEqual(before["great_room"]["last_observed"], start)
+        self.assertEqual(before["kids_bedroom"]["last_observed"], start + 1)
+
+        refresh = self.s.observe_hub_child(self.HUB_ONE, now=start + 32)
+        following = self.s.observe_hub_child(self.HUB_TWO, now=start + 33)
+        self.assertTrue(refresh["publish"])
+        self.assertFalse(following["publish"])
+        after = self.s.hub_child_sessions_manifest(start + 33)
+        self.assertEqual(after["great_room"]["last_observed"], start + 32)
+        self.assertEqual(after["kids_bedroom"]["last_observed"], start + 21)
+        self.assertEqual(after["great_room"]["valid_until"] - after["great_room"]["last_observed"], 75)
+
+    def test_offline_clear_uses_private_liveness_not_throttled_public_time(self):
+        unlocked = self.app.post_from(self.HUB_ONE, "/api/kid_unlock", {"kid": "ava", "pin": "1234"})[1]
+        start = time.time()
+        self.s.observe_hub_child(self.HUB_ONE, "ava", unlocked["kid_session"], start)
+        self.s.observe_hub_child(self.HUB_ONE, "ava", unlocked["kid_session"], start + 8)
+        self.assertFalse(self.s.expire_hub_child_sessions(start + 11))
+        self.assertTrue(self.s.expire_hub_child_sessions(start + 19))
+
     def test_manifest_only_refresh_does_not_rewrite_chunk_parts(self):
         sent, old_post = [], self.s.ha_post_state
         self.s.ha_post_state = lambda entity, value, attrs, tok: sent.append((entity, attrs))

@@ -1782,16 +1782,23 @@ def observe_hub_child(ip, kid=None, token=None, now=None):
         sessions = GUARD.setdefault("hub_child_sessions", {})
         old = sessions.get(display["id"]) or {}
         changed = not old or old.get("kid") != accepted
-        row = {"kid": accepted,
-               "since": (old.get("since") if accepted and old.get("kid") == accepted else
-                         (now if accepted else None)),
-               "last_observed": now,
-               "valid_until": now + HUB_CHILD_VALID_S,
-               "published_at": float(old.get("published_at") or 0)}
-        publish = changed or now - row["published_at"] >= HUB_CHILD_REFRESH_S
-        if publish:
-            row["published_at"] = now
+        row = dict(old)
+        row.update(kid=accepted,
+                   since=(old.get("since") if accepted and old.get("kid") == accepted else
+                          (now if accepted else None)),
+                   last_seen=now)
         sessions[display["id"]] = row
+        refresh = now - float(GUARD.get("hub_child_last_refresh") or 0) >= HUB_CHILD_REFRESH_S
+        publish = changed or refresh
+        if publish:
+            # Snapshot both Hubs together. The private last_seen clock advances every heartbeat,
+            # while public observation times advance only on a change or one global refresh.
+            for current in sessions.values():
+                seen = float(current.get("last_seen") or current.get("last_observed") or 0)
+                if seen:
+                    current.update(last_observed=seen, valid_until=seen + HUB_CHILD_VALID_S,
+                                   published_at=now)
+            GUARD["hub_child_last_refresh"] = now
     return {"display_id": display["id"], "kid": accepted, "publish": publish}
 
 
@@ -1801,9 +1808,12 @@ def expire_hub_child_sessions(now=None):
     changed = False
     with HUB_CHILD_LOCK:
         for row in (GUARD.get("hub_child_sessions") or {}).values():
-            if row.get("kid") and now - float(row.get("last_observed") or 0) > HUB_CHILD_OFFLINE_S:
+            seen = float(row.get("last_seen") or row.get("last_observed") or 0)
+            if row.get("kid") and now - seen > HUB_CHILD_OFFLINE_S:
                 row.update(kid=None, since=None, published_at=now)
                 changed = True
+        if changed:
+            GUARD["hub_child_last_refresh"] = now
     return changed
 
 
@@ -1817,7 +1827,8 @@ def hub_child_sessions_manifest(now=None):
     for display_id, config in HUBS.items():
         row = rows.get(display_id) or {}
         observed = float(row.get("last_observed") or 0)
-        kid = row.get("kid") if observed and now - observed <= HUB_CHILD_OFFLINE_S else None
+        seen = float(row.get("last_seen") or observed)
+        kid = row.get("kid") if seen and now - seen <= HUB_CHILD_OFFLINE_S else None
         if kid not in names:
             kid = None
         room = str(config.get("floorplan_room") or config.get("room") or display_id)
