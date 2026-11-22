@@ -3669,6 +3669,26 @@ class NoRecordForSomethingElse(Case):
 
 
 class WatchingTogether(Case):
+    def test_late_join_price_prefers_movie_progress_then_reward_clock(self):
+        reward = next(r for r in base_config()["rewards"] if r["id"] == "movie")
+        reward["together_cost"] = {"2": 12}
+        now = 2000
+        self.s.TVS = {"livingroom": {}}
+        fallback = self.s.reward_join_price(reward, 2, 1000, 3000, "livingroom", "session", now=now)
+        self.assertEqual((fallback["cost"], fallback["source"], fallback["fraction"]),
+                         (6, "reward_time", .5))
+        self.s.TVS["livingroom"]["reward_timeline_room"] = "fixture_room"
+        movie = self.s.reward_join_price(reward, 2, 1000, 3000, "livingroom", "session", now=now,
+            timeline_get=lambda room: {"schema_version": 1, "grant_id": "session", "state": "paused",
+                                       "duration_ms": 8_000_000, "position_ms": 6_000_000,
+                                       "observed_at": now - 1, "valid_until": now + 30})
+        self.assertEqual((movie["cost"], movie["source"], movie["fraction"]),
+                         (3, "movie_time", .25))
+        wrong_session = self.s.reward_join_price(reward, 2, 1000, 3000, "livingroom", "session", now=now,
+            timeline_get=lambda room: {"schema_version": 1, "grant_id": "other", "state": "paused",
+                                       "duration_ms": 8_000_000, "position_ms": 7_000_000})
+        self.assertEqual((wrong_session["cost"], wrong_session["source"]), (6, "reward_time"))
+
     def test_a_movie_together_costs_less_each(self):
         c = base_config()
         for r in c["rewards"]:
@@ -3726,7 +3746,9 @@ class WatchingTogether(Case):
         self.assertEqual(code, 200, joined)
         self.assertEqual((joined["state"]["balance"]["ava"], joined["state"]["balance"]["max"]), (18, 18))
         self.assertEqual(joined["refunds"], {"ava": 3})
+        self.assertEqual((joined["join_cost"], joined["price_source"]), (12, "reward_time"))
         audience = joined["state"]["tv"]["tvs"]["livingroom"]["reward_audiences"][0]
+        self.assertEqual(audience["session_id"], bought["id"])
         self.assertEqual(audience["expected_kids"], ["ava", "max"])
         self.assertEqual(audience["state"], "active")
         self.assertAlmostEqual(audience["valid_until"], before["valid_until"], delta=1)

@@ -13,7 +13,7 @@ import hmac
 import json
 from tidy_spaces import space_states
 import stepped_jobs
-import random, os, re, threading, time, uuid, urllib.request, urllib.parse
+import math, random, os, re, threading, time, uuid, urllib.request, urllib.parse, urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -1291,6 +1291,47 @@ def reward_cost(r, watching=1):
         if fit:
             return tc[max(fit)]
     return r["cost"]
+
+
+def reward_join_price(reward, watching, started_at, until, tv=None, session_id=None, now=None,
+                      timeline_get=None):
+    """Price only the late joiner's remaining share; never extend the clock.
+
+    A verified movie cursor is the best measure of what the newcomer receives.
+    If it is unavailable, use the purchased reward clock. The existing viewers'
+    earlier watching is never retroactively prorated.
+    """
+    now = float(time.time() if now is None else now)
+    full = int(reward_cost(reward, watching))
+    total = max(1.0, float(until) - float(started_at))
+    fraction = max(0.0, min(1.0, (float(until) - now) / total))
+    source = "reward_time"
+    room = (TVS.get(tv) or {}).get("reward_timeline_room") if "TVS" in globals() else None
+    if reward.get("id") == "movie" and room and session_id:
+        try:
+            if timeline_get is None:
+                req = urllib.request.Request(
+                    f"{HA_URL}/api/reward_movie_timeline/{urllib.parse.quote(str(room), safe='')}",
+                    headers={"Authorization": f"Bearer {ha_token()}", "Cache-Control": "no-store"})
+                timeline = json.loads(urllib.request.urlopen(req, timeout=4).read())
+            else:
+                timeline = timeline_get(room)
+            if (timeline.get("schema_version") == 1 and timeline.get("grant_id") == session_id
+                    and timeline.get("state") in ("playing", "paused", "seeking")):
+                duration = float(timeline["duration_ms"])
+                position = float(timeline["position_ms"])
+                if timeline["state"] == "playing":
+                    position += max(0.0, min(now, float(timeline["valid_until"]))
+                                    - float(timeline["observed_at"])) * 1000
+                if duration > 0 and 0 <= position <= duration:
+                    fraction = max(0.0, min(1.0, (duration - position) / duration))
+                    source = "movie_time"
+        except (KeyError, TypeError, ValueError, OSError, urllib.error.URLError, json.JSONDecodeError):
+            pass
+    # A nonzero late share always costs at least one star. At the exact end the
+    # active-session check rejects the join before this function is called.
+    return {"cost": max(1, int(math.ceil(full * fraction - 1e-9))), "full_cost": full,
+            "fraction": fraction, "source": source}
 
 
 def reward_closed(r, now=None):
@@ -4523,35 +4564,45 @@ class H(BaseHTTPRequestHandler):
                 old_spends_ = list({e_["id"]: e_ for e_ in old_spends_}.values())
                 if len(old_spends_) != len(current_):
                     return self.send(409, {"error": "That reward changed. Refresh and try again."})
-                new_cost_ = reward_cost(reward_, len(participants_))
                 old_costs_ = {e_["kid"]: int(e_["cost"]) for e_ in old_spends_}
+                started_at_ = min(u_.get("start") or u_["ts"] for _, u_ in live_)
+                until_ = min(u_["until"] for _, u_ in live_)
+                tv_ = next(iter(tids_))
+                price_ = reward_join_price(reward_, len(participants_), started_at_, until_, tv_,
+                                           str(b.get("session_id") or ""))
+                shared_cost_ = price_["full_cost"]
+                target_costs_ = {wk_: min(old_costs_[wk_], shared_cost_) for wk_ in current_}
+                target_costs_[joiner_] = price_["cost"]
                 for wk_ in participants_:
-                    adjustment_ = new_cost_ - old_costs_.get(wk_, 0)
+                    adjustment_ = target_costs_[wk_] - old_costs_.get(wk_, 0)
                     if fresh_["balance"].get(wk_, 0) < adjustment_:
                         name_ = next((x_["name"] for x_ in c["kids"] if x_["id"] == wk_), wk_)
                         return self.send(409, {"error": name_ + " does not have enough points to share."})
 
-                started_at_ = min(u_.get("start") or u_["ts"] for _, u_ in live_)
-                until_ = min(u_["until"] for _, u_ in live_)
-                tv_ = next(iter(tids_))
-                new_group_ = uuid.uuid4().hex[:12]
+                new_group_ = str(b.get("session_id") or "")
                 primary_ = current_[0]
                 for old_ in old_spends_:
                     append({"type": "undo", "ref": old_["id"], "by": "share_join"})
                 made_ = []
                 for wk_ in participants_:
-                    made_.append(append({"type": "spend", "kid": wk_, "reward": reward_id_, "cost": new_cost_,
+                    made_.append(append({"type": "spend", "kid": wk_, "reward": reward_id_, "cost": target_costs_[wk_],
                                          "tv": tv_, "until": until_, "minutes": reward_.get("tv_minutes"),
                                          "started_at": started_at_, "group": new_group_, "together": participants_,
                                          "by": "share_join", **({"with_buyer": primary_} if wk_ != primary_ else {}),
+                                         **({"join_prorated": True, "price_fraction": price_["fraction"],
+                                             "price_source": price_["source"]} if wk_ == joiner_ else {}),
                                          "reward_name": reward_["name"], "reward_icon": reward_["icon"]}))
-                refunds_ = {wk_: max(0, old_costs_.get(wk_, 0) - new_cost_) for wk_ in current_}
+                refunds_ = {wk_: max(0, old_costs_.get(wk_, 0) - target_costs_[wk_]) for wk_ in current_}
                 ev = made_[-1]
                 after_change()
                 ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev,
-                      "session": b.get("session_id"), "participants": participants_})
+                      "session": b.get("session_id"), "participants": participants_,
+                      "join_cost": price_["cost"], "price_source": price_["source"]})
                 return self.send(200, {"ok": True, "event": ev, "state": derive(), "refunds": refunds_,
-                                       "cost_each": new_cost_, "valid_until": until_, "participants": participants_})
+                                       "cost_each": shared_cost_, "join_cost": price_["cost"],
+                                       "cost_by_kid": target_costs_, "price_source": price_["source"],
+                                       "remaining_fraction": price_["fraction"],
+                                       "valid_until": until_, "participants": participants_})
         elif p == "/api/inspect":
             reps = {r["id"]: r for r in st["history"] if r.get("type") == "report"}
             r = reps.get(b.get("ref"))
