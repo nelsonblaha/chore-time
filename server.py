@@ -1731,6 +1731,52 @@ def state_for_display(ip):
     return state
 
 
+def _seen_state():
+    """Read UI acknowledgements without creating or updating any acknowledgement."""
+    try:
+        value = json.loads(NEWS_SEEN.read_text())
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def add_seen_projection(state, news_key, announcement_key):
+    """Add the unread/news projection used by a real kid login, without marking anything seen."""
+    seen = _seen_state()
+    state["news_unseen"] = bool(state["whatsnew"]) and seen.get(news_key) != state["whatsnew"]["v"]
+    state["news_seen_kids"] = {k["id"]: seen.get("kid:" + k["id"]) for k in state["config"]["kids"]}
+    state["ann_seen_kids"] = {k["id"]: seen.get("ann:kid:" + k["id"], []) for k in state["config"]["kids"]}
+    shut = {x["id"] for x in state["config"]["chores"] if x.get("closed")}
+    state["announce_all"] = [{"id": b["bonus_id"], "chore": cid, "price": b["price"], "base": b["base"]}
+                             for cid, b in state["board"].items()
+                             if b.get("bonus") and b.get("bonus_id") and not b["clean_until"] and cid not in shut]
+    acked = set(seen.get(announcement_key, []))
+    state["announce"] = [row for row in state["announce_all"] if row["id"] not in acked]
+    return state
+
+
+def kid_preview_state(kid):
+    """Canonical next-login state for one child, for the lead adult's authenticated read-only HA preview.
+
+    This deliberately does not issue a kid session, verify a PIN, record display presence, consume an
+    adult-login request, or acknowledge news/awards/announcements. The HA wrapper must treat the returned
+    projection as inert data and must not forward preview interactions to ordinary mutation endpoints.
+    """
+    state = derive()
+    if kid not in {row["id"] for row in state["config"]["kids"]}:
+        return None
+    add_seen_projection(state, "kid:" + kid, "ann:kid:" + kid)
+    state.update({
+        "preview": {"kid": kid, "read_only": True, "skip_pin": True,
+                    "canonical_state": True, "mutation_transport": None},
+        "hub": None, "hub_motion": None, "display": None, "music_interruption": None,
+        "coin_flip": None, "peer_pin_reset": None, "peer_pin_reset_capable": False,
+        "pin_reset_open": {},
+    })
+    state.pop("adult_go", None)
+    return state
+
+
 def hub_placement_review_state(now=None):
     if not PEER_PIN_CFG or HUB_PLACEMENT.get("trusted"):
         return None
@@ -3448,6 +3494,18 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, envelopes.status(job))
             except Exception as ex:  # noqa: BLE001
                 return self.send(200, {"state": "unknown", "problem": None, "error": str(ex)[:120]})
+        if p == "/api/kid_preview":
+            # X-HA-User is trusted only from the loopback HA relay, which derives it from the authenticated
+            # HA request context. Never accept a browser-supplied identity over the LAN.
+            if self.client_address[0] not in ("127.0.0.1", "::1") \
+                    or not verified_ha_adult(self.headers, LEAD_ADULT):
+                return self.send(403, {"error": "lead-adult-only Home Assistant preview"})
+            q_ = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            kid_ = str((q_.get("kid") or [""])[0])
+            state_ = kid_preview_state(kid_)
+            if state_ is None:
+                return self.send(404, {"error": "unknown kid"})
+            return self.send(200, {"ok": True, "kid": kid_, "read_only": True, "state": state_})
         if p.startswith("/api/chore_photo/"):   # a photo that shows the kids where a job is (chores[].photo, in data/photos)
             ch_ = next((x for x in cfg()["chores"] if x["id"] == p.rsplit("/", 1)[1]), None)
             f = (DATA / "photos" / str((ch_ or {}).get("photo") or "-"))
@@ -3473,26 +3531,12 @@ class H(BaseHTTPRequestHandler):
             st["peer_pin_reset_capable"] = bool(peer_reset_display(self.client_address[0]))
             interrupt_ = active_spotify_interruption((display_ or {}).get("room"))
             st["display"], st["music_interruption"] = display_, interrupt_
-            try:
-                seen = json.loads(NEWS_SEEN.read_text())
-            except (OSError, ValueError):
-                seen = {}
-            st["news_unseen"] = bool(st["whatsnew"]) and seen.get(self.client_address[0]) != st["whatsnew"]["v"]
+            add_seen_projection(st, self.client_address[0], "ann:" + self.client_address[0])
             for r_ in ADULT_REQ.values():   # the grown-up said "It's me": this Hub opens their screen even if its page reloaded meanwhile
                 if r_["ip"] == self.client_address[0] and r_["status"] == "ok" and not r_.get("used") and time.time() - r_["ts"] < 180 \
                         and r_.get("purpose", "login") == "login":
                     r_["used"] = True
                     st["adult_go"] = r_["who"]
-            acked = set(seen.get("ann:" + self.client_address[0], []))
-            st["news_seen_kids"] = {k["id"]: seen.get("kid:" + k["id"]) for k in st["config"]["kids"]}
-            st["ann_seen_kids"] = {k["id"]: seen.get("ann:kid:" + k["id"], []) for k in st["config"]["kids"]}
-            shut = {x["id"] for x in st["config"]["chores"] if x.get("closed")}   # e.g. a robot hero job that closed again
-            st["announce_all"] = [{"id": b["bonus_id"], "chore": cid, "price": b["price"], "base": b["base"]}
-                                  for cid, b in st["board"].items() if b.get("bonus") and b.get("bonus_id") and not b["clean_until"]
-                                  and cid not in shut]
-            st["announce"] = [{"id": b["bonus_id"], "chore": cid, "price": b["price"], "base": b["base"]}
-                              for cid, b in st["board"].items()
-                              if b["bonus"] and b["bonus_id"] and not b["clean_until"] and b["bonus_id"] not in acked and cid not in shut]
             return self.send(200, st)
         if p == "/api/house_jobs":   # the grown-ups' house jobs (Grocy), ranked for one screen or overall
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)

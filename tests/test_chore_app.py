@@ -127,6 +127,22 @@ class App:
         conn.close()
         return response.status, payload
 
+    def get(self, path, headers=None, source_ip=None):
+        if source_ip:
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10,
+                                              source_address=(source_ip, 0))
+            conn.request("GET", path, headers=headers or {})
+            response = conn.getresponse()
+            payload = json.loads(response.read() or b"{}")
+            conn.close()
+            return response.status, payload
+        req = urllib.request.Request(self.base + path, headers=headers or {})
+        try:
+            response = urllib.request.urlopen(req, timeout=10)
+            return response.status, json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read() or b"{}")
+
     def state(self):
         return json.loads(urllib.request.urlopen(self.base + "/api/state", timeout=10).read())
 
@@ -416,6 +432,63 @@ class Case(unittest.TestCase):
 
     def tearDown(self):
         self.app.close()
+
+
+class KidPreviewProjectionTests(Case):
+    def setUp(self):
+        super().setUp()
+        config = json.loads((self.app.dir / "chores.json").read_text())
+        config["kids"][0]["pin_hash"] = self.s.make_kid_pin_hash("1234")
+        (self.app.dir / "chores.json").write_text(json.dumps(config))
+        (self.app.dir / "whatsnew.json").write_text(json.dumps([
+            {"v": "preview-news", "ts": time.time(), "items": [{"icon": "2728", "text": "Preview news"}]}
+        ]))
+        (self.app.dir / "news_seen.json").write_text(json.dumps({
+            "kid:ava": "older-news", "kid:max": "preview-news",
+            "ann:kid:ava": [], "ann:kid:max": ["already-seen"]
+        }))
+        self.s.ADULT_REQ["login-preview"] = {"who": "jordan", "ip": "127.0.0.1", "ts": time.time(),
+                                               "status": "ok", "purpose": "login"}
+
+    def preview(self, kid="ava", user="home-assistant-user-id", source_ip=None):
+        return self.app.get("/api/kid_preview?kid=" + kid, {"X-HA-User": user}, source_ip)
+
+    def test_lead_adult_only_projection_matches_canonical_state_without_side_effects_or_secrets(self):
+        before_files = {path.relative_to(self.app.dir).as_posix(): path.read_bytes()
+                        for path in self.app.dir.rglob("*") if path.is_file()}
+        before_sessions = json.loads(json.dumps(self.s.GUARD.get("kid_sessions") or {}))
+        before_presence = json.loads(json.dumps(self.s.GUARD.get("kid_display_where") or {}))
+
+        code, reply = self.preview()
+        self.assertEqual(code, 200, reply)
+        state = reply["state"]
+        self.assertEqual(reply, {"ok": True, "kid": "ava", "read_only": True, "state": state})
+        self.assertEqual(state["preview"], {"kid": "ava", "read_only": True, "skip_pin": True,
+                                             "canonical_state": True, "mutation_transport": None})
+        self.assertTrue(state["news_unseen"])
+        self.assertEqual(state["news_seen_kids"]["ava"], "older-news")
+        self.assertEqual(state["awards"], self.s.derive()["awards"])
+        self.assertEqual((state["peer_pin_reset"], state["peer_pin_reset_capable"], state["pin_reset_open"]),
+                         (None, False, {}))
+        self.assertNotIn("adult_go", state)
+        self.assertNotIn("pin_hash", json.dumps(reply))
+        self.assertNotIn("kid_session", json.dumps(reply))
+        self.assertEqual(self.s.GUARD.get("kid_sessions") or {}, before_sessions)
+        self.assertEqual(self.s.GUARD.get("kid_display_where") or {}, before_presence)
+        self.assertNotIn("used", self.s.ADULT_REQ["login-preview"])
+        after_files = {path.relative_to(self.app.dir).as_posix(): path.read_bytes()
+                       for path in self.app.dir.rglob("*") if path.is_file()}
+        self.assertEqual(after_files, before_files)
+
+        code, max_reply = self.preview("max")
+        self.assertEqual(code, 200, max_reply)
+        self.assertFalse(max_reply["state"]["news_unseen"])
+
+    def test_preview_rejects_missing_or_spoofed_identity_remote_clients_and_unknown_kids(self):
+        self.assertEqual(self.app.get("/api/kid_preview?kid=ava")[0], 403)
+        self.assertEqual(self.preview(user="someone-else")[0], 403)
+        self.assertEqual(self.preview(source_ip="127.0.0.2")[0], 403)
+        self.assertEqual(self.preview("nobody")[0], 404)
 
 
 # ---------------------------------------------------------------- who may do what
