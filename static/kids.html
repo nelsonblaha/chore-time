@@ -594,7 +594,7 @@ function paperEligible(){return (S.config.chores||[]).some(function(c){return c.
 function openPaper(p){var pages=(p.pages||[]).filter(function(x){return /^\/local\/chore-papers\/[a-zA-Z0-9_-]+\.jpg$/.test(x)});if(!pages.length)return;
   $("papertitle").textContent=p.title||"Paper";$("paperpages").innerHTML=pages.map(function(src,i){return '<img src="'+safeText(src)+'" alt="Page '+(i+1)+'">'}).join("");$("paperpreview").classList.add("on");$("paperpages").scrollTop=0;L("paper_open",{id:p.id,kind:p.kind,pages:pages.length})}
 function closePaper(){$("paperpreview").classList.remove("on");$("paperpages").innerHTML=""}
-function scanPaper(kind){var label=kind==="school"?"school paper":"personal paper";
+function scanPaper(kind){var label=kind==="school"?"school paper":"personal paper";if(kind==="school"&&packChoresRequired(kid)){modal('<div class="big">'+E("1f9f3")+'</div><div class="q">Pack for the train first!</div><div class="q" style="font-size:25px">School-paper scanning comes back when packing is done.</div>');addOk();return}
   modal('<div class="big">'+E("1f4c4")+E("1f5a8")+'</div><div class="q">Scan a '+label+'</div><div class="q" style="font-size:25px;text-align:left;max-width:650px;margin:auto"><b>1.</b> Put every page in the Brother feeder.<br><b>2.</b> Tap the button below before you scan.<br><b>3.</b> On the Brother, scan to the usual Google Drive destination.</div><div class="faces"><div class="btn yes" id="paperready" style="font-size:30px;font-weight:900;padding:12px 24px">I’m ready to scan</div></div>');
   $("paperready").onclick=function(){api("/api/paper_scan_start",{kid:kid,kind:kind}).then(function(r){if(!r.ok){modal('<div class="q">'+safeText(r.error||"Scanning is not available")+'</div>');addOk();return}
     var scan=r.scan;modal('<div class="big">'+E("1f5a8")+'</div><div class="q">Now scan it on the Brother</div><div class="q" style="font-size:25px">This screen is waiting for the new file. Leave the paper in the Drive scanner folder when it finishes.</div><div class="q" id="paperwait" style="font-size:22px;opacity:.75">Waiting…</div>');
@@ -630,7 +630,7 @@ function renderKidMenu(){
     '<div class="kmcard" id="kmnews"><span class="kmi">'+E("1f4f0")+'</span> News<span class="kms">What is new for the kids</span></div>'+
     (paperEligible()?'<div class="kmcard" id="kmschool"><span class="kmi">'+E("1f3eb")+'</span> School Papers<span class="kms">Review scans and add another</span></div><div class="kmcard" id="kmpersonal"><span class="kmi">'+E("1f4c1")+'</span> Personal Papers<span class="kms">Your own scanned-paper shelf</span></div>':'')+
     '<div class="kmcard" id="kmcalendar" style="grid-column:1/-1;background:#e3f2fd"><span class="kmi">'+E("1f4c5")+'</span> Calendar<span class="kms">Open the family week</span></div>'+
-    ((PACK_TEST&&kid==="packing_test")||packEnabled(kid)?'<div class="kmcard" id="kmpacking" style="grid-column:1/-1;background:#fff3c4"><span class="kmi">'+E("1f9f3")+'</span> Packing quest<span class="kms">'+(packRequired(kid)?'Finish this before rewards · chores stay open':(((S.packing_game.progress||{})[kid]||{}).complete?'Packed and ready!':'Pack for the train'))+'</span></div>':'')+
+    ((PACK_TEST&&kid==="packing_test")||packEnabled(kid)?'<div class="kmcard" id="kmpacking" style="grid-column:1/-1;background:#fff3c4"><span class="kmi">'+E("1f9f3")+'</span> Packing quest<span class="kms">'+(packChoresRequired(kid)?'Finish this before rewards and regular chores':packRequired(kid)?'Finish this before rewards':(((S.packing_game.progress||{})[kid]||{}).complete?'Packed and ready!':'Pack for the train'))+'</span></div>':'')+
     (!HA_MODE&&K().pin_required?'<div class="kmcard" id="kmpin" style="grid-column:1/-1;background:#ede7f6"><span class="kmi">'+E("1f512")+'</span> Change my PIN<span class="kms">Enter the old PIN, then choose a new one</span></div>':'')+
     '<div class="kmcard" id="kmgoal" style="grid-column:1/-1"><span class="kmi">'+E(G.r.icon)+'</span> Goal: '+safeText(G.r.name)+'<span class="kms">'+b+' of '+gc+' points'+(b>=gc?' · ready!':' · '+(gc-b)+' to go')+'</span></div></div>';
   $("kmenu").classList.toggle("on",MENU);
@@ -682,8 +682,8 @@ function renderKid(){
   $("barlbl").innerHTML=(p?E("1f50d")+" +"+p+" waiting for inspection &nbsp; ":"")+(b<gc?(gc-b)+" more "+E("2b50")+" to "+E(G.r.icon)+" "+G.r.name:E("1f389")+" You have enough for "+E(G.r.icon)+" "+G.r.name+"! "+E("1f389"));
   renderKidMenu();
   renderProjects();
-  var MF=((S.must_do_first||{})[kid])||{},RFIRST=((S.chores_first||{})[kid])||{},PREQ=packRequired(kid);$("mustban").style.display=MF.rewards?"block":"none";$("mustban").innerHTML=MF.rewards?E("1f4da")+' '+safeText(MF.name)+' first! '+(MF.on?'Other chores come back at '+hm12(MF.until)+'. ':'')+'Rewards come back when it is done.':"";
-  $("packban").style.display=PREQ?"block":"none";$("packban").innerHTML=PREQ?E("1f9f3")+' Pack for the train before rewards. Other chores are still open. Tap here.':"";$("packban").onclick=PREQ?packOpen:null;
+  var MF=((S.must_do_first||{})[kid])||{},RFIRST=((S.chores_first||{})[kid])||{},PREQ=packRequired(kid),PCREQ=packChoresRequired(kid);$("mustban").style.display=MF.rewards?"block":"none";$("mustban").innerHTML=MF.rewards?E("1f4da")+' '+safeText(MF.name)+' first! '+(MF.on?'Other chores come back at '+hm12(MF.until)+'. ':'')+'Rewards come back when it is done.':"";
+  $("packban").style.display=PREQ||PCREQ?"block":"none";$("packban").innerHTML=PREQ||PCREQ?E("1f9f3")+' Pack for the train first. Must-do jobs, getting dressed, and brushing teeth stay open. Tap here.':"";$("packban").onclick=PREQ||PCREQ?packOpen:null;
   var A=(S.active||{})[kid];
   if(A){var ac=S.config.chores.find(function(x){return x.id===A.chore})||{name:A.chore,icon:"2b50"};
     var tsz=(A.team||[]).length,Tm=((S.typical||{})[A.chore]||{}).minutes||ac.est_minutes||10,REC=(S.records||{})[tsz>1?A.chore+"@"+tsz:A.chore];
@@ -726,6 +726,7 @@ function renderKid(){
   if(MF.on)vis=vis.filter(function(c){return c.id===MF.chore||c.bedtime_ok});
   if(RFIRST.on&&RFIRST.chore)vis=vis.filter(function(c){return c.id===RFIRST.chore||c.bedtime_ok});
   var WD=(S.wind_down||{}).on,RW=(S.evening_routine_window||{}).on,SH=((S.shower||{})[kid]||{}),ER=((S.evening_routine||{})[kid]||{});
+  if(PCREQ)vis=vis.filter(function(c){return packChoreOpen(c,MF,RFIRST,ER)});
   if(RW&&ER.due)vis=vis.filter(function(c){return (ER.items||[]).indexOf(c.id)>=0});
   var PER=busyNow?8:12,pages=Math.max(1,Math.ceil(vis.length/PER));
   if(page>=pages)page=pages-1;
@@ -861,7 +862,10 @@ function packCfg(){return S&&S.packing_game}
 function packProfiles(c){return (c&&c.profiles)||[]}
 function packKidProfile(c,k){return packProfiles(c).find(function(p){return (p.kids||[]).indexOf(k)>=0})}
 function packEnabled(k){var c=packCfg();return !!(c&&c.activated&&packKidProfile(c,k))}
-function packRequired(k){var c=packCfg(),p=c&&c.progress&&c.progress[k];return !!(packEnabled(k)&&c.required_before_rewards&&!(p&&p.complete))}
+function packIncomplete(k){var c=packCfg(),p=c&&c.progress&&c.progress[k];return !!(packEnabled(k)&&!(p&&p.complete))}
+function packRequired(k){var c=packCfg();return !!(packIncomplete(k)&&c.required_before_rewards)}
+function packChoresRequired(k){var c=packCfg();return !!(packIncomplete(k)&&c.required_before_other_chores)}
+function packChoreOpen(c,must,first,routine){var allowed=((packCfg()||{}).chores_allowed_while_required)||["get_dressed","brush_teeth"];return allowed.indexOf(c.id)>=0||(c.id==="shower"&&(routine.items||[]).indexOf("shower")>=0)||((must.on||must.rewards)&&c.id===must.chore)||(first.on&&c.id===(first.chore||"cleanup_"+kid))||c.packing_priority||c.mandatory}
 function packProfile(c){return packProfiles(c).find(function(x){return x.id===PACK.profile})||packProfiles(c)[0]||{piles:[],final_checks:[]}}
 function packPacker(p){var ks=p.kids||[];return kid&&kid!=="packing_test"&&ks.indexOf(kid)>=0?kid:(ks.indexOf(PACK.packer)>=0?PACK.packer:ks[0]||null)}
 function packItem(p,x){var who=packPacker(p),y=Object.assign({},x);if(who&&x.name_for&&x.name_for[who])y.name=x.name_for[who];if(who&&x.icon_for&&x.icon_for[who])y.icon=x.icon_for[who];return y}

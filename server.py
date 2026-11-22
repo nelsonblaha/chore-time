@@ -302,8 +302,41 @@ def packing_reward_gate(state, participants):
         if packing_profile(game, kid) and not ((game.get("progress") or {}).get(kid) or {}).get("complete"):
             name = next((x.get("name") for x in (state.get("config") or {}).get("kids", [])
                          if x.get("id") == kid), kid)
-            return {"kid": kid, "name": name, "message": "Pack for the train first! You can still do other chores."}
+            return {"kid": kid, "name": name,
+                    "message": "Pack for the train first! Mandatory jobs, getting dressed, and brushing teeth stay open."}
     return None
+
+
+def packing_chore_gate(state, kid, chore_id):
+    """Hold ordinary jobs while this child's required packing quest is incomplete.
+
+    Required household work always wins over the trip gate. The explicit list covers
+    ordinary morning/evening duties; live mandatory gates contribute their current
+    chore (or the built-in clean-up job) so overlapping policies cannot deadlock.
+    """
+    game = state.get("packing_game") or {}
+    if not game.get("activated") or not game.get("required_before_other_chores"):
+        return None
+    if not packing_profile(game, kid) or ((game.get("progress") or {}).get(kid) or {}).get("complete"):
+        return None
+    allowed = set(game.get("chores_allowed_while_required") or ("get_dressed", "brush_teeth"))
+    routine = ((state.get("evening_routine") or {}).get(kid) or {}).get("items") or []
+    if "shower" in routine:  # a due shower is mandatory; an optional one is not
+        allowed.add("shower")
+    must = (state.get("must_do_first") or {}).get(kid) or {}
+    if (must.get("on") or must.get("rewards")) and must.get("chore"):
+        allowed.add(must["chore"])
+    first = (state.get("chores_first") or {}).get(kid) or {}
+    if first.get("on"):
+        allowed.add(first.get("chore") or "cleanup_" + str(kid))
+    chore = next((x for x in (state.get("config") or {}).get("chores", []) if x.get("id") == chore_id), {})
+    if chore_id in allowed or chore.get("packing_priority") or chore.get("mandatory"):
+        return None
+    name = next((x.get("name") for x in (state.get("config") or {}).get("kids", [])
+                 if x.get("id") == kid), kid)
+    return {"kid": kid, "name": name,
+            "message": "Pack for the train first! You can still do mandatory jobs, get dressed, and brush your teeth.",
+            "allowed_chores": sorted(x for x in allowed if x)}
 
 
 def save_peer_pin_resets():
@@ -4178,6 +4211,11 @@ class H(BaseHTTPRequestHandler):
                 team_ = list(dict.fromkeys([leader_] + list(b.get("team") or b.get("partners") or [])))
                 if leader_ not in kids or any(x not in kids for x in team_):
                     return self.send(400, {"error": "unknown kid"})
+                packing_gate_ = next((gate_ for gate_ in
+                                      (packing_chore_gate(st, who_, ch_.get("id")) for who_ in team_) if gate_), None)
+                if packing_gate_:
+                    return self.send(409, {"error": packing_gate_["message"],
+                                           "packing_required": packing_gate_})
                 if ch_.get("only") and any(x not in ch_["only"] for x in team_):
                     return self.send(409, {"error": "That team is not eligible for this project."})
                 if any(not is_here(ch_, c, x) for x in team_):
@@ -4298,6 +4336,10 @@ class H(BaseHTTPRequestHandler):
                             (not x.get("only") or kid_ in x["only"])), None)
             if kid_ not in kids or kind_ not in ("school", "personal") or not school_:
                 return self.send(400, {"error": "paper scanning is not available for this profile"})
+            packing_gate_ = packing_chore_gate(st, kid_, school_["id"]) if kind_ == "school" else None
+            if packing_gate_:
+                return self.send(409, {"error": packing_gate_["message"],
+                                       "packing_required": packing_gate_})
             scan_id_ = uuid.uuid4().hex[:12]
             PAPER_SCANS[scan_id_] = {"id": scan_id_, "kid": kid_, "kind": kind_, "chore": school_["id"],
                                      "ts": time.time(), "expires": time.time() + 20 * 60, "status": "waiting"}
@@ -4593,6 +4635,20 @@ class H(BaseHTTPRequestHandler):
             kid_ = b.get("kid")
             gate_ = (st.get("must_do_first") or {}).get(kid_) or {}
             chore_ = b.get("chore") or (st.get("paused", {}).get(kid_) or {}).get("chore")
+            packing_kids_ = [kid_]
+            if p == "/api/team":
+                packing_kids_ += list(b.get("partners") or [])
+            elif p == "/api/report":
+                packing_kids_ += list((st.get("active", {}).get(kid_) or {}).get("team") or [])
+            elif p == "/api/resume":
+                packing_kids_ += list((st.get("paused", {}).get(kid_) or {}).get("team") or [])
+            packing_gate_ = next((gate_ for gate_ in
+                                  (packing_chore_gate(st, who_, chore_) for who_ in dict.fromkeys(packing_kids_))
+                                  if gate_), None)
+            if packing_gate_:
+                prefix_ = "" if packing_gate_["kid"] == kid_ else packing_gate_["name"] + ": "
+                return self.send(409, {"error": prefix_ + packing_gate_["message"],
+                                       "packing_required": packing_gate_})
             if gate_.get("on") and chore_ != gate_.get("chore") and not (chores.get(chore_) or {}).get("bedtime_ok"):
                 return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
             cleanup_gate_ = (st.get("chores_first") or {}).get(kid_) or {}
