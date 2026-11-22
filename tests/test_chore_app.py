@@ -3521,6 +3521,7 @@ class ChoresFirst(Case):
     def test_spotify_volume_cap_is_parent_verified_durable_and_published_in_manifest(self):
         a = App(base_config())
         self.assertEqual(a.state()["spotify_volume_cap"], 100)
+        self.assertEqual(a.state()["spotify_exempt_rooms"], ["office", "primary_bedroom"])
         self.assertEqual(a.post("/api/spotify_volume_cap", {"cap": 37, "by": "jordan"})[0], 403)
         self.assertEqual(a.post("/api/spotify_volume_cap", {"cap": 37, "by": "casey"},
                                 {"X-HA-User": "home-assistant-user-id"})[0], 403)
@@ -3552,14 +3553,21 @@ class ChoresFirst(Case):
             a.s.ha_post_state = old_post
         manifest = next(x["attributes"] for x in reversed(sent) if x["entity"] == "sensor.chore_state")
         self.assertEqual(manifest["spotify_volume_cap"], 37)
+        self.assertEqual(manifest["spotify_exempt_rooms"], ["office", "primary_bedroom"])
         self.assertNotIn("music_block", manifest)
         self.assertNotIn("now", manifest)
         parts = sorted((x["attributes"] for x in sent if x["attributes"].get("revision") == manifest["revision"]
                         and "payload" in x["attributes"]), key=lambda x: x["part"])
         full = json.loads("".join(x["payload"] for x in parts))
         self.assertEqual(full["spotify_volume_cap"], 37)
+        self.assertEqual(full["spotify_exempt_rooms"], ["office", "primary_bedroom"])
         self.assertEqual(full["music_block"], saved["state"]["music_block"])
         a.close()
+
+    def test_spotify_exempt_rooms_are_deduplicated_and_published(self):
+        self.s.HOUSE["spotify"] = {"exempt_rooms": ["office", "primary_bedroom", "office", ""]}
+        state = self.app.state()
+        self.assertEqual(state["spotify_exempt_rooms"], ["office", "primary_bedroom"])
 
     def test_spotify_block_includes_scheduled_mandatory_jobs(self):
         state = self.s.music_block_state(

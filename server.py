@@ -1293,6 +1293,13 @@ def spotify_volume_cap_state(evs):
     return cap
 
 
+def spotify_exempt_rooms():
+    """Physical room ids where chore policy must never touch Spotify playback."""
+    raw = (HOUSE.get("spotify") or {}).get("exempt_rooms") or []
+    return list(dict.fromkeys(str(room).strip() for room in raw
+                              if isinstance(room, str) and room.strip()))
+
+
 def kid_notes(evs):
     """grown-ups' one-time messages to a kid ("we gave your stars back"): unseen ones, shown when they open their screen"""
     seen = {e["ref"] for e in evs if e["type"] == "kid_note_seen"}
@@ -2621,6 +2628,7 @@ def derive():
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
             "spotify_volume_cap": spotify_volume_cap_state(evs),
+            "spotify_exempt_rooms": spotify_exempt_rooms(),
             "reward_block": reward_block_state(),
             "kid_notes": kid_notes(evs), "requests": reward_requests(evs),
             "room_choices": (HOUSE.get("house_tasks") or {}).get("floors") or {}, "envelope": envelopes.public(),
@@ -2686,7 +2694,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "reward_block", "room_choices", "hub_placement_review",
+DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
              "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",
@@ -2816,6 +2824,7 @@ def push_state_sensor(state=None, last_result=None):
              "dress": state.get("dress"), "chores_first": state.get("chores_first"), "must_do_first": state.get("must_do_first"),
              "music_block": state.get("music_block"),
              "spotify_volume_cap": state.get("spotify_volume_cap", 100),
+             "spotify_exempt_rooms": state.get("spotify_exempt_rooms", []),
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"), "papers": state.get("papers"),
              "paper_scan_ready": state.get("paper_scan_ready"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
@@ -2853,7 +2862,8 @@ def push_state_sensor(state=None, last_result=None):
     try:
         publish_chunked_state("sensor.chore_state", attrs, tok, "state_sig",
                               {"version": attrs.get("version"), "last_result": attrs.get("last_result"),
-                               "spotify_volume_cap": attrs.get("spotify_volume_cap", 100)})
+                               "spotify_volume_cap": attrs.get("spotify_volume_cap", 100),
+                               "spotify_exempt_rooms": attrs.get("spotify_exempt_rooms", [])})
     except Exception as ex:  # noqa: BLE001
         print("HA state push failed", ex, flush=True)
 

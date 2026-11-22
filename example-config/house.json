@@ -22,6 +22,12 @@
     "min_probability": 0.8,
     "room_aliases": {}
   },
+  "spotify": {
+    "exempt_rooms": [
+      "office",
+      "primary_bedroom"
+    ]
+  },
   "mail_delivery": {
     "entity": "sensor.google_home_camera_front_porch",
     "chore": "mail",
