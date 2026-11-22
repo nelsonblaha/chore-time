@@ -3297,8 +3297,8 @@ class ChoresFirst(Case):
             a.s.ha_post_state = old_post
         manifest = next(x["attributes"] for x in reversed(sent) if x["entity"] == "sensor.chore_state")
         self.assertEqual(manifest["spotify_volume_cap"], 37)
-        self.assertEqual(manifest["music_block"], saved["state"]["music_block"])
-        self.assertAlmostEqual(manifest["now"], saved["state"]["now"], delta=.01)
+        self.assertNotIn("music_block", manifest)
+        self.assertNotIn("now", manifest)
         parts = sorted((x["attributes"] for x in sent if x["attributes"].get("revision") == manifest["revision"]
                         and "payload" in x["attributes"]), key=lambda x: x["part"])
         full = json.loads("".join(x["payload"] for x in parts))

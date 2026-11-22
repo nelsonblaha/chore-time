@@ -2610,7 +2610,6 @@ def push_state_sensor(state=None, last_result=None):
     try:
         publish_chunked_state("sensor.chore_state", attrs, tok, "state_sig",
                               {"version": attrs.get("version"), "last_result": attrs.get("last_result"),
-                               "now": state.get("now"), "music_block": attrs.get("music_block"),
                                "spotify_volume_cap": attrs.get("spotify_volume_cap", 100)})
     except Exception as ex:  # noqa: BLE001
         print("HA state push failed", ex, flush=True)
