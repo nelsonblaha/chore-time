@@ -2913,12 +2913,14 @@ def derive():
         evening_routine[kid_] = {"due": bool(items_), "items": items_}
     present = sorted(GUARD.get("home_now") or []) if "GUARD" in globals() else []
     assist_requests = [{"nonce": n, "kid": r.get("kid"), "chore": r.get("chore"), "reward": r.get("reward"),
+                        "first_pin": bool(r.get("first_pin")),
                         "purpose": r.get("purpose"), "who": r.get("who"), "ts": r["ts"],
                         "expires": r["ts"] + ADULT_REQUEST_TTL_S}
                        for n, r in ADULT_REQ.items() if r.get("purpose") in ("assist", "reward", "pin_reset")
                        and r.get("status") == "pending" and time.time() - r["ts"] <= ADULT_REQUEST_TTL_S] \
         if "ADULT_REQ" in globals() else []
-    pin_reset_open = {r["kid"]: {"until": r.get("until"), "nonce": n}
+    pin_reset_open = {r["kid"]: {"until": r.get("until"), "nonce": n,
+                                  "first_pin": bool(r.get("first_pin"))}
                       for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset" and r.get("status") == "ok"
                       and not r.get("used") and float(r.get("until") or 0) > time.time()} \
         if "ADULT_REQ" in globals() else {}
@@ -3343,7 +3345,10 @@ def send_adult_request(nonce, who, where):
         c = cfg()
         kn = next((k["name"] for k in c["kids"] if k["id"] == req.get("kid")), req.get("kid", "A kid"))
         if req.get("purpose") == "pin_reset":
-            title, message = "Chores: forgotten PIN", "%s forgot their PIN. Open a 10-minute first-come window to set a new one?" % kn
+            if req.get("first_pin"):
+                title, message = "Chores: first PIN", "%s wants to set their first PIN. Approve a 10-minute setup window?" % kn
+            else:
+                title, message = "Chores: forgotten PIN", "%s forgot their PIN. Open a 10-minute first-come window to set a new one?" % kn
         elif req.get("purpose") == "reward":
             rw = next((x for x in c["rewards"] if x["id"] == req.get("reward")), {})
             title, message = "Chores: VR permission", "%s wants to redeem %s for %s⭐. Are you available to help?" % (
@@ -3352,7 +3357,7 @@ def send_adult_request(nonce, who, where):
             ch = next((x for x in c["chores"] if x["id"] == req.get("chore")), {})
             title, message = "Chores: first-time help needed", "%s wants to do %s (%s⭐). Can you teach and help this first time?" % (
                 kn, ch.get("name", "this chore"), ch.get("points", "?"))
-        actions = [{"action": "CHORE_OK_" + nonce, "title": "Open reset" if req.get("purpose") == "pin_reset" else "Allow now" if req.get("purpose") == "reward" else "Help now"},
+        actions = [{"action": "CHORE_OK_" + nonce, "title": ("Approve setup" if req.get("first_pin") else "Open reset") if req.get("purpose") == "pin_reset" else "Allow now" if req.get("purpose") == "reward" else "Help now"},
                    {"action": "CHORE_NO_" + nonce, "title": "Dismiss" if req.get("purpose") == "pin_reset" else "Busy, later (1 hour)"}]
     else:
         title = "Chores: is this you?"
@@ -4102,16 +4107,41 @@ class H(BaseHTTPRequestHandler):
                     and not valid_kid_session(b.get("kid_session"), packer_, display_ip_):
                 return self.send(403, {"error": "Open your profile with your PIN first." if is_child_
                                                    else "Use the signed-in grown-up Chore dashboard."})
-            clean_ = sanitize_packing_progress(game_, packer_, b.get("progress") or {})
-            if not clean_:
-                return self.send(400, {"error": "That packing update did not make sense."})
-            if clean_["phase"] == "complete" and not packing_complete(game_, packer_, clean_):
-                return self.send(409, {"error": "Every packed item and final check must pass first."})
             with PACKING_LOCK:
                 saved_ = load_private_json(PACKING_PROGRESS_FILE, {})
                 if saved_.get("version") != game_.get("version"):
                     saved_ = {"version": game_.get("version"), "kids": {}}
                 old_ = (saved_.get("kids") or {}).get(packer_) or {}
+                raw_ = b.get("progress") or {}
+                mark_ = b.get("mark")
+                if mark_ is not None:
+                    if not adult_child_ or not isinstance(mark_, dict):
+                        return self.send(403, {"error": "Only a signed-in grown-up can inspect packing items."})
+                    item_ = str(mark_.get("item") or "")
+                    value_ = str(mark_.get("value") or "")
+                    if item_ not in packing_item_ids(profile_, packer_) or value_ not in ("present", "missing"):
+                        return self.send(400, {"error": "That packing inspection choice did not make sense."})
+                    raw_ = json.loads(json.dumps(old_))
+                    raw_.setdefault("ready", {})
+                    raw_.setdefault("checked", {})
+                    raw_.setdefault("packed", {})
+                    if value_ == "present":
+                        raw_["ready"][item_] = True
+                        raw_["checked"][item_] = "pass"
+                        all_present_ = all(raw_["checked"].get(x) == "pass"
+                                           for x in packing_item_ids(profile_, packer_))
+                        raw_["phase"] = "pack" if all_present_ else "inspect"
+                    else:
+                        raw_["ready"].pop(item_, None)
+                        raw_["packed"].pop(item_, None)
+                        raw_["checked"][item_] = "fix"
+                        raw_["phase"] = "layout"
+                    raw_["seq"] = max(int(old_.get("seq") or 0) + 1, int(time.time() * 1000))
+                clean_ = sanitize_packing_progress(game_, packer_, raw_)
+                if not clean_:
+                    return self.send(400, {"error": "That packing update did not make sense."})
+                if clean_["phase"] == "complete" and not packing_complete(game_, packer_, clean_):
+                    return self.send(409, {"error": "Every packed item and final check must pass first."})
                 child_error_ = child_packing_update_error(game_, packer_, old_, clean_) \
                     if is_child_ and not adult_child_ else None
                 if child_error_:
@@ -4704,16 +4734,19 @@ class H(BaseHTTPRequestHandler):
             ok_, error_ = attest_hub_placement(b.get("nonce"), b["by"])
             return self.send(200 if ok_ else 409, {"ok": ok_, "error": error_, "state": derive()})
         if p == "/api/kid_pin_reset_request":
-            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
+            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid")), None)
             if not kid_:
-                return self.send(404, {"error": "That profile does not have a PIN."})
+                return self.send(404, {"error": "unknown kid"})
+            first_pin_ = not kid_.get("pin_hash")
             approved_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset"
                               and r.get("kid") == kid_["id"] and r.get("status") == "ok" and not r.get("used")
+                              and bool(r.get("first_pin")) == first_pin_
                               and float(r.get("until") or 0) > time.time()), None)
             if approved_:
                 return self.send(200, {"ok": True, "nonce": approved_, "state": derive()})
             old_ = next((n for n, r in ADULT_REQ.items() if r.get("purpose") == "pin_reset"
                          and r.get("kid") == kid_["id"] and r.get("status") == "pending"
+                         and bool(r.get("first_pin")) == first_pin_
                          and time.time() - r["ts"] < ADULT_REQUEST_TTL_S), None)
             nonce_ = old_ or uuid.uuid4().hex[:8]
             if not old_:
@@ -4721,19 +4754,27 @@ class H(BaseHTTPRequestHandler):
                 if not target_:
                     return self.send(409, {"error": "No grown-up reset contact is configured."})
                 ADULT_REQ[nonce_] = {"who": target_, "ip": display_ip_, "ts": time.time(),
-                                     "status": "pending", "purpose": "pin_reset", "kid": kid_["id"]}
+                                     "status": "pending", "purpose": "pin_reset", "kid": kid_["id"],
+                                     "first_pin": first_pin_}
                 save_adult_requests()
                 threading.Thread(target=send_adult_request, args=(nonce_, target_, "chore screen"), daemon=True).start()
                 after_change()
-            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": display_ip_, "action": "reset_requested"})
+            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": display_ip_,
+                  "action": "first_pin_requested" if first_pin_ else "reset_requested"})
             return self.send(200, {"ok": True, "nonce": nonce_, "state": derive()})
         if p == "/api/kid_pin_change":
-            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
+            kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid")), None)
             if not kid_:
-                return self.send(404, {"error": "That profile does not have a PIN."})
-            reset_ = next((r for r in ADULT_REQ.values() if r.get("purpose") == "pin_reset" and r.get("kid") == kid_["id"]
-                           and r.get("status") == "ok" and not r.get("used") and float(r.get("until") or 0) > time.time()), None)
-            if not reset_ and not verify_kid_pin(kid_, b.get("current_pin")):
+                return self.send(404, {"error": "unknown kid"})
+            first_pin_ = not kid_.get("pin_hash")
+            reset_ = next((r for r in ADULT_REQ.values()
+                if r.get("purpose") == "pin_reset" and r.get("kid") == kid_["id"] and r.get("status") == "ok"
+                and bool(r.get("first_pin")) == first_pin_ and not r.get("used")
+                and float(r.get("until") or 0) > time.time()), None)
+            if first_pin_:
+                if not reset_:
+                    return self.send(403, {"error": "A grown-up must approve setting the first PIN."})
+            elif not reset_ and not verify_kid_pin(kid_, b.get("current_pin")):
                 return self.send(403, {"error": "The current PIN did not match."})
             try:
                 new_hash_ = make_kid_pin_hash(b.get("new_pin"))
@@ -4753,10 +4794,10 @@ class H(BaseHTTPRequestHandler):
                         row_["used"] = True
                 save_adult_requests()
             ilog({"src": "kid_pin", "kid": kid_["id"], "ip": display_ip_,
-                  "action": "changed_after_reset" if reset_ else "changed"})
+                  "action": "set_first" if first_pin_ else "changed_after_reset" if reset_ else "changed"})
             after_change()
             session_ = issue_kid_session(kid_["id"], display_ip_)
-            return self.send(200, {"ok": True, "kid_session": session_, "state": derive()})
+            return self.send(200, {"ok": True, "kid_session": session_, "state": state_for_display(display_ip_)})
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})

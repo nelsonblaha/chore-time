@@ -230,6 +230,10 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Waiting for grown-up inspection", kids)
         self.assertIn("data-present", grown)
         self.assertIn("data-final-present", grown)
+        self.assertIn('ready+checked+packed', grown)
+        self.assertIn('laid out":phase==="inspect"', grown)
+        self.assertIn("data-openitem", grown)
+        self.assertIn('mark:{item:item,value:value}', grown)
 
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
@@ -604,20 +608,22 @@ class PackingRewardGateTests(unittest.TestCase):
 
     def test_authenticated_parent_can_mark_a_child_item_present_or_missing(self):
         a = self.app
+        token = a.kid_sessions("ava")["ava"]
+        self.assertEqual(a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                        "progress": self.stage(["shirt", "hair"], "inspect", 20)})[0], 200)
         body = {"packer": "ava", "by": "jordan",
-                "progress": self.stage(["shirt", "hair"], "inspect", 20)}
+                "mark": {"item": "shirt", "value": "present"}}
         self.assertEqual(a.post("/api/packing_update", body)[0], 403)
         code, present = a.post("/api/packing_update", body, {"X-HA-User": "jordan-ha"})
         self.assertEqual(code, 200, present)
         self.assertEqual(present["state"]["packing_game"]["progress"]["ava"]["phase"], "inspect")
-        missing = self.stage(["shirt", "hair"], "layout", 21)
-        missing["ready"].pop("hair")
-        missing["checked"] = {"shirt": "pass", "hair": "fix"}
-        code, handed_back = a.post("/api/packing_update", {"packer": "ava", "by": "jordan",
-                                                           "progress": missing},
-                                          {"X-HA-User": "jordan-ha"})
+        self.assertEqual(present["state"]["packing_game"]["progress"]["ava"]["checked"]["shirt"], "pass")
+        code, handed_back = a.post("/api/packing_update", {
+            "packer": "ava", "by": "jordan", "mark": {"item": "hair", "value": "missing"}},
+            {"X-HA-User": "jordan-ha"})
         self.assertEqual(code, 200, handed_back)
         self.assertEqual(handed_back["state"]["packing_game"]["progress"]["ava"]["checked"]["hair"], "fix")
+        self.assertEqual(handed_back["state"]["packing_game"]["progress"]["ava"]["phase"], "layout")
 
     def test_private_packing_editor_preserves_version_and_saved_progress(self):
         a = self.app
@@ -1086,6 +1092,28 @@ class SoundSettings(Case):
             "kid":"ava","pin":"12345678910"})[0],200)
         self.assertEqual(self.app.post("/api/kid_unlock",{
             "kid":"ava","pin":"1234567891"})[0],403)
+
+    def test_kid_without_a_pin_can_set_the_first_one_from_their_open_hub_profile(self):
+        self.assertEqual(self.app.post("/api/kid_pin_change", {
+            "kid": "max", "new_pin": "8642"})[0], 403)
+        opened = self.app.post("/api/kid_unlock", {"kid": "max"})
+        self.assertEqual(opened[0], 200)
+        self.assertEqual(self.app.post("/api/kid_pin_change", {
+            "kid": "max", "kid_session": opened[1]["kid_session"], "new_pin": "8642"})[0], 403)
+        requested = self.app.post("/api/kid_pin_reset_request", {"kid": "max"})
+        self.assertEqual(requested[0], 200)
+        nonce = requested[1]["nonce"]
+        request = next(q for q in requested[1]["state"]["assist_requests"] if q["nonce"] == nonce)
+        self.assertTrue(request["first_pin"])
+        self.assertEqual(self.app.post("/api/assist_answer", {
+            "nonce": nonce, "ok": True, "by": "jordan"})[0], 200)
+        changed = self.app.post("/api/kid_pin_change", {
+            "kid": "max", "kid_session": opened[1]["kid_session"], "new_pin": "8642"})
+        self.assertEqual(changed[0], 200, changed)
+        self.assertTrue(next(k for k in changed[1]["state"]["config"]["kids"]
+                             if k["id"] == "max")["pin_required"])
+        self.assertEqual(self.app.post("/api/kid_unlock", {"kid": "max"})[0], 403)
+        self.assertEqual(self.app.post("/api/kid_unlock", {"kid": "max", "pin": "8642"})[0], 200)
 
 
 class PeerKidPinReset(Case):
