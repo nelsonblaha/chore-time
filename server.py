@@ -1293,8 +1293,20 @@ def reward_cost(r, watching=1):
     return r["cost"]
 
 
+def saved_movie_remaining_fraction(playback):
+    """Safe public fraction from a private paused-player snapshot, or None."""
+    try:
+        duration = float((playback or {})["dur"])
+        position = float((playback or {})["pos"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if duration <= 0 or position < 0 or position > duration:
+        return None
+    return max(0.0, min(1.0, (duration - position) / duration))
+
+
 def reward_join_price(reward, watching, started_at, until, tv=None, session_id=None, now=None,
-                      timeline_get=None):
+                      timeline_get=None, movie_progress=None):
     """Price only the late joiner's remaining share; never extend the clock.
 
     A verified movie cursor is the best measure of what the newcomer receives.
@@ -1306,8 +1318,12 @@ def reward_join_price(reward, watching, started_at, until, tv=None, session_id=N
     total = max(1.0, float(until) - float(started_at))
     fraction = max(0.0, min(1.0, (float(until) - now) / total))
     source = "reward_time"
+    saved_fraction = (saved_movie_remaining_fraction(movie_progress)
+                      if reward.get("id") == "movie" else None)
+    if saved_fraction is not None:
+        fraction, source = saved_fraction, "movie_time"
     room = (TVS.get(tv) or {}).get("reward_timeline_room") if "TVS" in globals() else None
-    if reward.get("id") == "movie" and room and session_id:
+    if source != "movie_time" and reward.get("id") == "movie" and room and session_id:
         try:
             if timeline_get is None:
                 req = urllib.request.Request(
@@ -2287,6 +2303,9 @@ def derive():
                     saved_["kids"].sort(key=lambda kid_: kid_order_.get(kid_, len(kid_order_)))
                     public_saved_ = {k: v for k, v in saved_.items() if k != "playback"}
                     public_saved_["position_saved"] = bool(saved_.get("playback"))
+                    movie_fraction_ = saved_movie_remaining_fraction(saved_.get("playback"))
+                    if movie_fraction_ is not None:
+                        public_saved_["movie_remaining_fraction"] = movie_fraction_
                     tvs[saved_["tv"]].setdefault("saved_rewards", []).append(public_saved_)
                     # The TV lock page reads this exact row to explain why playback stopped.
                     tvs[saved_["tv"]]["paused_reward"] = public_saved_
@@ -3614,7 +3633,7 @@ class H(BaseHTTPRequestHandler):
                 if competing_:
                     return self.send(409, {"error": "Another reward is using this TV. Your saved time is safe."})
 
-                refunds_, cost_each_ = {}, None
+                refunds_, cost_each_, join_cost_, price_source_, cost_by_kid_ = {}, None, None, None, {}
                 if joiners_:
                     undone_ = {e["ref"] for e in raw_ if e.get("type") == "undo" and e.get("ref")}
                     old_spends_ = [e for e in raw_ if e.get("type") == "spend" and e["id"] not in undone_
@@ -3622,10 +3641,18 @@ class H(BaseHTTPRequestHandler):
                     old_spends_ = list({e["id"]: e for e in old_spends_}.values())
                     if {e.get("kid") for e in old_spends_} != set(current_):
                         return self.send(409, {"error": "That saved movie changed. Refresh and try again."})
-                    cost_each_ = reward_cost(reward_, len(participants_))
                     old_costs_ = {e["kid"]: int(e["cost"]) for e in old_spends_}
+                    now_price_ = time.time()
+                    price_ = reward_join_price(reward_, len(participants_),
+                                               now_price_ + float(saved_["remaining_s"])
+                                               - float(reward_.get("tv_minutes") or 1) * 60,
+                                               now_price_ + float(saved_["remaining_s"]), tv_, session_, now=now_price_,
+                                               movie_progress=saved_.get("playback"))
+                    cost_each_, join_cost_, price_source_ = price_["full_cost"], price_["cost"], price_["source"]
+                    cost_by_kid_ = {who_: min(old_costs_[who_], cost_each_) for who_ in current_}
+                    cost_by_kid_.update({who_: join_cost_ for who_ in joiners_})
                     for who_ in participants_:
-                        adjustment_ = cost_each_ - old_costs_.get(who_, 0)
+                        adjustment_ = cost_by_kid_[who_] - old_costs_.get(who_, 0)
                         if fresh_["balance"].get(who_, 0) < adjustment_:
                             name_ = next((x["name"] for x in c["kids"] if x["id"] == who_), who_)
                             return self.send(409, {"error": name_ + " does not have enough stars to watch."})
@@ -3637,12 +3664,14 @@ class H(BaseHTTPRequestHandler):
                 if joiners_:
                     primary_ = current_[0]
                     for who_ in participants_:
-                        append({"type": "spend", "kid": who_, "reward": saved_["reward"], "cost": cost_each_,
+                        append({"type": "spend", "kid": who_, "reward": saved_["reward"], "cost": cost_by_kid_[who_],
                                 "tv": tv_, "until": until_, "minutes": remaining_ / 60,
                                 "started_at": now_, "group": session_, "together": participants_,
                                 "by": "share_resume", **({"with_buyer": primary_} if who_ != primary_ else {}),
+                                **({"join_prorated": True, "price_fraction": price_["fraction"],
+                                    "price_source": price_source_} if who_ in joiners_ else {}),
                                 "reward_name": reward_["name"], "reward_icon": reward_["icon"]})
-                    refunds_ = {who_: max(0, old_costs_.get(who_, 0) - cost_each_) for who_ in current_}
+                    refunds_ = {who_: max(0, old_costs_.get(who_, 0) - cost_by_kid_[who_]) for who_ in current_}
                 ev_ = append({"type": "tv_reward_resume", "session": session_, "tv": tv_,
                               "remaining_s": remaining_, "until": until_,
                               "playback": saved_.get("playback"), "by": kid_,
@@ -3653,10 +3682,12 @@ class H(BaseHTTPRequestHandler):
                 after_change()
                 ilog({"src": "tv_reward", "action": "child_resume", "tv": tv_, "session": session_,
                       "remaining_s": round(remaining_), "kid": kid_, "participants": participants_,
-                      "cost_each": cost_each_})
+                      "cost_each": cost_each_, "join_cost": join_cost_, "price_source": price_source_})
                 return self.send(200, {"ok": True, "event": ev_, "remaining_s": remaining_,
                                        "participants": participants_, "refunds": refunds_,
-                                       "cost_each": cost_each_, "state": derive()})
+                                       "cost_each": cost_each_, "join_cost": join_cost_,
+                                       "cost_by_kid": cost_by_kid_, "price_source": price_source_,
+                                       "state": derive()})
         if p == "/api/project/context_approve":
             ch_ = chores.get(b.get("chore")) or {}
             if b.get("by") not in insp or not stepped_jobs.definition(ch_):

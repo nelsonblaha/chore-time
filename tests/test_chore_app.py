@@ -1027,13 +1027,35 @@ class TvRewardPauseAndSave(Case):
         self.assertEqual(resumed["participants"], ["ava", "max"])
         self.assertEqual(resumed["cost_each"], 12)
         self.assertEqual(resumed["refunds"], {"ava": 3})
+        self.assertEqual((resumed["join_cost"], resumed["price_source"]), (10, "movie_time"))
         self.assertEqual((resumed["state"]["balance"]["ava"], resumed["state"]["balance"]["max"]),
-                         (38, 18))
+                         (38, 20))
         audience = resumed["state"]["tv"]["tvs"]["livingroom"]["reward_audiences"][0]
         self.assertEqual((audience["session_id"], audience["expected_kids"], audience["state"]),
                          (self.purchase["id"], ["ava", "max"], "active"))
         self.assertAlmostEqual(audience["valid_until"] - time.time(), remaining, delta=2)
         self.assertEqual(resumed["state"]["refundable"]["ava"], [])
+
+    def test_saved_join_falls_back_to_prorated_reward_time_without_a_movie_cursor(self):
+        config_path = self.app.dir / "chores.json"
+        config = json.loads(config_path.read_text())
+        next(x for x in config["rewards"] if x["id"] == "movie")["together_cost"] = {"2": 12}
+        config_path.write_text(json.dumps(config))
+        self.app.event(type="adjust", kid="max", points=30, by="jordan", reason="test")
+        self.app.event(type="tv_set_until", tv="livingroom", until=time.time() + 3000,
+                       by="jordan", action="minus")
+        self.app.set(self.s.TVS["livingroom"]["players"][0], "idle")
+        self.assertEqual(self.action("/api/tv/reward_pause")[0], 200)
+        saved = self.app.state()["tv"]["tvs"]["livingroom"]["saved_rewards"][0]
+        self.assertNotIn("movie_remaining_fraction", saved)
+        tokens = self.app.kid_sessions("ava", "max")
+        code, resumed = self.app.post("/api/tv/reward_resume_child", {
+            "kid": "ava", "tv": "livingroom", "session_id": self.purchase["id"],
+            "with": ["max"], "kid_sessions": tokens})
+        self.assertEqual(code, 200, resumed)
+        self.assertEqual((resumed["join_cost"], resumed["price_source"]), (6, "reward_time"))
+        self.assertEqual((resumed["state"]["balance"]["ava"], resumed["state"]["balance"]["max"]),
+                         (38, 24))
 
     def test_isolated_physical_lock_path_pauses_player_then_casts_explanation(self):
         calls = []
@@ -3688,6 +3710,10 @@ class WatchingTogether(Case):
             timeline_get=lambda room: {"schema_version": 1, "grant_id": "other", "state": "paused",
                                        "duration_ms": 8_000_000, "position_ms": 7_000_000})
         self.assertEqual((wrong_session["cost"], wrong_session["source"]), (6, "reward_time"))
+        saved = self.s.reward_join_price(reward, 2, 1000, 3000, "livingroom", "session", now=now,
+                                         movie_progress={"dur": 100, "pos": 75})
+        self.assertEqual((saved["cost"], saved["source"], saved["fraction"]),
+                         (3, "movie_time", .25))
 
     def test_a_movie_together_costs_less_each(self):
         c = base_config()
