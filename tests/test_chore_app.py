@@ -251,10 +251,21 @@ class StaticUiRegressions(unittest.TestCase):
 
     def test_parent_chore_page_has_independent_spotify_volume_cap_slider(self):
         grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn('id="spotifybtn"', grown)
+        self.assertIn('openPM("spotify")', grown)
+        self.assertIn('<b>Spotify</b>', grown)
         self.assertIn('id="spotifycap" min="0" max="100" step="1"', grown)
         self.assertIn("Maximum Spotify volume", grown)
-        self.assertIn("mandatory-chores switch above remains independent", grown)
+        self.assertIn("mandatory-chores wait switch are independent", grown)
         self.assertIn('post("/api/spotify_volume_cap",{cap:cap}', grown)
+
+    def test_parent_mandatory_chore_controls_are_in_one_modal(self):
+        grown = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn('id="mandatorybtn"', grown)
+        self.assertIn('openPM("mandatory")', grown)
+        self.assertIn('data-cfstart="', grown)
+        self.assertIn('data-cfdone="', grown)
+        self.assertIn('data-cflift="', grown)
 
     def test_paused_reward_lock_page_never_borrows_another_rooms_reward(self):
         locked = (REPO / "static" / "tvlock.html").read_text()
@@ -379,7 +390,8 @@ class PackingRewardGateTests(unittest.TestCase):
         self.app.s.HOUSE["packing_game"] = {
             "version": "trip-test-v1", "activated": True, "required_before_rewards": True,
             "title": "Train packing", "icon": "1f9f3", "award_reason": "Finished train packing",
-            "profiles": [{"id": "kid", "kids": ["ava", "max"], "points": 12,
+            "profiles": [{"id": "kid", "kids": ["ava", "max"], "points": 10,
+                          "awards": {"layout": 1, "inspect": 2, "pack": 2, "complete": 5},
                           "piles": [{"id": "bag", "items": [
                               {"id": "shirt", "name": "Shirt"},
                               {"id": "hair", "name": "Hair things", "only": ["ava"]}]}],
@@ -391,6 +403,16 @@ class PackingRewardGateTests(unittest.TestCase):
                 "ready": {x: True for x in items}, "checked": {x: "pass" for x in items},
                 "packed": {x: True for x in items}, "finals": {"zip": "pass"}}
 
+    @staticmethod
+    def stage(items, phase, seq):
+        phases = ["layout", "inspect", "pack", "final", "complete"]
+        at = phases.index(phase)
+        return {"version": "trip-test-v1", "profile": "kid", "phase": phase, "seq": seq,
+                "ready": {x: True for x in items},
+                "checked": {x: "pass" for x in items} if at >= 2 else {},
+                "packed": {x: True for x in items} if at >= 3 else {},
+                "finals": {"zip": "pass"} if at >= 4 else {}}
+
     def test_packing_blocks_rewards_but_not_other_chores_then_awards_once(self):
         a = self.app
         a.event(type="adjust", kid="ava", points=20, reason="test", by="jordan")
@@ -400,17 +422,37 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 200)
 
         token = a.kid_sessions("ava")["ava"]
-        code, incomplete = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
-                                  "progress": self.complete(["shirt"])})
-        self.assertEqual(code, 409, incomplete)
+        items = ["shirt", "hair"]
+        code, layout = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                      "progress": self.stage(items, "inspect", 10)})
+        self.assertEqual(code, 200, layout)
+        self.assertEqual(layout["state"]["balance"]["ava"], 21)
+        self.assertEqual(layout["state"]["packing_game"]["progress"]["ava"]["awards"], {"layout": 1})
+        self.assertIsNotNone(layout["state"]["packing_game"]["progress"]["ava"]["started_at"])
+
+        # Re-saving the same milestone is harmless; later stages add their own award once.
+        self.assertEqual(a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                        "progress": self.stage(items, "inspect", 11)})[1]
+                         ["state"]["balance"]["ava"], 21)
+        inspected = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                   "progress": self.stage(items, "pack", 12)})[1]
+        self.assertEqual(inspected["state"]["balance"]["ava"], 23)
+        packed = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                "progress": self.stage(items, "final", 13)})[1]
+        self.assertEqual(packed["state"]["balance"]["ava"], 25)
         code, done = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
-                                                    "progress": self.complete(["shirt", "hair"], 11)})
+                                                    "progress": self.complete(items, 14)})
         self.assertEqual(code, 200, done)
         self.assertTrue(done["state"]["packing_game"]["progress"]["ava"]["complete"])
-        self.assertEqual(done["state"]["balance"]["ava"], 32)
+        self.assertEqual(done["state"]["packing_game"]["progress"]["ava"]["awarded_points"], 10)
+        self.assertEqual(done["state"]["packing_game"]["progress"]["ava"]["complete_prize"], 5)
+        self.assertEqual(done["state"]["balance"]["ava"], 30)
         self.assertEqual(a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
-                                                        "progress": self.complete(["shirt", "hair"], 12)})[1]
-                         ["state"]["balance"]["ava"], 32)
+                                                        "progress": self.complete(items, 15)})[1]
+                         ["state"]["balance"]["ava"], 30)
+        packing_events = [e for e in a.s.read_events() if e.get("packing_version") == "trip-test-v1"]
+        self.assertEqual([(e["packing_milestone"], e["points"]) for e in packing_events],
+                         [("layout", 1), ("inspect", 2), ("pack", 2), ("complete", 5)])
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})[0], 200)
 
     def test_child_specific_item_does_not_block_the_other_child_and_an_unassigned_child_is_exempt(self):
@@ -420,6 +462,7 @@ class PackingRewardGateTests(unittest.TestCase):
                                                     "progress": self.complete(["shirt"])})
         self.assertEqual(code, 200, done)
         self.assertTrue(done["state"]["packing_game"]["progress"]["max"]["complete"])
+        self.assertEqual(done["state"]["packing_game"]["progress"]["max"]["awarded_points"], 10)
         self.assertIsNone(a.s.packing_reward_gate(done["state"], ["zoe"]))
 
 

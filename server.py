@@ -212,6 +212,51 @@ def packing_complete(game, kid, progress):
             and all(progress.get("finals", {}).get(x) == "pass" for x in finals))
 
 
+PACKING_AWARD_STAGES = ("layout", "inspect", "pack", "complete")
+PACKING_AWARD_DEFAULT_LABELS = {
+    "layout": "Packing: laid everything out",
+    "inspect": "Packing: every item passed inspection",
+    "pack": "Packing: everything is in the right bag",
+    "complete": "Finished train packing",
+}
+
+
+def packing_award_plan(profile):
+    """Stage -> points. Old profiles keep their one completion award."""
+    configured = profile.get("awards")
+    if isinstance(configured, dict):
+        out = {}
+        for stage in PACKING_AWARD_STAGES:
+            try:
+                out[stage] = max(0, min(50, int(configured.get(stage) or 0)))
+            except (TypeError, ValueError):
+                out[stage] = 0
+        return out
+    return {stage: int(profile.get("points") or 0) if stage == "complete" else 0
+            for stage in PACKING_AWARD_STAGES}
+
+
+def packing_milestones_reached(game, kid, progress):
+    profile = packing_profile(game, kid)
+    if not profile or not progress:
+        return set()
+    items = packing_item_ids(profile, kid)
+    ready = all(progress.get("ready", {}).get(x) is True
+                or progress.get("checked", {}).get(x) == "pass" for x in items)
+    inspected = ready and all(progress.get("checked", {}).get(x) == "pass" for x in items)
+    packed = inspected and all(progress.get("packed", {}).get(x) is True for x in items)
+    reached = set()
+    if ready and progress.get("phase") in ("inspect", "pack", "final", "complete"):
+        reached.add("layout")
+    if inspected and progress.get("phase") in ("pack", "final", "complete"):
+        reached.add("inspect")
+    if packed and progress.get("phase") in ("final", "complete"):
+        reached.add("pack")
+    if packing_complete(game, kid, progress):
+        reached.add("complete")
+    return reached
+
+
 def packing_progress(game):
     saved = load_private_json(PACKING_PROGRESS_FILE, {})
     rows = saved.get("kids") or {} if saved.get("version") == game.get("version") else {}
@@ -221,7 +266,17 @@ def packing_progress(game):
             clean = sanitize_packing_progress(game, kid, rows.get(kid) or {})
             if clean:
                 clean["complete"] = packing_complete(game, kid, clean)
-                clean["awarded"] = bool((rows.get(kid) or {}).get("awarded"))
+                saved_row = rows.get(kid) or {}
+                plan = packing_award_plan(profile)
+                award_refs = saved_row.get("awards") if isinstance(saved_row.get("awards"), dict) else {}
+                clean["awards"] = {stage: plan[stage] for stage in PACKING_AWARD_STAGES
+                                   if award_refs.get(stage) and plan[stage]}
+                clean["awarded_points"] = sum(clean["awards"].values())
+                clean["award_total"] = sum(plan.values())
+                clean["complete_prize"] = plan.get("complete", 0)
+                clean["awarded"] = bool(saved_row.get("awarded")) or clean["awarded_points"] >= clean["award_total"]
+                clean["started_at"] = saved_row.get("started_at")
+                clean["updated_at"] = saved_row.get("updated_at")
                 out[kid] = clean
     return out
 
@@ -3653,23 +3708,42 @@ class H(BaseHTTPRequestHandler):
                 if saved_.get("version") != game_.get("version"):
                     saved_ = {"version": game_.get("version"), "kids": {}}
                 old_ = (saved_.get("kids") or {}).get(kid_) or {}
+                incoming_is_newer_ = int(old_.get("seq") or 0) <= int(clean_.get("seq") or 0)
                 if int(old_.get("seq") or 0) > int(clean_.get("seq") or 0):
                     clean_ = old_   # a slower response from an earlier tap cannot rewind the packing flow
                 if packing_complete(game_, kid_, old_):
                     clean_ = old_   # completion is durable; a stray Reset cannot relock rewards or repay points
                 complete_ = packing_complete(game_, kid_, clean_)
-                award_ = int(profile_.get("points") or 0)
-                already_awarded_ = bool(old_.get("awarded")) or any(
-                    e.get("type") == "adjust" and e.get("packing_version") == game_.get("version")
-                    and e.get("kid") == kid_ for e in read_events())
-                if complete_ and award_ and not already_awarded_:
-                    award_event_ = append({"type": "adjust", "kid": kid_, "points": award_,
-                                           "reason": game_.get("award_reason") or "Finished train packing",
-                                           "by": "packing", "icon": game_.get("icon") or "1f9f3",
-                                           "packing_version": game_.get("version")})
-                    clean_["awarded"], clean_["award_event"] = True, award_event_["id"]
-                elif already_awarded_:
-                    clean_["awarded"] = True
+                now_ = time.time()
+                clean_["started_at"] = old_.get("started_at") or now_
+                clean_["updated_at"] = now_ if incoming_is_newer_ else old_.get("updated_at") or now_
+                events_ = [e for e in read_events() if e.get("type") == "adjust"
+                           and e.get("packing_version") == game_.get("version") and e.get("kid") == kid_]
+                legacy_awarded_ = bool(old_.get("awarded")) or any(not e.get("packing_milestone") for e in events_)
+                award_refs_ = dict(old_.get("awards") or {}) if isinstance(old_.get("awards"), dict) else {}
+                for event_ in events_:
+                    if event_.get("packing_milestone") in PACKING_AWARD_STAGES:
+                        award_refs_[event_["packing_milestone"]] = event_["id"]
+                plan_ = packing_award_plan(profile_)
+                labels_ = profile_.get("award_labels") if isinstance(profile_.get("award_labels"), dict) else {}
+                if not legacy_awarded_:
+                    reached_ = packing_milestones_reached(game_, kid_, clean_)
+                    for stage_ in PACKING_AWARD_STAGES:
+                        points_ = plan_[stage_]
+                        if stage_ not in reached_ or not points_ or award_refs_.get(stage_):
+                            continue
+                        award_event_ = append({"type": "adjust", "kid": kid_, "points": points_,
+                                               "reason": labels_.get(stage_) or (
+                                                   game_.get("award_reason") if stage_ == "complete" else None
+                                               ) or PACKING_AWARD_DEFAULT_LABELS[stage_],
+                                               "by": "packing", "icon": game_.get("icon") or "1f9f3",
+                                               "packing_version": game_.get("version"),
+                                               "packing_milestone": stage_})
+                        award_refs_[stage_] = award_event_["id"]
+                clean_["awards"] = award_refs_
+                clean_["awarded"] = legacy_awarded_ or (
+                    complete_ and all(not plan_[stage_] or award_refs_.get(stage_)
+                                      for stage_ in PACKING_AWARD_STAGES))
                 saved_.setdefault("kids", {})[kid_] = clean_
                 save_private_json(PACKING_PROGRESS_FILE, saved_)
             ilog({"src": "packing", "kid": kid_, "phase": clean_["phase"],
