@@ -26,8 +26,9 @@ SHA-256 and byte counts for the ledger and private configs, ledger event
 count/tail completeness, and one combined core hash. A missing or unreadable
 required file makes `/health` return 503 and suppresses the combined hash.
 An absent never-created ledger is ready only when
-`failover.allow_absent_empty_ledger` is explicitly true (or failover is off),
-and remains visibly distinct from a present empty file. Direct old/new backend
+`failover.allow_absent_empty_ledger` is the literal JSON boolean `true` (or failover is off),
+and remains visibly distinct from a present empty file. Symlinks, directories,
+FIFOs, devices and other non-regular core paths always fail readiness. Direct old/new backend
 and stable-route values must both be ready and match before a route move.
 This quick checkpoint does not replace the full quiesced manifest, which also
 covers and separately compares every optional authoritative file; checkpoint

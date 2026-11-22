@@ -114,7 +114,7 @@ class RehearsalServerTest(unittest.TestCase):
         self.proc = None
         self.restart_as("nelnet-test", 42)
 
-    def restart_as(self, node, epoch):
+    def restart_as(self, node, epoch, expected_health=200):
         self.stop_server()
         now = time.time()
         (self.tmp / "failover-authority.json").write_text(json.dumps({
@@ -127,7 +127,7 @@ class RehearsalServerTest(unittest.TestCase):
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for _ in range(100):
             try:
-                if self.get("/health")[0] == 200:
+                if self.get("/health")[0] == expected_health:
                     break
             except OSError:
                 pass
@@ -233,6 +233,43 @@ class RehearsalServerTest(unittest.TestCase):
         self.assertFalse(health["checkpoint"]["ready"])
         self.assertTrue(health["checkpoint"]["house"]["present"])
         self.assertFalse(health["checkpoint"]["house"]["read_ok"])
+        self.assertIsNone(health["checkpoint"]["core_sha256"])
+
+    def test_absent_ledger_allowance_requires_literal_json_true(self):
+        house = json.loads((self.tmp / "house.json").read_text())
+        house["failover"]["allow_absent_empty_ledger"] = "false"
+        (self.tmp / "house.json").write_text(json.dumps(house))
+        self.restart_as("nelnet-test", 43, expected_health=503)
+
+        status, health = self.get("/health")
+        self.assertEqual(status, 503)
+        self.assertFalse(health["checkpoint"]["ready"])
+        self.assertFalse(health["checkpoint"]["ledger"]["present"])
+        self.assertFalse(health["checkpoint"]["ledger"]["read_ok"])
+        self.assertEqual(health["checkpoint"]["ledger"]["error"], "missing")
+        self.assertNotIn("sha256", health["checkpoint"]["ledger"])
+        self.assertIsNone(health["checkpoint"]["core_sha256"])
+
+    def test_dangling_ledger_symlink_is_present_but_never_ready(self):
+        (self.tmp / "ledger.jsonl").symlink_to(self.tmp / "missing-ledger-target")
+        status, health = self.get("/health")
+        self.assertEqual(status, 503)
+        self.assertFalse(health["checkpoint"]["ready"])
+        self.assertTrue(health["checkpoint"]["ledger"]["present"])
+        self.assertFalse(health["checkpoint"]["ledger"]["read_ok"])
+        self.assertEqual(health["checkpoint"]["ledger"]["error"], "not_regular")
+        self.assertNotIn("sha256", health["checkpoint"]["ledger"])
+        self.assertIsNone(health["checkpoint"]["core_sha256"])
+
+    def test_special_ledger_file_fails_closed_without_blocking_health(self):
+        os.mkfifo(self.tmp / "ledger.jsonl")
+        started = time.monotonic()
+        status, health = self.get("/health")
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(status, 503)
+        self.assertTrue(health["checkpoint"]["ledger"]["present"])
+        self.assertFalse(health["checkpoint"]["ledger"]["read_ok"])
+        self.assertEqual(health["checkpoint"]["ledger"]["error"], "not_regular")
         self.assertIsNone(health["checkpoint"]["core_sha256"])
 
 

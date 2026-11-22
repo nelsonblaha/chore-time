@@ -601,12 +601,12 @@ def read_events():
 def core_state_checkpoint():
     """Payload-free identity for the quiesced state that every writer must share."""
     allow_absent_ledger = (not AUTHORITY.enabled or
-                           bool(AUTHORITY.config.get("allow_absent_empty_ledger")))
+                           AUTHORITY.config.get("allow_absent_empty_ledger") is True)
     with LOCK:
         rows = {}
         for name, path in (("ledger", LEDGER), ("chores", CONFIG), ("house", HOUSE_FILE)):
             try:
-                path.stat()
+                info = path.lstat()
             except FileNotFoundError:
                 allowed = name == "ledger" and allow_absent_ledger
                 rows[name] = {"present": False, "read_ok": allowed,
@@ -622,8 +622,23 @@ def core_state_checkpoint():
                               "absence_policy": None,
                               "error": "stat_%s" % (getattr(ex, "errno", None) or "failed")}
                 continue
+            if not stat.S_ISREG(info.st_mode):
+                rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
+                              "absence_policy": None, "error": "not_regular"}
+                continue
             try:
-                raw = path.read_bytes()
+                # O_NOFOLLOW keeps a path-swap from turning the checked regular file into a
+                # symlink, and O_NONBLOCK prevents a swapped FIFO/device from stalling health
+                # while the writer lock is held. fstat verifies the object actually opened.
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) \
+                    | getattr(os, "O_NONBLOCK", 0)
+                descriptor = os.open(path, flags)
+                with os.fdopen(descriptor, "rb") as source:
+                    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                        rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
+                                      "absence_policy": None, "error": "not_regular"}
+                        continue
+                    raw = source.read()
             except OSError as ex:
                 rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
                               "absence_policy": None,
