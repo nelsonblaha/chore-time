@@ -19,6 +19,32 @@ is `/health`. Home Assistant continues to serve `/local/chore-kids.html` and
 consume `sensor.chore_state`. A promotion is incomplete until those routes and
 the HA asset resolve to the promoted revision.
 
+A reverse proxy normally hides the physical Hub's source IP. Configure the
+dedicated LAN ingress to remove any client-supplied identity/token headers, add
+a private random token, and append the observed client to `X-Forwarded-For`.
+On both prospective writers configure the same protected token file and the
+actual ingress-pod source range:
+
+```json
+{
+  "trusted_display_proxy": {
+    "token_file": "/protected/chore-proxy.token",
+    "peer_cidrs": ["TRAEFIK_POD_CIDR"],
+    "token_header": "X-Chore-Proxy-Token",
+    "forwarded_header": "X-Forwarded-For"
+  }
+}
+```
+
+The token file must be mode `0600`. The app accepts only the rightmost forwarded
+address, only when the TCP peer is inside a configured proxy CIDR, the token is
+correct, and that address already belongs to a configured Hub/TV. This identity
+is used only for display-bound child sessions, heartbeats and UI behavior. Raw
+TCP peer identity still controls loopback and parent authorization, so a proxy
+request can never become a localhost request. Before moving a Hub, prove two
+distinct real devices remain distinct and that a forged leftmost forwarded
+address cannot claim either device.
+
 ## State capture boundary
 
 The files do not form a multi-file transaction. A copy made while the process is

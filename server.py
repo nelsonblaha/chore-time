@@ -13,7 +13,8 @@ import hmac
 import json
 from tidy_spaces import space_states
 import stepped_jobs
-import math, random, os, re, threading, time, uuid, urllib.request, urllib.parse, urllib.error
+import ipaddress
+import math, random, os, re, stat, threading, time, uuid, urllib.request, urllib.parse, urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -3501,6 +3502,12 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):
         print("%s %s" % (self.address_string(), fmt % a), flush=True)
 
+    def display_client_ip(self):
+        """A known physical display behind the dedicated trusted proxy, or the actual TCP peer."""
+        if not hasattr(self, "_display_client_ip"):
+            self._display_client_ip = trusted_display_client_ip(self.client_address[0], self.headers)
+        return self._display_client_ip
+
     def send(self, code, body, ctype="application/json"):
         if code >= 400 and self.command == "POST":
             ilog({"src": "api", "ip": self.client_address[0], "path": self.path, "rejected": code,
@@ -3518,8 +3525,9 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path.split("?")[0]
+        display_ip_ = self.display_client_ip()
         if p in ("/tv", "/api/state"):
-            GUARD["seen"][self.client_address[0]] = (time.time(), self.headers.get("Referer") or "")
+            GUARD["seen"][display_ip_] = (time.time(), self.headers.get("Referer") or "")
         if p in ("/", "/kids"):
             return self.send(200, (HERE / "static/kids.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/tv":
@@ -3561,21 +3569,21 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, f.read_bytes(), "image/jpeg")
         if p == "/api/state":
             st = derive()
-            hub_ = next((h for h, x in (HOUSE.get("hubs") or {}).items() if x.get("ip") == self.client_address[0]), None)
+            hub_ = next((h for h, x in (HOUSE.get("hubs") or {}).items() if x.get("ip") == display_ip_), None)
             st["hub"], st["hub_motion"] = hub_, (GUARD.get("hub_motion") or {}).get(hub_)
-            display_ = display_for_ip(self.client_address[0])
+            display_ = display_for_ip(display_ip_)
             coin_cfg_ = HOUSE.get("coin_flip") or {}
             coin_location_ = ha_get(coin_cfg_.get("location_entity"), ha_token()) \
                 if coin_cfg_.get("location_entity") and display_ and st.get("present_kids") else None
             st["coin_flip"] = coin_flip_state(st["config"], st.get("present_kids"), display_, coin_location_,
                                                  now=st.get("now"), settings=coin_cfg_)
-            st["peer_pin_reset"] = peer_pin_reset_public(self.client_address[0])
-            st["peer_pin_reset_capable"] = bool(peer_reset_display(self.client_address[0]))
+            st["peer_pin_reset"] = peer_pin_reset_public(display_ip_)
+            st["peer_pin_reset_capable"] = bool(peer_reset_display(display_ip_))
             interrupt_ = active_spotify_interruption((display_ or {}).get("room"))
             st["display"], st["music_interruption"] = display_, interrupt_
-            add_seen_projection(st, self.client_address[0], "ann:" + self.client_address[0])
+            add_seen_projection(st, display_ip_, "ann:" + display_ip_)
             for r_ in ADULT_REQ.values():   # the grown-up said "It's me": this Hub opens their screen even if its page reloaded meanwhile
-                if r_["ip"] == self.client_address[0] and r_["status"] == "ok" and not r_.get("used") and time.time() - r_["ts"] < 180 \
+                if r_["ip"] == display_ip_ and r_["status"] == "ok" and not r_.get("used") and time.time() - r_["ts"] < 180 \
                         and r_.get("purpose", "login") == "login":
                     r_["used"] = True
                     st["adult_go"] = r_["who"]
@@ -3606,6 +3614,7 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.headers.get("X-HA-User") and self.client_address[0] != "127.0.0.1":
             return self.send(403, {"error": "forbidden"})
+        display_ip_ = self.display_client_ip()
         n = int(self.headers.get("Content-Length") or 0)
         try:
             b = json.loads(self.rfile.read(n) or b"{}")
@@ -3649,7 +3658,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(503, {"error": "Chore Time is temporarily read-only during failover.",
                                    "failover": ex.status})
         if self.path == "/api/hub_heartbeat":
-            display_ = peer_reset_display(self.client_address[0])
+            display_ = peer_reset_display(display_ip_)
             if display_:
                 GUARD.setdefault("hub_heartbeat", {})[display_["id"]] = time.time()
             return self.send(200, {"ok": True, "hub": display_.get("id") if display_ else None})
@@ -3682,7 +3691,7 @@ class H(BaseHTTPRequestHandler):
                         result = dict(result, why=result["why"] + "; refresh the floorplan to confirm the tidy room")
                     if recorded:
                         threading.Thread(target=push_state_sensor, daemon=True).start()
-            ilog({"src": "vacuum_button", "ip": self.client_address[0], "floor": floor,
+            ilog({"src": "vacuum_button", "ip": display_ip_, "floor": floor,
                   "gesture": b.get("gesture"), "request_id": str(b.get("request_id") or "")[:160],
                   "result": result})
             return self.send(200 if result.get("ok") else 400, result)
@@ -3722,7 +3731,7 @@ class H(BaseHTTPRequestHandler):
             if not game_.get("activated") or not profile_:
                 return self.send(409, {"error": "Packing is not open for this kid."})
             ha_child_ = allowed_kids is not None and kid_ in allowed_kids
-            if not ha_child_ and not valid_kid_session(b.get("kid_session"), kid_, self.client_address[0]):
+            if not ha_child_ and not valid_kid_session(b.get("kid_session"), kid_, display_ip_):
                 return self.send(403, {"error": "Open your profile with your PIN first."})
             clean_ = sanitize_packing_progress(game_, kid_, b.get("progress") or {})
             if not clean_:
@@ -3841,9 +3850,9 @@ class H(BaseHTTPRequestHandler):
                 joiners_ = [x for x in dict.fromkeys(b.get("with") or []) if x in kids and x not in current_]
                 participants_ = current_ + joiners_
                 if joiners_:
-                    if not valid_shared_reward_sessions(b, participants_, self.client_address[0]):
+                    if not valid_shared_reward_sessions(b, participants_, display_ip_):
                         return self.send(403, {"error": "Everyone sharing must enter their own PIN."})
-                elif not valid_kid_session(b.get("kid_session"), kid_, self.client_address[0]):
+                elif not valid_kid_session(b.get("kid_session"), kid_, display_ip_):
                     return self.send(403, {"error": "Open your profile with your PIN first."})
 
                 reward_ = rewards.get(saved_["reward"])
@@ -4131,13 +4140,13 @@ class H(BaseHTTPRequestHandler):
             if not kid_:
                 return self.send(404, {"error": "unknown kid"})
             if not kid_.get("pin_hash"):
-                evidence_ = record_kid_display_presence(c, kid_["id"], self.client_address[0], verified=False)
-                session_ = issue_kid_session(kid_["id"], self.client_address[0])
+                evidence_ = record_kid_display_presence(c, kid_["id"], display_ip_, verified=False)
+                session_ = issue_kid_session(kid_["id"], display_ip_)
                 if evidence_:
                     after_change()
                 return self.send(200, {"ok": True, "kid_session": session_,
-                                       "state": state_for_display(self.client_address[0])})
-            now_, ip_ = time.time(), self.client_address[0]
+                                       "state": state_for_display(display_ip_)})
+            now_, ip_ = time.time(), display_ip_
             attempts_ = [x for x in GUARD.setdefault("kid_pin_failures", {}).get(ip_, []) if now_ - x < 60]
             if len(attempts_) >= 5:
                 return self.send(429, {"error": "Too many tries. Wait one minute."})
@@ -4154,7 +4163,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"ok": True, "kid_session": session_, "state": state_for_display(ip_)})
         if p == "/api/kid_peer_reset_request":
             target_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
-            display_ = peer_reset_display(self.client_address[0])
+            display_ = peer_reset_display(display_ip_)
             eligible_ = set(PEER_PIN_CFG.get("kids") or [x["id"] for x in c["kids"] if x.get("pin_hash")])
             if not PEER_PIN_CFG or not display_ or not target_ or target_["id"] not in eligible_:
                 return self.send(409, {"error": "The two-Hub reset is not available here."})
@@ -4165,12 +4174,12 @@ class H(BaseHTTPRequestHandler):
             with PEER_LOCK:
                 old_nonce_, old_ = active_peer_pin_reset()
                 if old_:
-                    if old_.get("target") != target_["id"] or old_.get("target_ip") != self.client_address[0]:
+                    if old_.get("target") != target_["id"] or old_.get("target_ip") != display_ip_:
                         return self.send(409, {"error": "Another two-Hub reset is already happening."})
                     nonce_ = old_nonce_
                 else:
                     nonce_ = uuid.uuid4().hex[:10]
-                    PEER_PIN_RESETS[nonce_] = {"target": target_["id"], "target_ip": self.client_address[0],
+                    PEER_PIN_RESETS[nonce_] = {"target": target_["id"], "target_ip": display_ip_,
                                                "target_display": display_["id"], "status": "waiting",
                                                "ts": time.time(), "until": time.time() + max(60, min(900, int(
                                                    PEER_PIN_CFG.get("valid_seconds") or 300))),
@@ -4180,10 +4189,10 @@ class H(BaseHTTPRequestHandler):
             ilog({"src": "peer_pin_reset", "action": "requested", "kid": target_["id"],
                   "display": display_["id"], "nonce": nonce_})
             return self.send(200, {"ok": True, "nonce": nonce_,
-                                   "peer_pin_reset": peer_pin_reset_public(self.client_address[0], nonce=nonce_)})
+                                   "peer_pin_reset": peer_pin_reset_public(display_ip_, nonce=nonce_)})
         if p == "/api/kid_peer_reset_help":
             nonce_, helper_ = str(b.get("nonce") or ""), str(b.get("kid") or "")
-            display_ = peer_reset_display(self.client_address[0])
+            display_ = peer_reset_display(display_ip_)
             eligible_ = set(PEER_PIN_CFG.get("kids") or [x["id"] for x in c["kids"] if x.get("pin_hash")])
             with PEER_LOCK:
                 row_ = PEER_PIN_RESETS.get(nonce_)
@@ -4193,37 +4202,37 @@ class H(BaseHTTPRequestHandler):
                     return self.send(409, {"error": "The two Nest Hubs need a grown-up placement check first."})
                 if not display_ or display_["id"] == row_.get("target_display") or helper_ == row_.get("target") or helper_ not in eligible_:
                     return self.send(403, {"error": "A different kid must help from the other Nest Hub."})
-                if not valid_kid_session(b.get("kid_session"), helper_, self.client_address[0]):
+                if not valid_kid_session(b.get("kid_session"), helper_, display_ip_):
                     return self.send(403, {"error": "The helper must enter their own PIN on this Hub."})
                 if row_.get("helper") not in (None, helper_):
                     return self.send(409, {"error": "Another kid is already helping."})
-                row_.update(status="helping", helper=helper_, helper_ip=self.client_address[0],
+                row_.update(status="helping", helper=helper_, helper_ip=display_ip_,
                             helper_display=display_["id"], holding=False)
                 save_peer_pin_resets()
             ilog({"src": "peer_pin_reset", "action": "helper_ready", "kid": row_["target"],
                   "helper": helper_, "display": display_["id"], "nonce": nonce_})
             after_change()
-            return self.send(200, {"ok": True, "peer_pin_reset": peer_pin_reset_public(self.client_address[0], nonce=nonce_)})
+            return self.send(200, {"ok": True, "peer_pin_reset": peer_pin_reset_public(display_ip_, nonce=nonce_)})
         if p == "/api/kid_peer_reset_hold":
             nonce_, helper_ = str(b.get("nonce") or ""), str(b.get("kid") or "")
             with PEER_LOCK:
                 row_ = PEER_PIN_RESETS.get(nonce_)
                 if not row_ or row_.get("status") != "helping" or row_.get("helper") != helper_ \
-                        or row_.get("helper_ip") != self.client_address[0] \
-                        or not valid_kid_session(b.get("kid_session"), helper_, self.client_address[0]):
+                        or row_.get("helper_ip") != display_ip_ \
+                        or not valid_kid_session(b.get("kid_session"), helper_, display_ip_):
                     return self.send(403, {"error": "The helper session is not active."})
                 row_["holding"] = bool(b.get("holding"))
                 row_["last_hold"] = time.time() if row_["holding"] else 0
                 return self.send(200, {"ok": True, "holding": peer_helper_holding(row_)})
         if p == "/api/kid_peer_reset_status":
-            public_ = peer_pin_reset_public(self.client_address[0], nonce=str(b.get("nonce") or ""))
+            public_ = peer_pin_reset_public(display_ip_, nonce=str(b.get("nonce") or ""))
             return self.send(200 if public_ else 404, {"ok": bool(public_), "peer_pin_reset": public_})
         if p == "/api/kid_peer_reset_finish":
             nonce_, target_ = str(b.get("nonce") or ""), str(b.get("kid") or "")
             with PEER_LOCK:
                 row_ = PEER_PIN_RESETS.get(nonce_)
                 if not row_ or row_.get("status") != "helping" or row_.get("target") != target_ \
-                        or row_.get("target_ip") != self.client_address[0]:
+                        or row_.get("target_ip") != display_ip_:
                     return self.send(409, {"error": "That two-Hub reset is not ready."})
                 if not HUB_PLACEMENT.get("trusted") or stale_peer_hubs() or not peer_helper_holding(row_):
                     return self.send(409, {"error": "Your helper must stay at the other Hub and hold the big button."})
@@ -4248,7 +4257,7 @@ class H(BaseHTTPRequestHandler):
             ilog({"src": "peer_pin_reset", "action": "completed", "kid": target_,
                   "helper": row_["helper"], "nonce": nonce_})
             after_change()
-            return self.send(200, {"ok": True, "helper": row_["helper"], "state": state_for_display(self.client_address[0])})
+            return self.send(200, {"ok": True, "helper": row_["helper"], "state": state_for_display(display_ip_)})
         if p == "/api/hub_placement_attest":
             required_adult_ = str(PEER_PIN_CFG.get("adult") or LEAD_ADULT or "")
             if b.get("by") not in insp or b.get("by") != required_adult_:
@@ -4267,12 +4276,12 @@ class H(BaseHTTPRequestHandler):
                 target_ = available_request_adult(st) or LEAD_ADULT
                 if not target_:
                     return self.send(409, {"error": "No grown-up reset contact is configured."})
-                ADULT_REQ[nonce_] = {"who": target_, "ip": self.client_address[0], "ts": time.time(),
+                ADULT_REQ[nonce_] = {"who": target_, "ip": display_ip_, "ts": time.time(),
                                      "status": "pending", "purpose": "pin_reset", "kid": kid_["id"]}
                 save_adult_requests()
                 threading.Thread(target=send_adult_request, args=(nonce_, target_, "chore screen"), daemon=True).start()
                 after_change()
-            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": self.client_address[0], "action": "reset_requested"})
+            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": display_ip_, "action": "reset_requested"})
             return self.send(200, {"ok": True, "nonce": nonce_, "state": derive()})
         if p == "/api/kid_pin_change":
             kid_ = next((x for x in c["kids"] if x["id"] == b.get("kid") and x.get("pin_hash")), None)
@@ -4296,7 +4305,7 @@ class H(BaseHTTPRequestHandler):
             if reset_:
                 reset_["used"] = True
                 save_adult_requests()
-            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": self.client_address[0],
+            ilog({"src": "kid_pin", "kid": kid_["id"], "ip": display_ip_,
                   "action": "changed_after_reset" if reset_ else "changed"})
             after_change()
             return self.send(200, {"ok": True, "state": derive()})
@@ -4351,7 +4360,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "nothing waiting"})
             ev = append({"type": "delivered", "ref": r_["id"], "kid": b["kid"]})
             after_change()
-            ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
+            ilog({"src": "api", "ip": display_ip_, "path": p, "event": ev})
             return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/spend" and b.get("kid") and b.get("reward") in rewards and not is_here(rewards[b["reward"]], c, b["kid"]):
             return self.send(409, {"error": "that reward is at the other house"})
@@ -4414,7 +4423,7 @@ class H(BaseHTTPRequestHandler):
             opened = {}
             for e in evs[:50]:
                 if isinstance(e, dict):
-                    ilog({"src": "ui", "ip": self.client_address[0], **{k: e[k] for k in list(e)[:20]}})
+                    ilog({"src": "ui", "ip": display_ip_, **{k: e[k] for k in list(e)[:20]}})
                     if e.get("ev") in ("open_kid", "tap") and (e.get("to") or e.get("kid")):
                         opened[e.get("to") or e.get("kid")] = time.time()   # last time this kid used a screen
             if opened:
@@ -4430,10 +4439,10 @@ class H(BaseHTTPRequestHandler):
                 seen = json.loads(NEWS_SEEN.read_text())
             except (OSError, ValueError):
                 seen = {}
-            k = ("ann:kid:" + b["kid"]) if b.get("kid") in kids else ("ann:" + self.client_address[0])
+            k = ("ann:kid:" + b["kid"]) if b.get("kid") in kids else ("ann:" + display_ip_)
             seen[k] = (seen.get(k, []) + [str(i) for i in (b.get("ids") or [])])[-200:]
             NEWS_SEEN.write_text(json.dumps(seen))
-            ilog({"src": "ui", "ip": self.client_address[0], "ev": "announce_dismissed", "ids": b.get("ids")})
+            ilog({"src": "ui", "ip": display_ip_, "ev": "announce_dismissed", "ids": b.get("ids")})
             return self.send(200, {"ok": True})
         if p == "/api/assist_request":
             kid_, cid_ = b.get("kid"), b.get("chore")
@@ -4457,7 +4466,7 @@ class H(BaseHTTPRequestHandler):
                 if not target_:
                     return self.send(409, {"error": "Every grown-up is busy right now.",
                                            "until": st.get("adult_busy_until", 0)})
-                ADULT_REQ[nonce] = {"who": target_, "ip": self.client_address[0], "ts": time.time(),
+                ADULT_REQ[nonce] = {"who": target_, "ip": display_ip_, "ts": time.time(),
                                     "status": "pending", "purpose": "assist", "kid": kid_, "chore": cid_,
                                     "last_notify": time.time()}
                 save_adult_requests()
@@ -4516,7 +4525,7 @@ class H(BaseHTTPRequestHandler):
                 if not target_:
                     return self.send(409, {"error": "Every grown-up is busy right now.",
                                            "until": st.get("adult_busy_until", 0)})
-                ADULT_REQ[nonce] = {"who": target_, "ip": self.client_address[0], "ts": time.time(),
+                ADULT_REQ[nonce] = {"who": target_, "ip": display_ip_, "ts": time.time(),
                                     "status": "pending", "purpose": "reward", "kid": kid_, "reward": rid_,
                                     "last_notify": time.time()}
                 save_adult_requests()
@@ -4553,13 +4562,13 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"error": "unknown grown-up"})
             nonce = uuid.uuid4().hex[:8]
             where = next((h.get("name") or k_.replace("_", " ").title() + " Hub" for k_, h in HUBS.items()
-                          if h.get("ip") == self.client_address[0]), "chore screen")
+                          if h.get("ip") == display_ip_), "chore screen")
             if b.get("purpose") == "lock":
                 where += " (to lock a TV)"
-            ADULT_REQ[nonce] = {"who": who, "ip": self.client_address[0], "ts": time.time(), "status": "pending",
+            ADULT_REQ[nonce] = {"who": who, "ip": display_ip_, "ts": time.time(), "status": "pending",
                                 "purpose": "lock" if b.get("purpose") == "lock" else "login"}
             save_adult_requests()
-            ilog({"src": "adult", "action": "request", "who": who, "ip": self.client_address[0]})
+            ilog({"src": "adult", "action": "request", "who": who, "ip": display_ip_})
             threading.Thread(target=send_adult_request, args=(nonce, who, where), daemon=True).start()
             return self.send(200, {"ok": True, "nonce": nonce})
         if p == "/api/adult_status":
@@ -4586,16 +4595,16 @@ class H(BaseHTTPRequestHandler):
                 seen = json.loads(NEWS_SEEN.read_text())
             except (OSError, ValueError):
                 seen = {}
-            seen[("kid:" + b["kid"]) if b.get("kid") in kids else self.client_address[0]] = str(b.get("v"))
+            seen[("kid:" + b["kid"]) if b.get("kid") in kids else display_ip_] = str(b.get("v"))
             NEWS_SEEN.write_text(json.dumps(seen))
-            ilog({"src": "ui", "ip": self.client_address[0], "ev": "news_dismissed", "v": b.get("v")})
+            ilog({"src": "ui", "ip": display_ip_, "ev": "news_dismissed", "v": b.get("v")})
             return self.send(200, {"ok": True})
         if p == "/api/tv/lock_now":
             GUARD["grace"] = {}
             GUARD["last_cast"] = {}
             return self.send(200, {"ok": True})
         if p == "/api/exit":
-            ip = self.client_address[0]
+            ip = display_ip_
             hid_ = next((k for k, h in HUBS.items() if h["ip"] == ip), None)
             if hid_ or ip in [h.get("ip") for h in (HOUSE.get("kiosks") or {}).values()]:   # only screens we cast to
                 if hid_:   # back to normal Google Home: the keeper leaves this Hub alone for a while
@@ -4618,7 +4627,7 @@ class H(BaseHTTPRequestHandler):
             for purchase_ in purchases_:
                 ev = append({"type": "undo", "ref": purchase_["id"], "by": "kid:" + b["kid"]})
             after_change()
-            ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev, "refund_count": len(purchases_)})
+            ilog({"src": "api", "ip": display_ip_, "path": p, "event": ev, "refund_count": len(purchases_)})
             return self.send(200, {"ok": True, "event": ev, "state": derive()})
         if p == "/api/report":
             if b.get("kid") not in kids or b.get("chore") not in chores:
@@ -4638,7 +4647,7 @@ class H(BaseHTTPRequestHandler):
                              "feeling": b.get("feeling"), "full_price": bd.get("price"), **({"note": ttl_} if ttl_ else {}),
                              **({"worked": time.time() - started_} if started_ else {})})
                 after_change()
-                ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
+                ilog({"src": "api", "ip": display_ip_, "path": p, "event": ev})
                 threading.Thread(target=notify_report, args=(ev, derive()), daemon=True).start()
                 return self.send(200, {"ok": True, "event": ev, "state": derive()})
             if ch_.get("only") and b["kid"] not in ch_["only"]:
@@ -4756,7 +4765,7 @@ class H(BaseHTTPRequestHandler):
             with_ = [k for k in dict.fromkeys(b.get("with") or []) if k in kids and k != b["kid"]] \
                 if b["reward"] in ("show", "movie", "games") else []
             participants_ = [b["kid"]] + with_
-            if with_ and not valid_shared_reward_sessions(b, participants_, self.client_address[0]):
+            if with_ and not valid_shared_reward_sessions(b, participants_, display_ip_):
                 return self.send(403, {"error": "Everyone watching or playing together must enter their own PIN."})
             if with_ and any(not is_here(rewards[b["reward"]], c, wk) for wk in participants_):
                 return self.send(409, {"error": "Everyone sharing this reward must be at this house."})
@@ -4821,7 +4830,7 @@ class H(BaseHTTPRequestHandler):
                 if joiner_ in current_:
                     return self.send(409, {"error": "You are already sharing this reward."})
                 participants_ = current_ + [joiner_]
-                if not valid_shared_reward_sessions(b, participants_, self.client_address[0]):
+                if not valid_shared_reward_sessions(b, participants_, display_ip_):
                     return self.send(403, {"error": "Everyone sharing must enter their own PIN."})
                 reward_id_ = next(iter(reward_ids_))
                 reward_ = rewards.get(reward_id_)
@@ -4884,7 +4893,7 @@ class H(BaseHTTPRequestHandler):
                 refunds_ = {wk_: max(0, old_costs_.get(wk_, 0) - target_costs_[wk_]) for wk_ in current_}
                 ev = made_[-1]
                 after_change()
-                ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev,
+                ilog({"src": "api", "ip": display_ip_, "path": p, "event": ev,
                       "session": b.get("session_id"), "participants": participants_,
                       "join_cost": price_["cost"], "price_source": price_["source"]})
                 return self.send(200, {"ok": True, "event": ev, "state": derive(), "refunds": refunds_,
@@ -5505,7 +5514,7 @@ class H(BaseHTTPRequestHandler):
         else:
             return self.send(404, {"error": "not found"})
         after_change()
-        ilog({"src": "api", "ip": self.client_address[0], "path": p, "event": ev})
+        ilog({"src": "api", "ip": display_ip_, "path": p, "event": ev})
         if p == "/api/spend" and ev.get("type") == "spend":
             threading.Thread(target=notify_parents, args=(ev,), daemon=True).start()
         if p == "/api/start" and ev.get("type") == "start" and ev.get("chore") != "get_dressed":
@@ -5869,6 +5878,48 @@ def display_for_ip(ip):
         if cfg_.get("ip") == ip:
             return found(cfg_.get("kind") or "display", display_id, cfg_)
     return None
+
+
+def trusted_display_client_ip(peer_ip, headers):
+    """Recover only a configured display IP from the dedicated LAN proxy.
+
+    The raw TCP peer remains authoritative for loopback/admin authorization.
+    Proxy identity is deliberately narrower: it can identify a configured
+    Hub/TV for its session and UI behavior, but it cannot turn a request into
+    localhost or confer any grown-up privilege.
+    """
+    peer_ip = str(peer_ip or "")
+    if display_for_ip(peer_ip):
+        return peer_ip
+    config = HOUSE.get("trusted_display_proxy") or {}
+    token_path = house_path(config.get("token_file"))
+    networks = config.get("peer_cidrs") or []
+    if not token_path or not networks:
+        return peer_ip
+    try:
+        peer = ipaddress.ip_address(peer_ip)
+        if not any(peer in ipaddress.ip_network(str(network), strict=False) for network in networks):
+            return peer_ip
+        if stat.S_IMODE(token_path.stat().st_mode) != 0o600:
+            return peer_ip
+        expected = token_path.read_text().strip()
+    except (OSError, ValueError):
+        return peer_ip
+    supplied = str(headers.get(config.get("token_header") or "X-Chore-Proxy-Token") or "")
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return peer_ip
+    forwarded = str(headers.get(config.get("forwarded_header") or "X-Forwarded-For") or "")
+    candidates = [part.strip() for part in forwarded.split(",") if part.strip()]
+    if not candidates:
+        return peer_ip
+    # The rightmost address is the peer Traefik observed. A forged address
+    # prepended by a client therefore never wins over its actual LAN address.
+    candidate = candidates[-1]
+    try:
+        candidate = str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return peer_ip
+    return candidate if display_for_ip(candidate) else peer_ip
 
 
 def coin_flip_state(c, present, display, location_state=None, now=None, settings=None):
