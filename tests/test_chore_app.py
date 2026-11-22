@@ -117,11 +117,11 @@ class App:
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"{}")
 
-    def post_from(self, ip, path, body):
+    def post_from(self, ip, path, body, headers=None):
         """Exercise display-bound APIs from two distinct loopback addresses."""
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10,
                                           source_address=(ip, 0))
-        conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+        conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json", **(headers or {})})
         response = conn.getresponse()
         payload = json.loads(response.read() or b"{}")
         conn.close()
@@ -3247,6 +3247,43 @@ class SpotifyChoreInterruption(Case):
                 self.s.GUARD.pop("music_interruptions", None)
             else:
                 self.s.GUARD["music_interruptions"] = old_interruptions
+
+    def test_trusted_proxy_recovers_only_the_actual_configured_display(self):
+        self.s.HUBS.clear()
+        self.s.HUBS["den_hub"] = {"ip": "10.88.0.20", "room": "den"}
+        token = self.app.dir / "proxy.token"
+        token.write_text("proxy-secret\n")
+        token.chmod(0o600)
+        self.s.HOUSE["trusted_display_proxy"] = {
+            "token_file": str(token), "peer_cidrs": ["127.0.0.0/8"],
+        }
+        good = {"X-Chore-Proxy-Token": "proxy-secret", "X-Forwarded-For": "10.88.0.20"}
+        code, reply = self.app.post_from("127.0.0.2", "/api/hub_heartbeat", {}, good)
+        self.assertEqual((code, reply["hub"]), (200, "den_hub"))
+        state = self.app.get("/api/state", headers=good, source_ip="127.0.0.2")[1]
+        self.assertEqual(state["display"], {"kind": "hub", "id": "den_hub", "room": "den"})
+
+        no_token = self.app.post_from("127.0.0.2", "/api/hub_heartbeat", {},
+                                      {"X-Forwarded-For": "10.88.0.20"})
+        self.assertEqual(no_token[0], 403)
+        forged = dict(good, **{"X-Forwarded-For": "10.88.0.20, 10.88.0.99"})
+        self.assertEqual(self.app.post_from("127.0.0.2", "/api/hub_heartbeat", {}, forged)[0], 403)
+        token.chmod(0o644)
+        self.assertEqual(self.app.post_from("127.0.0.2", "/api/hub_heartbeat", {}, good)[0], 403)
+
+    def test_proxy_identity_never_grants_loopback_parent_authorization(self):
+        self.s.HUBS.clear()
+        self.s.HUBS["den_hub"] = {"ip": "10.88.0.20", "room": "den"}
+        token = self.app.dir / "proxy.token"
+        token.write_text("proxy-secret\n")
+        token.chmod(0o600)
+        self.s.HOUSE["trusted_display_proxy"] = {
+            "token_file": str(token), "peer_cidrs": ["127.0.0.0/8"],
+        }
+        headers = {"X-Chore-Proxy-Token": "proxy-secret", "X-Forwarded-For": "10.88.0.20",
+                   "X-HA-User": "pretend-parent"}
+        self.assertEqual(self.app.get("/api/kid_preview?kid=ava", headers=headers,
+                                      source_ip="127.0.0.2")[0], 403)
 
 
 class PausedTeamJobs(Case):
