@@ -496,13 +496,16 @@ class PackingRewardGateTests(unittest.TestCase):
                                                   "progress": self.stage(items, "pack", 12)})
         self.assertEqual(blocked[0], 403)
         self.assertIn("Grown-up inspection", blocked[1]["error"])
+        skipped = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                  "progress": self.stage(items, "final", 12)})
+        self.assertEqual(skipped[0], 403)
+        self.assertIn("grown-up", skipped[1]["error"].lower())
         inspected = a.post("/api/packing_update", {"packer": "ava", "by": "jordan",
                                                    "progress": self.stage(items, "pack", 12)},
                            self.adult_headers)[1]
         self.assertEqual(inspected["state"]["balance"]["ava"], 23)
-        packed = a.post("/api/packing_update", {"packer": "ava", "by": "jordan",
-                                                "progress": self.stage(items, "final", 13)},
-                            self.adult_headers)[1]
+        packed = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                "progress": self.stage(items, "final", 13)})[1]
         self.assertEqual(packed["state"]["balance"]["ava"], 25)
         code, done = a.post("/api/packing_update", {"packer": "ava", "by": "jordan",
                                                     "progress": self.complete(items, 14)},
@@ -904,6 +907,16 @@ class SharedVsExclusive(Case):
 
 
 class SoundSettings(Case):
+    def test_login_response_keeps_per_child_news_acknowledgements(self):
+        version = "news-shown-once"
+        (self.app.dir / "whatsnew.json").write_text(json.dumps([
+            {"v": version, "ts": time.time(), "items": [{"icon": "2728", "text": "Shown once"}]}
+        ]))
+        (self.app.dir / "news_seen.json").write_text(json.dumps({"kid:ava": version}))
+        code, unlocked = self.app.post("/api/kid_unlock", {"kid": "ava"})
+        self.assertEqual(code, 200, unlocked)
+        self.assertEqual(unlocked["state"]["news_seen_kids"]["ava"], version)
+
     def test_watch_buzz_gate_fails_quiet_until_ha_confirms_it(self):
         self.s.ADULTS["jordan"]["buzz_gate"] = {"entity": "binary_sensor.jordan_left_bedroom_today",
                                                     "states": ["on"]}

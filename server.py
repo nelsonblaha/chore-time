@@ -318,6 +318,31 @@ def packing_activity_changed(old, new):
     return not empty_open and any((old or {}).get(k) != new.get(k) for k in fields)
 
 
+def child_packing_update_error(game, packer, old, new):
+    """Return why a child-originated transition is invalid; inspection fields belong to adults."""
+    old = old or {}
+    if new.get("checked") != (old.get("checked") or {}) or new.get("finals") != (old.get("finals") or {}):
+        return "Grown-up inspection happens in the parent Chores page."
+    if new.get("phase") == "complete":
+        return "The grown-up must finish the final packing check."
+    old_phase = old.get("phase") or "layout"
+    phase = new.get("phase") or "layout"
+    allowed = {"layout": {"layout", "inspect"},
+               "inspect": {"inspect", "layout"},
+               "pack": {"pack", "layout", "final"},
+               "final": {"final"}}
+    if phase not in allowed.get(old_phase, {old_phase}):
+        return "Wait for the grown-up before moving to the next packing stage."
+    item_ids = packing_item_ids(packing_profile(game, packer), packer)
+    if phase == "inspect" and not all(new.get("ready", {}).get(x) is True for x in item_ids):
+        return "Lay out every item before asking for inspection."
+    if old_phase != "pack" and new.get("packed") != (old.get("packed") or {}):
+        return "Items go into bags only after the grown-up inspection."
+    if phase == "final" and not all(new.get("packed", {}).get(x) is True for x in item_ids):
+        return "Put every inspected item into its bag before the final check."
+    return None
+
+
 def packing_private_config():
     """Return the editable private source and its configured path, never a public-code fallback."""
     raw_path = HOUSE.get("packing_game_file")
@@ -2027,6 +2052,7 @@ def state_for_display(ip):
     state = derive()
     state["peer_pin_reset"] = peer_pin_reset_public(ip)
     state["peer_pin_reset_capable"] = bool(peer_reset_display(ip))
+    add_seen_projection(state, ip, "ann:" + ip)
     return state
 
 
@@ -4086,12 +4112,10 @@ class H(BaseHTTPRequestHandler):
                 if saved_.get("version") != game_.get("version"):
                     saved_ = {"version": game_.get("version"), "kids": {}}
                 old_ = (saved_.get("kids") or {}).get(packer_) or {}
-                if is_child_ and not adult_child_ and (
-                        clean_.get("checked") != (old_.get("checked") or {})
-                        or clean_.get("finals") != (old_.get("finals") or {})
-                        or (old_.get("phase") == "inspect" and clean_.get("phase") == "pack")
-                        or clean_.get("phase") == "complete"):
-                    return self.send(403, {"error": "Grown-up inspection happens in the parent Chores page."})
+                child_error_ = child_packing_update_error(game_, packer_, old_, clean_) \
+                    if is_child_ and not adult_child_ else None
+                if child_error_:
+                    return self.send(403, {"error": child_error_})
                 incoming_is_newer_ = int(old_.get("seq") or 0) <= int(clean_.get("seq") or 0)
                 if int(old_.get("seq") or 0) > int(clean_.get("seq") or 0):
                     clean_ = old_   # a slower response from an earlier tap cannot rewind the packing flow
@@ -6084,7 +6108,7 @@ def hub_showing_chores(ip):
 
 def keep_hubs_on_chores(tok):
     now = time.time()
-    if (GUARD.get("mode") or {}).get("chill"):
+    if (GUARD.get("mode") or {}).get("chill") and not GUARD.get("kid_workflow_open"):
         return
     from datetime import datetime
     for hid, h in HUBS.items():
@@ -6851,7 +6875,7 @@ def watch_tvs():
             if not end:
                 # a parent switching chore time OFF during the kids' hours frees the TVs only: the Hubs stay on the
                 # chore screens so the kids can still do jobs and spend points. The natural end gives them back.
-                hubs_stay = auto_on
+                hubs_stay = auto_on or GUARD.get("kid_workflow_open")
                 try:
                     start_armed_clocks(tok, active_unlocks())
                 except Exception as ex:  # noqa: BLE001
