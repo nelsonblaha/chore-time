@@ -263,6 +263,8 @@ def packing_progress(game):
     out = {}
     for profile in game.get("profiles") or []:
         for kid in profile.get("kids") or []:
+            if kid not in rows:
+                continue
             clean = sanitize_packing_progress(game, kid, rows.get(kid) or {})
             if clean:
                 clean["complete"] = packing_complete(game, kid, clean)
@@ -275,8 +277,9 @@ def packing_progress(game):
                 clean["award_total"] = sum(plan.values())
                 clean["complete_prize"] = plan.get("complete", 0)
                 clean["awarded"] = bool(saved_row.get("awarded")) or clean["awarded_points"] >= clean["award_total"]
-                clean["started_at"] = saved_row.get("started_at")
-                clean["updated_at"] = saved_row.get("updated_at")
+                seq_time = float(clean.get("seq") or 0) / 1000 if float(clean.get("seq") or 0) >= 1e12 else None
+                clean["started_at"] = saved_row.get("started_at") or seq_time
+                clean["updated_at"] = saved_row.get("updated_at") or seq_time
                 out[kid] = clean
     return out
 

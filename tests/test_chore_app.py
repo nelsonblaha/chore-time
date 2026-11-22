@@ -415,6 +415,7 @@ class PackingRewardGateTests(unittest.TestCase):
 
     def test_packing_blocks_rewards_but_not_other_chores_then_awards_once(self):
         a = self.app
+        self.assertEqual(a.state()["packing_game"]["progress"], {})
         a.event(type="adjust", kid="ava", points=20, reason="test", by="jordan")
         code, blocked = a.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})
         self.assertEqual(code, 409, blocked)
