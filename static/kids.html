@@ -381,7 +381,9 @@ var HA_MODE=location.pathname.indexOf("/local/")===0,PACK_TEST=HA_MODE&&/[?&]pac
     LOCKED=HA_MODE&&/[?&]kid=[a-z]/.test(location.search),
     LOCK_KID=LOCKED?(location.search.match(/[?&]kid=([a-z]+)/)||[])[1]:null;
 var KID_TOKEN={};
-if(!HA_MODE)setInterval(function(){if(S&&S.display&&S.display.kind==="hub")api("/api/hub_heartbeat",{}).catch(function(){})},2000);
+function hubHeartbeat(){if(HA_MODE||SANDBOX!=null||!S||!S.display||S.display.kind!=="hub")return;var active=kid&&KID_TOKEN[kid];api("/api/hub_heartbeat",active?{kid:kid,kid_session:active}:{kid:null}).catch(function(){})}
+function leaveHubForeground(next){kid=null;if(HA_MODE||SANDBOX!=null){next();return}api("/api/hub_heartbeat",{kid:null}).then(next).catch(next)}
+if(!HA_MODE)setInterval(hubHeartbeat,2000);
 function packingTestState(a){if(!PACK_TEST||!a.packing_game)return a;var id="packing_test",now=Date.now()/1000;
   a.config.kids=a.config.kids||[];if(!a.config.kids.some(function(k){return k.id===id}))a.config.kids.push({id:id,name:"X Æ A-12",icon:"1f680",color:"#5e35b1"});
   a.balance=a.balance||{};a.balance[id]=18;a.earned=a.earned||{};a.earned[id]=67;a.pending_points=a.pending_points||{};a.pending_points[id]=4;
@@ -447,9 +449,9 @@ if(SANDBOX!=null){
     document.body.appendChild(b)});
 }
 var lastSig=null;
-function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");location.href=adultPage(s.adult_go);return}   // approved on the watch, even if this page reloaded meanwhile
+function load(){return api("/api/state").then(function(s){if(s.adult_go){L("adult_ok_state");leaveHubForeground(function(){location.href=adultPage(s.adult_go)});return}   // approved on the watch, even if this page reloaded meanwhile
   var now=s.now;s.now=0;var sig=JSON.stringify(s);s.now=now;S=s;
-  if(kid){var protectedKid=S.config.kids.find(function(x){return x.id===kid&&x.pin_required});if(protectedKid&&PIN_OK[kid]!==S.pin_epoch){L("kid_pin_session_closed",{kid:kid});kid=null;MENU=false;DETAIL=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on")}}
+  if(kid){var protectedKid=S.config.kids.find(function(x){return x.id===kid&&x.pin_required});if(protectedKid&&PIN_OK[kid]!==S.pin_epoch){L("kid_pin_session_closed",{kid:kid});kid=null;MENU=false;DETAIL=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");hubHeartbeat()}}
   if(inspModalRef){var ir=S.history.find(function(h){return h.id===inspModalRef});
     if(!ir||ir.status!=="pending"){inspModalRef=null;if($("m").classList.contains("on"))closeModal()}}
   checkAttention();
@@ -939,7 +941,7 @@ function adultPinReset(k){busy=true;api("/api/kid_pin_reset_request",{kid:k}).th
 function peerResetStart(k){busy=true;api("/api/kid_peer_reset_request",{kid:k}).then(function(r){busy=false;if(!r.ok){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+safeText(r.error||"Two-Hub reset is unavailable")+'</div>');addOk(function(){forgotPin(k)});return}peerTargetWait(k,r.nonce)}).catch(function(){busy=false})}
 function peerTargetWait(k,nonce){var who=S.config.kids.find(function(x){return x.id===k});modal('<div id="peerwait"><div class="big">'+E(who.icon)+E("1f91d")+'</div><div class="q">Send another kid to the other Nest Hub</div><div class="q" style="font-size:25px">They must open <b>their own</b> profile, enter <b>their own PIN</b>, and press the big help button.</div><div class="q" style="font-size:21px;opacity:.75">Stay at this Hub. When both kids are in place, you can choose your new PIN. You will give the helper 1 '+E("2b50")+'.</div></div>');
   (function poll(){if(!$("peerwait"))return;setTimeout(function(){api("/api/kid_peer_reset_status",{nonce:nonce}).then(function(r){var p=r.peer_pin_reset;if(!$("peerwait"))return;if(!p||p.status==="cancelled"){modal('<div class="big">'+E("1f6ab")+'</div><div class="q">The two-Hub reset stopped.</div>');addOk();return}if(p.status==="helping"&&p.holding){peerChoosePin(k,nonce);return}poll()}).catch(poll)},700)})()}
-function peerChoosePin(k,nonce){var who=S.config.kids.find(function(x){return x.id===k});pinPad(who,"Choose a new PIN","Your helper must keep holding the big button on the other Hub",function(first,fail){pinPad(who,"Enter the new PIN again","The helper cannot see this screen",function(second,fail2){if(first!==second){fail2("Those did not match.");return}busy=true;api("/api/kid_peer_reset_finish",{nonce:nonce,kid:k,new_pin:first}).then(function(r){busy=false;if(!r.ok){fail2(r.error);return}S=r.state;PIN_OK[k]=S.pin_epoch;modal('<div class="big">'+E("2705")+E("1f512")+E("1f91d")+'</div><div class="q">Your new PIN is ready!</div><div class="q" style="font-size:24px">Your helper received 1 '+E("2b50")+'.</div>');addOk(function(){openKid(k,true)})}).catch(function(){busy=false;fail2("Try again.")})})})}
+function peerChoosePin(k,nonce){var who=S.config.kids.find(function(x){return x.id===k});pinPad(who,"Choose a new PIN","Your helper must keep holding the big button on the other Hub",function(first,fail){pinPad(who,"Enter the new PIN again","The helper cannot see this screen",function(second,fail2){if(first!==second){fail2("Those did not match.");return}busy=true;api("/api/kid_peer_reset_finish",{nonce:nonce,kid:k,new_pin:first}).then(function(r){busy=false;if(!r.ok){fail2(r.error);return}S=r.state;if(r.kid_session)KID_TOKEN[k]=r.kid_session;PIN_OK[k]=S.pin_epoch;modal('<div class="big">'+E("2705")+E("1f512")+E("1f91d")+'</div><div class="q">Your new PIN is ready!</div><div class="q" style="font-size:24px">Your helper received 1 '+E("2b50")+'.</div>');addOk(function(){openKid(k,true)})}).catch(function(){busy=false;fail2("Try again.")})})})}
 function maybePeerHelper(k){var p=S.peer_pin_reset;if(!p||p.role!=="helper"||p.target===k||!KID_TOKEN[k]||p.status==="done")return false;var target=S.config.kids.find(function(x){return x.id===p.target})||{name:"the other kid",icon:"1f9d2"};modal('<div id="peerhelp"><div class="big">'+E(target.icon)+E("1f91d")+'</div><div class="q">Help '+safeText(target.name)+' reset their PIN?</div><div class="q" style="font-size:24px">You will receive 1 '+E("2b50")+'. You must stay at this Hub so you cannot see the new PIN.</div><div class="btn yes" id="peerhelpgo" style="font-size:40px;font-weight:900;padding:24px">I am the helper</div></div>');
   $("peerhelpgo").onclick=function(){api("/api/kid_peer_reset_help",{nonce:p.nonce,kid:k,kid_session:KID_TOKEN[k]}).then(function(r){if(!r.ok){modal('<div class="q">'+safeText(r.error)+'</div>');addOk();return}peerHelperHold(k,p.nonce)})};return true}
 function peerHelperHold(k,nonce){var holding=false,timer=null;modal('<div id="peerholding"><div class="big">'+E("1f91d")+E("1f512")+'</div><div class="q">Stay here. Do not go look at the other Hub.</div><div class="q" style="font-size:23px">Press and KEEP HOLDING until their new PIN is finished.</div><div class="btn yes" id="peerhold" style="font-size:48px;font-weight:900;padding:45px 24px;touch-action:none;user-select:none">HOLD TO HELP</div><div id="peerholdmsg" class="q" style="font-size:21px;min-height:30px"></div></div>');
@@ -948,12 +950,12 @@ function peerHelperHold(k,nonce){var holding=false,timer=null;modal('<div id="pe
   (function poll(){if(!$("peerholding"))return;setTimeout(function(){api("/api/kid_peer_reset_status",{nonce:nonce}).then(function(r){var p=r.peer_pin_reset;if(!$("peerholding"))return;if(p&&p.status==="done"){stop();modal('<div class="big">'+E("1f389")+E("2b50")+'</div><div class="q">You helped keep their PIN private!</div><div class="q" style="font-size:26px">You received 1 '+E("2b50")+'.</div>');addOk();return}if(!p||p.status==="cancelled"){stop();modal('<div class="q">The reset stopped.</div>');addOk();return}poll()}).catch(poll)},700)})()}
 function changeKidPin(reset,target){target=target||kid;var who=S.config.kids.find(function(x){return x.id===target}),current="";
   function chooseNew(){pinPad(who,"Choose a new PIN","3 to 12 numbers",function(first,fail){pinPad(who,"Enter the new PIN again","Make sure both copies match",function(second,fail2){
-      if(first!==second){fail2("Those did not match.");return}busy=true;api("/api/kid_pin_change",{kid:target,current_pin:current,new_pin:first}).then(function(r){busy=false;if(!r.ok){fail2(r.error);return}S=r.state;modal('<div class="big">'+E("2705")+E("1f512")+'</div><div class="q">Your new PIN is ready!</div>');addOk(function(){openKid(target,true)})}).catch(function(){busy=false;fail2("Try again.")})
+      if(first!==second){fail2("Those did not match.");return}busy=true;api("/api/kid_pin_change",{kid:target,current_pin:current,new_pin:first}).then(function(r){busy=false;if(!r.ok){fail2(r.error);return}S=r.state;if(r.kid_session)KID_TOKEN[target]=r.kid_session;modal('<div class="big">'+E("2705")+E("1f512")+'</div><div class="q">Your new PIN is ready!</div>');addOk(function(){openKid(target,true)})}).catch(function(){busy=false;fail2("Try again.")})
     })})}
   if(reset){chooseNew();return}
   pinPad(who,"Enter your current PIN","Then you can choose a new one",function(value,fail){busy=true;api("/api/kid_unlock",{kid:target,pin:value}).then(function(r){busy=false;if(!r.ok){fail(r.error);return}if(r.kid_session)KID_TOKEN[target]=r.kid_session;current=value;chooseNew()}).catch(function(){busy=false;fail("Try again.")})})
 }
-function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id===k});if(who&&!who.pin_required&&!unlocked&&!HA_MODE){busy=true;api("/api/kid_unlock",{kid:k}).then(function(r){busy=false;if(r.state)S=r.state;if(r.kid_session)KID_TOKEN[k]=r.kid_session;openKid(k,true)}).catch(function(){busy=false});return}if(who&&who.pin_required&&!unlocked&&!HA_MODE){if((S.pin_reset_open||{})[k])changeKidPin(true,k);else kidPin(k);return}if(who&&who.pin_required)PIN_OK[k]=S.pin_epoch;L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();
+function openKid(k,unlocked){var who=S.config.kids.find(function(x){return x.id===k});if(who&&!who.pin_required&&!unlocked&&!HA_MODE){busy=true;api("/api/kid_unlock",{kid:k}).then(function(r){busy=false;if(r.state)S=r.state;if(r.kid_session)KID_TOKEN[k]=r.kid_session;openKid(k,true)}).catch(function(){busy=false});return}if(who&&who.pin_required&&!unlocked&&!HA_MODE){if((S.pin_reset_open||{})[k])changeKidPin(true,k);else kidPin(k);return}if(who&&who.pin_required)PIN_OK[k]=S.pin_epoch;L("open_kid",{to:k,balance:S.balance[k]});delete ATTN[k];kid=k;page=0;MENU=false;FOLD={buy:false,jobs:false};RWP=0;HP=0;$("pick").classList.remove("on");$("kid").classList.add("on");renderKid();poke();hubHeartbeat();
   var lastUse=(S.kid_open||{})[k]||0;
   if(maybePeerHelper(k))return;
   if(dressScreen(k))return;   // "Put on clothes!" comes before everything
@@ -1328,7 +1330,7 @@ function adultRequest(){L("adult_request");
   modal('<div class="big">'+E("231a")+'</div><div class="q">'+lead().name+', check your watch!</div><div class="q" style="font-size:24px;opacity:.7" id="adst">Waiting for "It\'s me"…</div>');
   api("/api/adult_request",{}).then(function(r){if(!r.ok){$("adst").textContent="Could not reach the watch";return}var n=0;
     (function poll(){if(!$("m").classList.contains("on"))return;api("/api/adult_status",{nonce:r.nonce}).then(function(st){
-      if(st.status==="ok"){L("adult_ok");location.href=adultPage(S.lead_adult||"");return}
+      if(st.status==="ok"){L("adult_ok");leaveHubForeground(function(){location.href=adultPage(S.lead_adult||"")});return}
       if(st.status==="no"||st.status==="timeout"){L("adult_"+st.status);modal('<div class="big">'+E("1f6ab")+'</div><div class="q">'+(st.status==="no"?lead().name+" said no.":"No answer.")+'</div>');addOk();return}
       if(++n<70)setTimeout(poll,2000)})})()})}
 /* --- partly done: a grown-up decides the points, the chore stays available --- */
@@ -1700,7 +1702,7 @@ function addOk(after){ // every message waits for a tap: kids read slowly
 function modal(h){$("mbox").innerHTML='<div class="mx" id="mx" aria-label="Close">&times;</div>'+h;$("mx").onclick=function(e){e.stopPropagation();closeModal()};$("m").classList.add("on");poke()}
 function closeModal(){L("close_modal");inspModalRef=null;(S&&S.config?S.config.chores:[]).forEach(function(c){delete c._note});$("m").classList.remove("on")}
 function goHome(why){if(LOCKED){$("awards").classList.remove("on");closeModal();render();return}   // a locked (one-child) screen never leaves that child
-  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;DETAIL=null;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");$("detail").classList.remove("on");$("packing").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render()}
+  L("go_home",{why:typeof why==="string"?why:"tap"});MENU=false;DETAIL=null;$("kmenu").classList.remove("on");$("awards").classList.remove("on");$("calendar").classList.remove("on");$("detail").classList.remove("on");$("packing").classList.remove("on");if(kid)setSeen(kid,S?S.now:0);kid=null;closeModal();$("kid").classList.remove("on");$("pick").classList.add("on");render();hubHeartbeat()}
 $("home").onclick=goHome;
 $("coinflip").onclick=function(e){e.stopPropagation();flipCoin()};
 $("menubtn").onclick=function(e){e.stopPropagation();MENU=!MENU;L("menu",{open:MENU});renderKidMenu()};
@@ -1711,7 +1713,7 @@ $("packreset").onclick=function(){if(!confirm("Reset this packing list and unpac
 $("calback").onclick=closeCalendar;
 $("calprev").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()-7);L("calendar_week",{move:-1,week:calKey(CALWEEK)});renderCalendar()};
 $("calnext").onclick=function(){CALWEEK.setDate(CALWEEK.getDate()+7);L("calendar_week",{move:1,week:calKey(CALWEEK)});renderCalendar()};
-$("exit").onclick=function(){L("hub_exit");$("exit").style.background="#ffe082";$("exit").innerHTML=E("1f44b")+" Bye!";api("/api/exit",{})};
+$("exit").onclick=function(){L("hub_exit");$("exit").style.background="#ffe082";$("exit").innerHTML=E("1f44b")+" Bye!";leaveHubForeground(function(){api("/api/exit",{})})};
 if(SANDBOX!=null)$("exit").onclick=function(){try{window.parent.postMessage({chore_demo:"close"},"*")}catch(e){}};   // the demo's host closes it
 var IDLE_MS=300000; // back to "Who are you?" after 5 min untouched
 function poke(){clearTimeout(idleT);idleT=setTimeout(function(){if($("timer").classList.contains("on")&&!tmrHidden[(tmrCur||"").split(":")[0]])return poke();
@@ -1784,6 +1786,6 @@ function stale(){if(!(S&&VER&&S.version!==VER)){staleAt=0;return false}if(!HA_MO
 function reloadNow(){flushL();setTimeout(function(){var k=kid||LOCK_KID;location.replace(location.pathname+"?v="+Date.now()+(k?"&kid="+k:""))},250)}
 setInterval(function(){ // self-update: reload as soon as no pop-up is open; keeps the same kid's screen
   if(!stale()||$("m").classList.contains("on")||$("news").classList.contains("on")||$("timer").classList.contains("on"))return;L("self_reload",{from:VER,to:S.version});reloadNow()},2000);
-load().then(function(){VER=S.version;uploadSeen((S.config.kids||[]).map(function(k){return k.id}));var q=(location.search.match(/[?&]kid=([a-z]+)/)||[])[1];if(q&&S.config.kids.some(function(k){return k.id===q}))openKid(q)});setInterval(function(){if(!busy&&!$("m").classList.contains("on"))load()},5000);
+load().then(function(){VER=S.version;uploadSeen((S.config.kids||[]).map(function(k){return k.id}));hubHeartbeat();var q=(location.search.match(/[?&]kid=([a-z]+)/)||[])[1];if(q&&S.config.kids.some(function(k){return k.id===q}))openKid(q)});setInterval(function(){if(!busy&&!$("m").classList.contains("on"))load()},5000);
 </script>
 </body></html>

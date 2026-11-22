@@ -212,6 +212,15 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("I physically checked both Hubs are in their proper rooms", grown)
         self.assertIn("/api/hub_placement_attest", grown)
 
+    def test_physical_hub_heartbeat_reports_and_immediately_clears_the_foreground_child(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        self.assertIn('api("/api/hub_heartbeat",active?{kid:kid,kid_session:active}:{kid:null})', kids)
+        self.assertIn("renderKid();poke();hubHeartbeat()", kids)
+        self.assertIn('$("pick").classList.add("on");render();hubHeartbeat()', kids)
+        self.assertIn("if(HA_MODE||SANDBOX!=null", kids)
+        self.assertIn('leaveHubForeground(function(){api("/api/exit",{})})', kids)
+        self.assertIn('leaveHubForeground(function(){location.href=adultPage', kids)
+
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Keep your letter OUT of the envelope", html)
@@ -555,6 +564,98 @@ class KidPreviewProjectionTests(Case):
         self.assertNotIn("inspection_seen_displays", self.app.state())
         self.assertEqual(self.app.post_from("127.0.0.3", "/api/inspection_seen_snapshot",
                                             {"kids": {"ava": {"present": True, "value": 99}}})[0], 403)
+
+
+class HubChildSessions(Case):
+    HUB_ONE = "127.0.0.2"
+    HUB_TWO = "127.0.0.3"
+
+    def setUp(self):
+        super().setUp()
+        config = json.loads((self.app.dir / "chores.json").read_text())
+        config["kids"][0]["pin_hash"] = self.s.make_kid_pin_hash("1234")
+        (self.app.dir / "chores.json").write_text(json.dumps(config))
+        self.s.HUBS.clear()
+        self.s.HUBS.update({
+            "room_hub": {"ip": self.HUB_ONE, "room": "den", "floorplan_room": "great_room",
+                         "entity": "media_player.den_hub"},
+            "bed_hub": {"ip": self.HUB_TWO, "room": "kids_bed", "floorplan_room": "kids_bedroom",
+                        "entity": "media_player.bed_hub"},
+        })
+        self.s.queue_hub_child_state_push = lambda: None
+
+    def test_only_each_physical_hubs_live_child_credential_sets_its_foreground_name(self):
+        self.assertEqual(self.app.post("/api/hub_heartbeat", {"kid": "ava", "kid_session": "fake"})[0], 403)
+        self.assertEqual(self.app.post_from(self.HUB_ONE, "/api/hub_heartbeat", {"kid": None})[0], 200)
+        unlocked = self.app.post_from(self.HUB_ONE, "/api/kid_unlock", {"kid": "ava", "pin": "1234"})
+        self.assertEqual(unlocked[0], 200, unlocked)
+        token = unlocked[1]["kid_session"]
+        beat = self.app.post_from(self.HUB_ONE, "/api/hub_heartbeat",
+                                  {"kid": "ava", "kid_session": token})
+        self.assertEqual(beat[1]["active_kid"], "ava")
+
+        second = self.app.post_from(self.HUB_TWO, "/api/kid_unlock", {"kid": "max"})
+        self.assertEqual(second[0], 200, second)
+        self.assertEqual(self.app.post_from(self.HUB_TWO, "/api/hub_heartbeat",
+                         {"kid": "max", "kid_session": second[1]["kid_session"]})[1]["active_kid"], "max")
+        manifest = self.s.hub_child_sessions_manifest()
+        self.assertEqual((manifest["great_room"]["display_id"], manifest["great_room"]["kid"],
+                          manifest["great_room"]["name"], manifest["great_room"]["entity"]),
+                         ("room_hub", "ava", "Ava", "media_player.den_hub"))
+        self.assertEqual(manifest["kids_bedroom"]["kid"], "max")
+        self.assertNotIn(token, json.dumps(manifest))
+        self.assertNotIn(self.HUB_ONE, json.dumps(manifest))
+
+        # A wrong or expired credential cannot keep a name up, and one Hub never changes the other.
+        cleared = self.app.post_from(self.HUB_ONE, "/api/hub_heartbeat",
+                                     {"kid": "ava", "kid_session": "wrong"})
+        self.assertIsNone(cleared[1]["active_kid"])
+        manifest = self.s.hub_child_sessions_manifest()
+        self.assertIsNone(manifest["great_room"]["kid"])
+        self.assertEqual(manifest["kids_bedroom"]["kid"], "max")
+
+    def test_picker_logout_and_missing_hub_clear_without_historical_login_fallback(self):
+        unlocked = self.app.post_from(self.HUB_ONE, "/api/kid_unlock", {"kid": "ava", "pin": "1234"})[1]
+        self.app.post_from(self.HUB_ONE, "/api/hub_heartbeat",
+                           {"kid": "ava", "kid_session": unlocked["kid_session"]})
+        self.s.GUARD["kid_display_where"] = {"ava": {"display_id": "room_hub", "valid_until": time.time() + 900}}
+        row = self.s.GUARD["hub_child_sessions"]["room_hub"]
+        observed = row["last_observed"]
+        self.assertTrue(self.s.expire_hub_child_sessions(observed + self.s.HUB_CHILD_OFFLINE_S + .1))
+        self.assertIsNone(self.s.hub_child_sessions_manifest(observed + 11)["great_room"]["kid"])
+        self.assertIsNotNone(self.s.GUARD.get("kid_display_where", {}).get("ava"))
+
+        self.app.post_from(self.HUB_ONE, "/api/hub_heartbeat", {"kid": None})
+        picker = self.s.hub_child_sessions_manifest()
+        self.assertIsNone(picker["great_room"]["kid"])
+        self.assertIsNotNone(picker["great_room"]["last_observed"])
+
+    def test_manifest_only_refresh_does_not_rewrite_chunk_parts(self):
+        sent, old_post = [], self.s.ha_post_state
+        self.s.ha_post_state = lambda entity, value, attrs, tok: sent.append((entity, attrs))
+        try:
+            now = time.time()
+            self.s.GUARD["hub_child_sessions"] = {"room_hub": {"kid": "ava", "since": now,
+                "last_observed": now, "valid_until": now + 75, "published_at": now}}
+            self.s.GUARD.pop("state_sig", None)
+            self.s.GUARD.pop("state_sig_manifest", None)
+            state = self.s.derive()
+            self.app.orig["push_state_sensor"](state)
+            first_parts = [x for x in sent if x[0].startswith("sensor.chore_state_part_")]
+            first_manifest = next(x[1] for x in sent if x[0] == "sensor.chore_state")
+            self.assertTrue(first_parts)
+            self.assertEqual(first_manifest["hub_child_sessions"]["great_room"]["kid"], "ava")
+
+            sent.clear()
+            row = self.s.GUARD["hub_child_sessions"]["room_hub"]
+            row.update(last_observed=now + 31, valid_until=now + 106, published_at=now + 31)
+            self.app.orig["push_state_sensor"](state)
+            self.assertFalse([x for x in sent if x[0].startswith("sensor.chore_state_part_")])
+            refreshed = [x for x in sent if x[0] == "sensor.chore_state"]
+            self.assertEqual(len(refreshed), 1)
+            self.assertEqual(refreshed[0][1]["hub_child_sessions"]["great_room"]["last_observed"], now + 31)
+        finally:
+            self.s.ha_post_state = old_post
 
 
 # ---------------------------------------------------------------- who may do what

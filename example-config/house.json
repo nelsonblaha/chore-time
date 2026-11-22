@@ -100,11 +100,13 @@
     "living_room": {
       "ip": "192.168.1.30",
       "entity": "media_player.living_room_hub_max",
-      "room": "Living room"
+      "room": "Living room",
+      "floorplan_room": "living_room"
     },
     "kids_room": {
       "ip": "192.168.1.31",
       "entity": "media_player.kids_room_hub_max",
+      "floorplan_room": "kids_bedroom",
       "from_h": 7
     }
   },

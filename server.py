@@ -112,6 +112,7 @@ HUB_PLACEMENT_FILE = DATA / "hub_placement.json"
 PEER_PIN_CFG = HOUSE.get("peer_pin_reset") or {}
 PEER_LOCK = threading.Lock()
 INSPECTION_SEEN_LOCK = threading.Lock()
+HUB_CHILD_LOCK = threading.Lock()
 SERVER_STARTED_AT = time.time()
 
 
@@ -1760,6 +1761,73 @@ def valid_kid_session(token, kid, ip, now=None):
     return row.get("kid") == kid and row.get("ip") == ip and float(row.get("until") or 0) > now
 
 
+HUB_CHILD_REFRESH_S = 30
+HUB_CHILD_OFFLINE_S = 10
+HUB_CHILD_VALID_S = 75
+
+
+def observe_hub_child(ip, kid=None, token=None, now=None):
+    """Record the foreground child only when a configured physical Hub proves a live child session."""
+    now = time.time() if now is None else float(now)
+    display = display_for_ip(ip)
+    if not display or display.get("kind") != "hub" or display.get("id") not in HUBS:
+        return None
+    known = {row["id"] for row in cfg()["kids"]}
+    accepted = kid if isinstance(kid, str) and kid in known and valid_kid_session(token, kid, ip, now) else None
+    if accepted:
+        # A foreground heartbeat keeps the already authenticated display-bound credential alive.
+        (GUARD.get("kid_sessions") or {})[str(token)]["until"] = now + 600
+    with HUB_CHILD_LOCK:
+        sessions = GUARD.setdefault("hub_child_sessions", {})
+        old = sessions.get(display["id"]) or {}
+        changed = not old or old.get("kid") != accepted
+        row = {"kid": accepted,
+               "since": (old.get("since") if accepted and old.get("kid") == accepted else
+                         (now if accepted else None)),
+               "last_observed": now,
+               "valid_until": now + HUB_CHILD_VALID_S,
+               "published_at": float(old.get("published_at") or 0)}
+        publish = changed or now - row["published_at"] >= HUB_CHILD_REFRESH_S
+        if publish:
+            row["published_at"] = now
+        sessions[display["id"]] = row
+    return {"display_id": display["id"], "kid": accepted, "publish": publish}
+
+
+def expire_hub_child_sessions(now=None):
+    """Clear a foreground name promptly when its physical Hub stops heartbeating."""
+    now = time.time() if now is None else float(now)
+    changed = False
+    with HUB_CHILD_LOCK:
+        for row in (GUARD.get("hub_child_sessions") or {}).values():
+            if row.get("kid") and now - float(row.get("last_observed") or 0) > HUB_CHILD_OFFLINE_S:
+                row.update(kid=None, since=None, published_at=now)
+                changed = True
+    return changed
+
+
+def hub_child_sessions_manifest(now=None):
+    """Small public HA manifest: no credential, IP, PIN, or historical login evidence."""
+    now = time.time() if now is None else float(now)
+    names = {row["id"]: row["name"] for row in cfg()["kids"]}
+    out = {}
+    with HUB_CHILD_LOCK:
+        rows = {key: dict(value) for key, value in (GUARD.get("hub_child_sessions") or {}).items()}
+    for display_id, config in HUBS.items():
+        row = rows.get(display_id) or {}
+        observed = float(row.get("last_observed") or 0)
+        kid = row.get("kid") if observed and now - observed <= HUB_CHILD_OFFLINE_S else None
+        if kid not in names:
+            kid = None
+        room = str(config.get("floorplan_room") or config.get("room") or display_id)
+        out[room] = {"display_id": display_id, "entity": config.get("entity"),
+                     "kid": kid, "name": names.get(kid) if kid else None,
+                     "since": row.get("since") if kid else None,
+                     "last_observed": observed or None,
+                     "valid_until": (float(row.get("valid_until") or 0) or None)}
+    return out
+
+
 def valid_shared_reward_sessions(body, participants, ip):
     """Require a fresh, display-bound identity session for every child being charged."""
     supplied = body.get("kid_sessions") or {}
@@ -2838,22 +2906,28 @@ def publish_chunked_state(entity, attrs, tok, guard_key, manifest_fields=None):
     transport; the named entity is a small, stable manifest and action receipt.
     """
     revision, chunks = chunked_state_payload(attrs)
-    if GUARD.get(guard_key) == revision:
-        return False
+    content_changed = GUARD.get(guard_key) != revision
     stem = entity.removeprefix("sensor.")
     total = len(chunks)
-    for i, payload in enumerate(chunks, 1):
-        ha_post_state(f"sensor.{stem}_part_{i}", revision,
-                      {"friendly_name": f"Chore state part {i}", "revision": revision,
-                       "part": i, "parts": total, "payload": payload}, tok)
+    if content_changed:
+        for i, payload in enumerate(chunks, 1):
+            ha_post_state(f"sensor.{stem}_part_{i}", revision,
+                          {"friendly_name": f"Chore state part {i}", "revision": revision,
+                           "part": i, "parts": total, "payload": payload}, tok)
     manifest = {"friendly_name": attrs.get("friendly_name") or "Chore state",
                 "chunked": True, "encoding": "json", "revision": revision,
                 "parts": total, "payload_bytes": len(json.dumps(attrs, ensure_ascii=False,
                                                                    separators=(",", ":"), default=str).encode())}
     manifest.update(manifest_fields or {})
-    ha_post_state(entity, revision, manifest, tok)
-    GUARD[guard_key] = revision
-    return True
+    manifest_sig = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                                default=str).encode()).hexdigest()
+    manifest_changed = GUARD.get(guard_key + "_manifest") != manifest_sig
+    if manifest_changed:
+        ha_post_state(entity, revision, manifest, tok)
+        GUARD[guard_key + "_manifest"] = manifest_sig
+    if content_changed:
+        GUARD[guard_key] = revision
+    return content_changed or manifest_changed
 
 
 def push_state_sensor(state=None, last_result=None):
@@ -2927,9 +3001,33 @@ def push_state_sensor(state=None, last_result=None):
         publish_chunked_state("sensor.chore_state", attrs, tok, "state_sig",
                               {"version": attrs.get("version"), "last_result": attrs.get("last_result"),
                                "spotify_volume_cap": attrs.get("spotify_volume_cap", 100),
-                               "spotify_exempt_rooms": attrs.get("spotify_exempt_rooms", [])})
+                               "spotify_exempt_rooms": attrs.get("spotify_exempt_rooms", []),
+                               "hub_child_sessions": hub_child_sessions_manifest()})
     except Exception as ex:  # noqa: BLE001
         print("HA state push failed", ex, flush=True)
+
+
+def queue_hub_child_state_push():
+    """Coalesce the two Hubs' fast observations into one background HA manifest update."""
+    with HUB_CHILD_LOCK:
+        if GUARD.get("hub_child_push_pending"):
+            return
+        GUARD["hub_child_push_pending"] = True
+
+    def run():
+        try:
+            push_state_sensor()
+        finally:
+            with HUB_CHILD_LOCK:
+                GUARD["hub_child_push_pending"] = False
+    threading.Thread(target=run, name="hub-child-publish", daemon=True).start()
+
+
+def watch_hub_child_sessions():
+    while True:
+        if expire_hub_child_sessions():
+            queue_hub_child_state_push()
+        time.sleep(2)
 
 
 GLOBAL_LAST = {}
@@ -3700,10 +3798,15 @@ class H(BaseHTTPRequestHandler):
         except ValueError:
             return self.send(400, {"error": "bad json"})
         if self.path == "/api/hub_heartbeat":
-            display_ = peer_reset_display(self.client_address[0])
-            if display_:
-                GUARD.setdefault("hub_heartbeat", {})[display_["id"]] = time.time()
-            return self.send(200, {"ok": True, "hub": display_.get("id") if display_ else None})
+            display_ = display_for_ip(self.client_address[0])
+            if not display_ or display_.get("kind") != "hub" or display_.get("id") not in HUBS:
+                return self.send(403, {"error": "configured physical Hubs only"})
+            GUARD.setdefault("hub_heartbeat", {})[display_["id"]] = time.time()
+            foreground_ = observe_hub_child(self.client_address[0], b.get("kid"), b.get("kid_session"))
+            if foreground_ and foreground_["publish"]:
+                queue_hub_child_state_push()
+            return self.send(200, {"ok": True, "hub": display_["id"],
+                                   "active_kid": foreground_["kid"] if foreground_ else None})
         if self.path == "/api/inspection_seen_snapshot":
             saved_ = save_inspection_seen_snapshot(self.client_address[0], b.get("kids"))
             if not saved_:
@@ -4324,7 +4427,9 @@ class H(BaseHTTPRequestHandler):
             ilog({"src": "peer_pin_reset", "action": "completed", "kid": target_,
                   "helper": row_["helper"], "nonce": nonce_})
             after_change()
-            return self.send(200, {"ok": True, "helper": row_["helper"], "state": state_for_display(self.client_address[0])})
+            session_ = issue_kid_session(target_, self.client_address[0])
+            return self.send(200, {"ok": True, "helper": row_["helper"], "kid_session": session_,
+                                   "state": state_for_display(self.client_address[0])})
         if p == "/api/hub_placement_attest":
             required_adult_ = str(PEER_PIN_CFG.get("adult") or LEAD_ADULT or "")
             if b.get("by") not in insp or b.get("by") != required_adult_:
@@ -4375,7 +4480,8 @@ class H(BaseHTTPRequestHandler):
             ilog({"src": "kid_pin", "kid": kid_["id"], "ip": self.client_address[0],
                   "action": "changed_after_reset" if reset_ else "changed"})
             after_change()
-            return self.send(200, {"ok": True, "state": derive()})
+            session_ = issue_kid_session(kid_["id"], self.client_address[0])
+            return self.send(200, {"ok": True, "kid_session": session_, "state": derive()})
         if p in ("/api/start", "/api/report", "/api/claim") and b.get("kid") and b.get("chore") in chores \
                 and not is_here(chores[b["chore"]], c, b["kid"]):
             return self.send(409, {"error": "that one is at the other house"})
@@ -7506,6 +7612,8 @@ def start_modules():
     if HA_URL:
         push_ha(derive())
         go("ha-sensors", push_state_sensor)
+        if HUBS:
+            go("hub-child-sessions", watch_hub_child_sessions)  # trusted foreground child per physical Hub
         go("ha-actions", watch_ha_actions)        # parent actions from HA dashboards (input_text relay)
         go("ha-events", watch_ha_events)          # phone/watch notification buttons
         go("home-days", watch_home_days)          # streaks skip days a kid was away
