@@ -173,6 +173,11 @@ class RehearsalServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(public["role"], "primary")
         self.assertTrue(public["effects_suppressed"])
+        health = self.get("/health")[1]
+        self.assertEqual(health["checkpoint"]["contract"], "chore-core-checkpoint-v1")
+        self.assertEqual(health["checkpoint"]["ledger"]["event_count"], 0)
+        self.assertTrue(health["checkpoint"]["ledger"]["tail_complete"])
+        self.assertEqual(len(health["checkpoint"]["core_sha256"]), 64)
         self.assertEqual(self.get("/kids")[0], 200)
 
         status, rejected = self.post("/api/start", {"kid": "ava", "chore": "kitchen"})

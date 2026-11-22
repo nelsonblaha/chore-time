@@ -19,6 +19,14 @@ is `/health`. Home Assistant continues to serve `/local/chore-kids.html` and
 consume `sensor.chore_state`. A promotion is incomplete until those routes and
 the HA asset resolve to the promoted revision.
 
+Set `CHORE_REVISION` in each node's private runtime environment to the exact
+deployed Git SHA. `/health` reports that value plus a payload-free
+`chore-core-checkpoint-v1`: SHA-256 and byte counts for the ledger and private
+configs, ledger event count/tail completeness, and one combined core hash.
+Direct old/new backend and stable-route values must match before a route move.
+This quick checkpoint does not replace the full quiesced manifest, which also
+covers every optional authoritative file.
+
 A reverse proxy normally hides the physical Hub's source IP. Configure the
 dedicated LAN ingress to remove any client-supplied identity/token headers, add
 a private random token, and append the observed client to `X-Forwarded-For`.

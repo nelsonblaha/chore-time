@@ -114,6 +114,7 @@ HUB_PLACEMENT_FILE = DATA / "hub_placement.json"
 PEER_PIN_CFG = HOUSE.get("peer_pin_reset") or {}
 PEER_LOCK = threading.Lock()
 SERVER_STARTED_AT = time.time()
+APP_REVISION = str(os.environ.get("CHORE_REVISION") or "unknown")
 
 
 def ilog(rec):
@@ -595,6 +596,25 @@ def read_events():
         if line:
             out.append(json.loads(line))
     return out
+
+
+def core_state_checkpoint():
+    """Payload-free identity for the quiesced state that every writer must share."""
+    with LOCK:
+        rows = {}
+        for name, path in (("ledger", LEDGER), ("chores", CONFIG), ("house", HOUSE_FILE)):
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                raw = b""
+            rows[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+            if name == "ledger":
+                rows[name]["event_count"] = sum(1 for line in raw.splitlines() if line.strip())
+                rows[name]["tail_complete"] = not raw or raw.endswith(b"\n")
+        joined = "\n".join("%s:%s" % (name, rows[name]["sha256"])
+                           for name in ("ledger", "chores", "house")).encode()
+    return {"contract": "chore-core-checkpoint-v1", "app_revision": APP_REVISION,
+            "core_sha256": hashlib.sha256(joined).hexdigest(), **rows}
 
 
 def _write_event_locked(ev):
@@ -3608,7 +3628,8 @@ class H(BaseHTTPRequestHandler):
                                                                                   if x["camera"] == c_ and x["label"] == lab)
                                                                            for lab in ("tidy", "untidy")} for c_ in e_.cfg["cameras"]}})
         if p == "/health":
-            return self.send(200, {"ok": True, "failover": AUTHORITY.public_status()})
+            return self.send(200, {"ok": True, "failover": AUTHORITY.public_status(),
+                                   "checkpoint": core_state_checkpoint()})
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
