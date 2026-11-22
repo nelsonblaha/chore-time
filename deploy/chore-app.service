@@ -1,0 +1,14 @@
+[Unit]
+Description=Chore Time household service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=CHORE_DATA=%h/.local/share/chore-lane
+EnvironmentFile=-%h/.config/chore-time/runtime.env
+ExecStart=%h/.local/share/chore-runtime/bin/python %h/src/chore-time/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
