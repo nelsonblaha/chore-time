@@ -198,7 +198,7 @@ function openDocumentPreview(pages,title){pages=(pages||[]).filter(function(x){r
   $("doctitle").textContent=title||"Scanned paper";$("docpages").innerHTML=pages.map(function(src,i){return '<img src="'+esc(src)+'" alt="Page '+(i+1)+'">'}).join("");
   $("docpreview").classList.add("on");$("docpages").scrollTop=0;document.body.style.overflow="hidden"}
 function closeDocumentPreview(){$("docpreview").classList.remove("on");$("docpages").innerHTML="";document.body.style.overflow=""}
-function openPackingWorkspace(packer){var q=[],base=HA_MODE?"/local/chore-packing.html":"/packing";if(me)q.push("by="+encodeURIComponent(me));if(typeof packer==="string"&&packer)q.push("packer="+encodeURIComponent(packer));location.href=base+(q.length?"?"+q.join("&"):"")}
+function openPackingWorkspace(packer){var q=[],base=HA_MODE?"/local/chore-packing.html":"/packing";if(HA_MODE)q.push("v="+Date.now());if(me)q.push("by="+encodeURIComponent(me));if(typeof packer==="string"&&packer)q.push("packer="+encodeURIComponent(packer));location.href=base+"?"+q.join("&")}
 function closePackingWorkspace(){$("packadminview").classList.remove("on");$("packadminframe").src="about:blank";document.body.style.overflow="";load()}
 var S=null,me=null,adjKid=null,adjPts=null,TSEL={};   // TSEL: per-kid stars picked on a team job, kept across refreshes
 try{me=localStorage.getItem("inspector")}catch(e){}

@@ -224,6 +224,7 @@ class StaticUiRegressions(unittest.TestCase):
     def test_real_kid_packing_is_one_job_at_a_time_and_parent_inspection_is_separate(self):
         kids = (REPO / "static" / "kids.html").read_text()
         grown = (REPO / "static" / "packing.html").read_text()
+        inspect = (REPO / "static" / "inspect.html").read_text()
         self.assertIn('$("packreset").style.display=kid==="packing_test"?"":"none"', kids)
         self.assertIn("Family packing progress</summary>", kids)
         self.assertIn("I remembered something — keep laying out", kids)
@@ -234,6 +235,7 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('laid out":phase==="inspect"', grown)
         self.assertIn("data-openitem", grown)
         self.assertIn('mark:{item:item,value:value}', grown)
+        self.assertIn('q.push("v="+Date.now())', inspect)
 
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
