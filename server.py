@@ -40,6 +40,8 @@ import schedule  # noqa: E402
 schedule.configure(HOUSE.get("kid_calendar"), str(DATA / "kid_calendar.json"))
 HA = HOUSE.get("home_assistant") or {}   # empty = no Home Assistant: TV locks, Hubs, lights, vacuum, watch login all off
 REWARD_BLOCK_CACHE = {"ts": 0, "value": {"on": False, "items": []}}
+PACKING_PROGRESS_FILE = DATA / "packing_progress.json"
+PACKING_LOCK = threading.Lock()
 
 
 def packing_config():
@@ -50,10 +52,11 @@ def packing_config():
         try:
             value = json.loads(path.read_text())
             if isinstance(value, dict):
-                return value
+                return packing_public(value)
         except (OSError, ValueError):
             pass
-    return HOUSE.get("packing_game")
+    value = HOUSE.get("packing_game")
+    return packing_public(value) if isinstance(value, dict) else value
 
 
 def house_path(p):
@@ -163,6 +166,82 @@ def save_private_json(path, value):
         output.write(json.dumps(value, indent=2))
     tmp.replace(path)
     os.chmod(path, 0o600)
+
+
+def packing_profile(game, kid):
+    """The one packing profile assigned to a child; grown-up-only profiles never become child blockers."""
+    return next((p for p in (game.get("profiles") or []) if kid in (p.get("kids") or [])), None)
+
+
+def packing_item_ids(profile, kid):
+    return {x["id"] for pile in (profile.get("piles") or []) for x in (pile.get("items") or [])
+            if x.get("id") and (not x.get("only") or kid in x["only"])}
+
+
+def sanitize_packing_progress(game, kid, raw):
+    profile = packing_profile(game, kid)
+    if not profile or not isinstance(raw, dict):
+        return None
+    item_ids = packing_item_ids(profile, kid)
+    final_ids = {x["id"] for x in (profile.get("final_checks") or []) if x.get("id")}
+    bools = lambda name, allowed: {str(k): True for k, v in (raw.get(name) or {}).items()
+                                   if str(k) in allowed and v is True}
+    checks = lambda name, allowed: {str(k): str(v) for k, v in (raw.get(name) or {}).items()
+                                    if str(k) in allowed and v in ("pass", "fix")}
+    phase = str(raw.get("phase") or "layout")
+    if phase not in ("layout", "inspect", "pack", "final", "complete"):
+        phase = "layout"
+    try:
+        seq = max(0, int(raw.get("seq") or 0))
+    except (TypeError, ValueError):
+        seq = 0
+    return {"version": str(game.get("version") or ""), "profile": profile.get("id"), "packer": kid,
+            "seq": seq,
+            "phase": phase, "ready": bools("ready", item_ids), "checked": checks("checked", item_ids),
+            "packed": bools("packed", item_ids), "finals": checks("finals", final_ids)}
+
+
+def packing_complete(game, kid, progress):
+    profile = packing_profile(game, kid)
+    if not profile or not progress or progress.get("phase") != "complete":
+        return False
+    items = packing_item_ids(profile, kid)
+    finals = {x["id"] for x in (profile.get("final_checks") or []) if x.get("id")}
+    return (all(progress.get("checked", {}).get(x) == "pass" and progress.get("packed", {}).get(x) is True
+                for x in items)
+            and all(progress.get("finals", {}).get(x) == "pass" for x in finals))
+
+
+def packing_progress(game):
+    saved = load_private_json(PACKING_PROGRESS_FILE, {})
+    rows = saved.get("kids") or {} if saved.get("version") == game.get("version") else {}
+    out = {}
+    for profile in game.get("profiles") or []:
+        for kid in profile.get("kids") or []:
+            clean = sanitize_packing_progress(game, kid, rows.get(kid) or {})
+            if clean:
+                clean["complete"] = packing_complete(game, kid, clean)
+                clean["awarded"] = bool((rows.get(kid) or {}).get("awarded"))
+                out[kid] = clean
+    return out
+
+
+def packing_public(game):
+    public = json.loads(json.dumps(game))
+    public["progress"] = packing_progress(game)
+    return public
+
+
+def packing_reward_gate(state, participants):
+    game = state.get("packing_game") or {}
+    if not game.get("activated") or not game.get("required_before_rewards"):
+        return None
+    for kid in participants:
+        if packing_profile(game, kid) and not ((game.get("progress") or {}).get(kid) or {}).get("complete"):
+            name = next((x.get("name") for x in (state.get("config") or {}).get("kids", [])
+                         if x.get("id") == kid), kid)
+            return {"kid": kid, "name": name, "message": "Pack for the train first! You can still do other chores."}
+    return None
 
 
 def save_peer_pin_resets():
@@ -3511,6 +3590,48 @@ class H(BaseHTTPRequestHandler):
             acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
+        if p == "/api/packing_update":
+            kid_ = b.get("kid")
+            game_ = packing_config() or {}
+            profile_ = packing_profile(game_, kid_)
+            if not game_.get("activated") or not profile_:
+                return self.send(409, {"error": "Packing is not open for this kid."})
+            ha_child_ = allowed_kids is not None and kid_ in allowed_kids
+            if not ha_child_ and not valid_kid_session(b.get("kid_session"), kid_, self.client_address[0]):
+                return self.send(403, {"error": "Open your profile with your PIN first."})
+            clean_ = sanitize_packing_progress(game_, kid_, b.get("progress") or {})
+            if not clean_:
+                return self.send(400, {"error": "That packing update did not make sense."})
+            if clean_["phase"] == "complete" and not packing_complete(game_, kid_, clean_):
+                return self.send(409, {"error": "Every packed item and final check must pass first."})
+            with PACKING_LOCK:
+                saved_ = load_private_json(PACKING_PROGRESS_FILE, {})
+                if saved_.get("version") != game_.get("version"):
+                    saved_ = {"version": game_.get("version"), "kids": {}}
+                old_ = (saved_.get("kids") or {}).get(kid_) or {}
+                if int(old_.get("seq") or 0) > int(clean_.get("seq") or 0):
+                    clean_ = old_   # a slower response from an earlier tap cannot rewind the packing flow
+                if packing_complete(game_, kid_, old_):
+                    clean_ = old_   # completion is durable; a stray Reset cannot relock rewards or repay points
+                complete_ = packing_complete(game_, kid_, clean_)
+                award_ = int(profile_.get("points") or 0)
+                already_awarded_ = bool(old_.get("awarded")) or any(
+                    e.get("type") == "adjust" and e.get("packing_version") == game_.get("version")
+                    and e.get("kid") == kid_ for e in read_events())
+                if complete_ and award_ and not already_awarded_:
+                    award_event_ = append({"type": "adjust", "kid": kid_, "points": award_,
+                                           "reason": game_.get("award_reason") or "Finished train packing",
+                                           "by": "packing", "icon": game_.get("icon") or "1f9f3",
+                                           "packing_version": game_.get("version")})
+                    clean_["awarded"], clean_["award_event"] = True, award_event_["id"]
+                elif already_awarded_:
+                    clean_["awarded"] = True
+                saved_.setdefault("kids", {})[kid_] = clean_
+                save_private_json(PACKING_PROGRESS_FILE, saved_)
+            ilog({"src": "packing", "kid": kid_, "phase": clean_["phase"],
+                  "complete": packing_complete(game_, kid_, clean_)})
+            after_change()
+            return self.send(200, {"ok": True, "state": derive()})
         if p in ("/api/tv/reward_pause", "/api/tv/reward_resume"):
             if not verified_ha_adult(self.headers, b.get("by")):
                 return self.send(403, {"error": "Use the signed-in grown-up Chore dashboard."})
@@ -3609,6 +3730,10 @@ class H(BaseHTTPRequestHandler):
                 blocked_ = reward_block_state(fresh=True)
                 if blocked_["on"]:
                     return self.send(409, {"error": blocked_["items"][0]["message"]})
+                packing_gate_ = packing_reward_gate(fresh_, participants_)
+                if packing_gate_:
+                    return self.send(409, {"error": packing_gate_["name"] + " must finish packing first. "
+                                                   "The saved movie time is safe."})
                 if any(not is_here(reward_, c, who_) for who_ in participants_):
                     return self.send(409, {"error": "Everyone sharing must be at this house."})
                 if fresh_.get("present_kids") and any(who_ not in fresh_["present_kids"] for who_ in participants_):
@@ -4110,6 +4235,11 @@ class H(BaseHTTPRequestHandler):
             if reward_block_["on"]:
                 return self.send(409, {"error": reward_block_["items"][0]["message"],
                                        "reward_block": reward_block_})
+            packing_gate_ = packing_reward_gate(st, [b.get("kid")] + list(b.get("with") or []))
+            if packing_gate_:
+                prefix_ = "" if packing_gate_["kid"] == b.get("kid") else packing_gate_["name"] + ": "
+                return self.send(409, {"error": prefix_ + packing_gate_["message"],
+                                       "packing_required": packing_gate_})
         if p in ("/api/start", "/api/report", "/api/claim", "/api/team", "/api/resume"):
             kid_ = b.get("kid")
             gate_ = (st.get("must_do_first") or {}).get(kid_) or {}
@@ -4578,6 +4708,9 @@ class H(BaseHTTPRequestHandler):
                 reward_block_ = reward_block_state(fresh=True)
                 if reward_block_["on"]:
                     return self.send(409, {"error": reward_block_["items"][0]["message"]})
+                packing_gate_ = packing_reward_gate(fresh_, [joiner_])
+                if packing_gate_:
+                    return self.send(409, {"error": "Finish packing before joining. You can still do other chores."})
                 if fresh_["bedtime"]["on"] or reward_closed(reward_):
                     return self.send(409, {"error": "That reward is not available now."})
                 if (fresh_.get("dress") or {}).get("on") and (fresh_["dress"]["kids"].get(joiner_) or "ready") != "ready":

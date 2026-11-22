@@ -339,6 +339,14 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn('data-paward="', grown)
         self.assertIn('data-pemergency="', grown)
 
+    def test_packing_preview_can_show_child_specific_items_without_leaking_them_to_the_other_child(self):
+        kids = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("function packPacker(p)", kids)
+        self.assertIn("x.name_for&&x.name_for[who]", kids)
+        self.assertIn("x.icon_for&&x.icon_for[who]", kids)
+        self.assertIn("!x.only||x.only.indexOf(who)>=0", kids)
+        self.assertIn('data-ppacker="', kids)
+
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
         kids = (REPO / "static" / "kids.html").read_text()
         grown = (REPO / "static" / "inspect.html").read_text()
@@ -346,6 +354,57 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn("S.paused_all||[]", grown)
         self.assertIn("held until completed or explicitly ended", grown)
         self.assertNotIn("Keep 7 more days", grown)
+
+
+class PackingRewardGateTests(unittest.TestCase):
+    def setUp(self):
+        self.app = App()
+        self.addCleanup(self.app.close)
+        self.app.s.HOUSE["packing_game"] = {
+            "version": "trip-test-v1", "activated": True, "required_before_rewards": True,
+            "title": "Train packing", "icon": "1f9f3", "award_reason": "Finished train packing",
+            "profiles": [{"id": "kid", "kids": ["ava", "max"], "points": 12,
+                          "piles": [{"id": "bag", "items": [
+                              {"id": "shirt", "name": "Shirt"},
+                              {"id": "hair", "name": "Hair things", "only": ["ava"]}]}],
+                          "final_checks": [{"id": "zip", "name": "Bag zipped"}]}]}
+
+    @staticmethod
+    def complete(items, seq=10):
+        return {"version": "trip-test-v1", "profile": "kid", "phase": "complete", "seq": seq,
+                "ready": {x: True for x in items}, "checked": {x: "pass" for x in items},
+                "packed": {x: True for x in items}, "finals": {"zip": "pass"}}
+
+    def test_packing_blocks_rewards_but_not_other_chores_then_awards_once(self):
+        a = self.app
+        a.event(type="adjust", kid="ava", points=20, reason="test", by="jordan")
+        code, blocked = a.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})
+        self.assertEqual(code, 409, blocked)
+        self.assertIn("Pack for the train first", blocked["error"])
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 200)
+
+        token = a.kid_sessions("ava")["ava"]
+        code, incomplete = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                  "progress": self.complete(["shirt"])})
+        self.assertEqual(code, 409, incomplete)
+        code, done = a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                    "progress": self.complete(["shirt", "hair"], 11)})
+        self.assertEqual(code, 200, done)
+        self.assertTrue(done["state"]["packing_game"]["progress"]["ava"]["complete"])
+        self.assertEqual(done["state"]["balance"]["ava"], 32)
+        self.assertEqual(a.post("/api/packing_update", {"kid": "ava", "kid_session": token,
+                                                        "progress": self.complete(["shirt", "hair"], 12)})[1]
+                         ["state"]["balance"]["ava"], 32)
+        self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show", "tv": "livingroom"})[0], 200)
+
+    def test_child_specific_item_does_not_block_the_other_child_and_an_unassigned_child_is_exempt(self):
+        a = self.app
+        token = a.kid_sessions("max")["max"]
+        code, done = a.post("/api/packing_update", {"kid": "max", "kid_session": token,
+                                                    "progress": self.complete(["shirt"])})
+        self.assertEqual(code, 200, done)
+        self.assertTrue(done["state"]["packing_game"]["progress"]["max"]["complete"])
+        self.assertIsNone(a.s.packing_reward_gate(done["state"], ["zoe"]))
 
 
 class Case(unittest.TestCase):
