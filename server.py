@@ -105,11 +105,13 @@ LEDGER = DATA / "ledger.jsonl"
 ILOG = DATA / "interactions.jsonl"
 VACUUM_BUTTON_TOKEN_FILE = Path(os.environ.get("VACUUM_BUTTON_TOKEN_FILE", DATA / "vacuum-button.token")).expanduser()
 NEWS_SEEN = DATA / "news_seen.json"   # whats-new version acknowledged, per device IP   # every UI tap/screen + TV guard decision, for later study
+INSPECTION_SEEN_FILE = DATA / "inspection_seen_displays.json"  # read-only copies of each real Hub's local seen_<kid>
 PAPER_SCAN_FILE = DATA / "paper_scans.json"   # short-lived kid claim for the next Brother-to-Drive scan
 PEER_PIN_FILE = DATA / "peer_pin_resets.json"
 HUB_PLACEMENT_FILE = DATA / "hub_placement.json"
 PEER_PIN_CFG = HOUSE.get("peer_pin_reset") or {}
 PEER_LOCK = threading.Lock()
+INSPECTION_SEEN_LOCK = threading.Lock()
 SERVER_STARTED_AT = time.time()
 
 
@@ -1820,6 +1822,56 @@ def add_seen_projection(state, news_key, announcement_key):
     return state
 
 
+def inspection_seen_snapshots(kid, now=None):
+    """Lead-adult-only projection of what each configured Hub last reported from localStorage.
+
+    `present: true, value: 0` is deliberately different from a missing key and from a
+    Hub that has never reported. Device identity comes only from trusted house config.
+    """
+    now = time.time() if now is None else float(now)
+    saved = load_private_json(INSPECTION_SEEN_FILE, {})
+    displays = saved.get("displays") if isinstance(saved.get("displays"), dict) else {}
+    out = []
+    for display_id, config in (HOUSE.get("hubs") or {}).items():
+        row = displays.get(display_id) if isinstance(displays.get(display_id), dict) else {}
+        observed = (row.get("kids") or {}).get(kid) if isinstance(row.get("kids"), dict) else None
+        at = float((observed or {}).get("observed_at") or 0) if isinstance(observed, dict) else 0
+        out.append({"display_id": display_id, "room": config.get("room") or display_id,
+                    "entity": config.get("entity"), "source": "trusted_configured_hub",
+                    "observed": isinstance(observed, dict),
+                    "present": observed.get("present") if isinstance(observed, dict) else None,
+                    "value": observed.get("value") if isinstance(observed, dict) else None,
+                    "observed_at": at or None, "age_s": max(0, round(now - at, 3)) if at else None})
+    return out
+
+
+def save_inspection_seen_snapshot(ip, payload, now=None):
+    """Copy, but never alter, local inspection pointers from a configured physical Hub."""
+    display = next(((display_id, config) for display_id, config in (HOUSE.get("hubs") or {}).items()
+                    if config.get("ip") == ip), None)
+    if not display or not isinstance(payload, dict):
+        return None
+    allowed = {row["id"] for row in cfg()["kids"]}
+    rows = {}
+    for kid, observed in payload.items():
+        if kid not in allowed or not isinstance(observed, dict) or type(observed.get("present")) is not bool:
+            continue
+        present = observed["present"]
+        value = observed.get("value")
+        if present and (not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0):
+            continue
+        rows[kid] = {"present": present, "value": float(value) if present else None,
+                     "observed_at": time.time() if now is None else float(now)}
+    if not rows:
+        return None
+    display_id, _ = display
+    with INSPECTION_SEEN_LOCK:
+        saved = load_private_json(INSPECTION_SEEN_FILE, {})
+        saved.setdefault("displays", {}).setdefault(display_id, {}).setdefault("kids", {}).update(rows)
+        save_private_json(INSPECTION_SEEN_FILE, saved)
+    return display_id, list(rows)
+
+
 def kid_preview_state(kid):
     """Canonical next-login state for one child, for the lead adult's authenticated read-only HA preview.
 
@@ -1833,7 +1885,8 @@ def kid_preview_state(kid):
     add_seen_projection(state, "kid:" + kid, "ann:kid:" + kid)
     state.update({
         "preview": {"kid": kid, "read_only": True, "skip_pin": True,
-                    "canonical_state": True, "mutation_transport": None},
+                    "canonical_state": True, "mutation_transport": None,
+                    "inspection_seen_displays": inspection_seen_snapshots(kid)},
         "hub": None, "hub_motion": None, "display": None, "music_interruption": None,
         "coin_flip": None, "peer_pin_reset": None, "peer_pin_reset_capable": False,
         "pin_reset_open": {},
@@ -3640,6 +3693,12 @@ class H(BaseHTTPRequestHandler):
             if display_:
                 GUARD.setdefault("hub_heartbeat", {})[display_["id"]] = time.time()
             return self.send(200, {"ok": True, "hub": display_.get("id") if display_ else None})
+        if self.path == "/api/inspection_seen_snapshot":
+            saved_ = save_inspection_seen_snapshot(self.client_address[0], b.get("kids"))
+            if not saved_:
+                return self.send(403, {"error": "configured physical Hub snapshots only"})
+            ilog({"src": "inspection_seen_snapshot", "display": saved_[0], "kids": saved_[1]})
+            return self.send(200, {"ok": True, "display": saved_[0]})
         if self.path == "/api/vacuum/button":
             try:
                 expected = VACUUM_BUTTON_TOKEN_FILE.read_text().strip()

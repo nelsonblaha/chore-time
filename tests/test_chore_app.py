@@ -508,7 +508,8 @@ class KidPreviewProjectionTests(Case):
         state = reply["state"]
         self.assertEqual(reply, {"ok": True, "kid": "ava", "read_only": True, "state": state})
         self.assertEqual(state["preview"], {"kid": "ava", "read_only": True, "skip_pin": True,
-                                             "canonical_state": True, "mutation_transport": None})
+                                             "canonical_state": True, "mutation_transport": None,
+                                             "inspection_seen_displays": self.s.inspection_seen_snapshots("ava")})
         self.assertTrue(state["news_unseen"])
         self.assertEqual(state["news_seen_kids"]["ava"], "older-news")
         self.assertEqual(state["awards"], self.s.derive()["awards"])
@@ -533,6 +534,27 @@ class KidPreviewProjectionTests(Case):
         self.assertEqual(self.preview(user="someone-else")[0], 403)
         self.assertEqual(self.preview(source_ip="127.0.0.2")[0], 403)
         self.assertEqual(self.preview("nobody")[0], 404)
+
+    def test_real_hub_snapshot_preserves_zero_vs_missing_for_private_preview_only(self):
+        hub_ip = "127.0.0.2"
+        self.s.HUBS.clear()
+        self.s.HUBS["test_hub"] = {"ip": hub_ip, "room": "Play room", "entity": "media_player.test_hub"}
+        self.s.HOUSE["hubs"] = self.s.HUBS
+        code, saved = self.app.post_from(hub_ip, "/api/inspection_seen_snapshot", {"kids": {
+            "ava": {"present": True, "value": 0}, "max": {"present": False}}})
+        self.assertEqual((code, saved), (200, {"ok": True, "display": "test_hub"}))
+        snapshots = self.preview()[1]["state"]["preview"]["inspection_seen_displays"]
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual({k: snapshots[0][k] for k in ("display_id", "room", "entity", "source", "observed",
+                                                       "present", "value")},
+                         {"display_id": "test_hub", "room": "Play room", "entity": "media_player.test_hub",
+                          "source": "trusted_configured_hub", "observed": True, "present": True, "value": 0.0})
+        self.assertIsNotNone(snapshots[0]["age_s"])
+        max_snap = self.preview("max")[1]["state"]["preview"]["inspection_seen_displays"][0]
+        self.assertEqual((max_snap["observed"], max_snap["present"], max_snap["value"]), (True, False, None))
+        self.assertNotIn("inspection_seen_displays", self.app.state())
+        self.assertEqual(self.app.post_from("127.0.0.3", "/api/inspection_seen_snapshot",
+                                            {"kids": {"ava": {"present": True, "value": 99}}})[0], 403)
 
 
 # ---------------------------------------------------------------- who may do what

@@ -849,7 +849,9 @@ function renderKid(){
 /* --- new-inspection reveal --- */
 function seenKey(k){return "seen_"+k}
 function getSeen(k){try{return parseFloat(localStorage.getItem(seenKey(k))||"0")}catch(e){return seen[k]||0}}
-function setSeen(k,t){seen[k]=t;try{localStorage.setItem(seenKey(k),String(t))}catch(e){}}
+function localSeen(k){try{var raw=localStorage.getItem(seenKey(k));if(raw===null)return {present:false};var n=Number(raw);return Number.isFinite(n)&&n>=0?{present:true,value:n}:{present:false}}catch(e){return {present:false}}}
+function uploadSeen(kids){if(HA_MODE||!S||!S.display||S.display.kind!=="hub")return;var rows={};(kids||[]).forEach(function(k){rows[k]=localSeen(k)});api("/api/inspection_seen_snapshot",{kids:rows}).catch(function(){})}
+function setSeen(k,t){seen[k]=t;var changed=false;try{var before=localStorage.getItem(seenKey(k)),after=String(t);changed=before!==after;localStorage.setItem(seenKey(k),after)}catch(e){}if(changed)uploadSeen([k])}
 function newInspections(k){var t=Math.max(getSeen(k),seen[k]||0);return reports(k).filter(function(r){return r.inspected_ts&&r.inspected_ts>t}).reverse()}
 
 var PACK=null;
@@ -1782,6 +1784,6 @@ function stale(){if(!(S&&VER&&S.version!==VER)){staleAt=0;return false}if(!HA_MO
 function reloadNow(){flushL();setTimeout(function(){var k=kid||LOCK_KID;location.replace(location.pathname+"?v="+Date.now()+(k?"&kid="+k:""))},250)}
 setInterval(function(){ // self-update: reload as soon as no pop-up is open; keeps the same kid's screen
   if(!stale()||$("m").classList.contains("on")||$("news").classList.contains("on")||$("timer").classList.contains("on"))return;L("self_reload",{from:VER,to:S.version});reloadNow()},2000);
-load().then(function(){VER=S.version;var q=(location.search.match(/[?&]kid=([a-z]+)/)||[])[1];if(q&&S.config.kids.some(function(k){return k.id===q}))openKid(q)});setInterval(function(){if(!busy&&!$("m").classList.contains("on"))load()},5000);
+load().then(function(){VER=S.version;uploadSeen((S.config.kids||[]).map(function(k){return k.id}));var q=(location.search.match(/[?&]kid=([a-z]+)/)||[])[1];if(q&&S.config.kids.some(function(k){return k.id===q}))openKid(q)});setInterval(function(){if(!busy&&!$("m").classList.contains("on"))load()},5000);
 </script>
 </body></html>
