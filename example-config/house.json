@@ -26,7 +26,10 @@
     "exempt_rooms": [
       "office",
       "primary_bedroom"
-    ]
+    ],
+    "room_aliases": {
+      "master": "primary_bedroom"
+    }
   },
   "mail_delivery": {
     "entity": "sensor.google_home_camera_front_porch",

@@ -126,7 +126,7 @@ Every section is optional. A missing section means that feature is off. `example
 | Section | Turns on |
 |---|---|
 | `home_assistant` | `url`, `token_file` (a long-lived token), plus entity names for the chore-time switch, the action relay and `sun`. `announce` = a TTS speaker for "five minutes left". `user_adults` maps HA user IDs to Chore Time grown-up IDs; sensitive parent-only TV pause/resume actions require this server-verified relay identity. |
-| `spotify` | `exempt_rooms` lists physical room IDs where neither the chore-based Spotify wait nor the maximum-volume policy may pause, block, or change playback. Home Assistant media enforcement must map speakers to these rooms and fail open for them. |
+| `spotify` | `exempt_rooms` lists physical room IDs where neither the chore-based Spotify wait nor the maximum-volume policy may pause, block, change playback, or replace a Chore Hub page with the music explanation. Home Assistant media enforcement must map speakers to these rooms and fail open for them. Optional `room_aliases` maps alternate receipt/display names to the canonical IDs (for example `{"master": "primary_bedroom"}`). |
 | `adults` | per grown-up: `presence` entity + `home_state`, `notify` phone services, optional `buzz_notify` watch services, and optional fail-quiet `buzz_gate: {entity, states}` (the watch is contacted only in an allowed state; phone/dashboard requests remain available). The first one with `notify` is the lead adult |
 | `quiet_hours` | `[{"weekdays": [5, 6], "until": "08:00"}]`: no pings before then |
 | `hours` | `chore_start`, `chore_end` (hours the TV guard and Hubs are active), `bed_end` (overnight bedtime boundary; default 5) |

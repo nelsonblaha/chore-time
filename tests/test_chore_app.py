@@ -3111,6 +3111,33 @@ class SpotifyChoreInterruption(Case):
             else:
                 self.s.HOUSE["display_aliases"] = aliases
 
+    def test_exempt_room_never_activates_from_stale_mixed_or_alias_receipt(self):
+        old_spotify = self.s.HOUSE.get("spotify")
+        old_interruptions = self.s.GUARD.get("music_interruptions")
+        try:
+            self.s.HOUSE["spotify"] = {"exempt_rooms": ["primary_bedroom", "office"],
+                                         "room_aliases": {"master": "primary_bedroom"}}
+            now = time.time()
+            self.s.GUARD["music_interruptions"] = [
+                {"receiver": "mixed", "rooms": ["master", "den"], "attempted_at": now - 1,
+                 "valid_until": now + 60, "attempt_id": "fresh"},
+                {"receiver": "stale", "rooms": ["office"], "attempted_at": now - 120,
+                 "valid_until": now - 1, "attempt_id": "stale"},
+            ]
+            self.assertIsNone(self.s.active_spotify_interruption("primary_bedroom"))
+            self.assertIsNone(self.s.active_spotify_interruption("master"))
+            self.assertIsNone(self.s.active_spotify_interruption("office"))
+            self.assertEqual(self.s.active_spotify_interruption("den")["attempt_id"], "fresh")
+        finally:
+            if old_spotify is None:
+                self.s.HOUSE.pop("spotify", None)
+            else:
+                self.s.HOUSE["spotify"] = old_spotify
+            if old_interruptions is None:
+                self.s.GUARD.pop("music_interruptions", None)
+            else:
+                self.s.GUARD["music_interruptions"] = old_interruptions
+
 
 class PausedTeamJobs(Case):
     """A sent-back team job put off for later, and a teammate's other paused job."""

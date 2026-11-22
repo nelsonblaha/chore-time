@@ -1302,6 +1302,17 @@ def spotify_exempt_rooms():
                               if isinstance(room, str) and room.strip()))
 
 
+def spotify_room_key(room):
+    """Canonical room id for policy receipts; aliases keep display and speaker names equivalent."""
+    room = str(room or "").strip()
+    aliases = (HOUSE.get("spotify") or {}).get("room_aliases") or {}
+    seen = set()
+    while room and room not in seen and isinstance(aliases.get(room), str):
+        seen.add(room)
+        room = aliases[room].strip()
+    return room
+
+
 def kid_notes(evs):
     """grown-ups' one-time messages to a kid ("we gave your stars back"): unseen ones, shown when they open their screen"""
     seen = {e["ref"] for e in evs if e["type"] == "kid_note_seen"}
@@ -5984,9 +5995,15 @@ def coin_flip_state(c, present, display, location_state=None, now=None, settings
 
 
 def active_spotify_interruption(room):
+    room = spotify_room_key(room)
+    exempt = {spotify_room_key(item) for item in spotify_exempt_rooms()}
+    if not room or room in exempt:
+        return None
     now = time.time()
     return next((item for item in GUARD.get("music_interruptions") or []
-                 if item.get("valid_until", 0) > now and room and room in item.get("rooms", [])), None)
+                 if item.get("valid_until", 0) > now
+                 and any(spotify_room_key(receipt_room) == room and spotify_room_key(receipt_room) not in exempt
+                         for receipt_room in item.get("rooms", []))), None)
 
 
 def ha_post_state(ent, state, attrs, tok):
