@@ -507,14 +507,32 @@ def packing_public(game):
         if profile:
             checks = profile.setdefault("final_checks", [])
             existing = {x.get("id") for x in checks}
-            for check in (
+            checks_to_add = [
                 {"id": "house_smelly_trash", "name": "All smelly trash is out",
                  "icon": "1f5d1", "within_leave_s": 86400,
                  "note": "Do this within the final 24 hours before actually leaving home."},
                 {"id": "house_toilets_flushed", "name": "Every toilet is checked and flushed",
                  "icon": "1f6bd", "within_leave_s": 3600,
                  "note": "Do this within the final hour before leaving home, before any toilet water is shut off."},
-            ):
+            ]
+            trip = public.get("trip") if isinstance(public.get("trip"), dict) else {}
+            try:
+                overnight = bool(public.get("overnight") or trip.get("overnight")
+                                 or int(trip.get("nights") or 0) > 0)
+            except (TypeError, ValueError):
+                overnight = bool(public.get("overnight") or trip.get("overnight"))
+            if overnight:
+                checks_to_add.extend([
+                    {"id": "house_overnight_shower",
+                     "name": "Shower during the last hour before leaving home",
+                     "icon": "1f6bf", "within_leave_s": 3600,
+                     "note": "For an overnight away: shower within the final hour before leaving home."},
+                    {"id": "house_nest_cameras",
+                     "name": "Re-enable the Nest Hub Max cameras during the last minute before leaving",
+                     "icon": "1f4f7", "within_leave_s": 60,
+                     "note": "For an overnight away: re-enable the cameras within the final minute."},
+                ])
+            for check in checks_to_add:
                 if check["id"] not in existing:
                     checks.append(check)
     public["progress"] = packing_progress(public)

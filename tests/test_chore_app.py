@@ -789,9 +789,15 @@ class PackingRewardGateTests(unittest.TestCase):
             }))
 
         departure(now + 7200)
+        day_adult = next(p for p in a.state()["packing_game"]["profiles"] if p["id"] == "adult")
+        day_ids = {x["id"] for x in day_adult["final_checks"]}
+        self.assertNotIn("house_overnight_shower", day_ids)
+        self.assertNotIn("house_nest_cameras", day_ids)
+        a.s.HOUSE["packing_game"]["trip"] = {"nights": 1}
         adult = next(p for p in a.state()["packing_game"]["profiles"] if p["id"] == "adult")
         final_ids = {x["id"] for x in adult["final_checks"]}
-        self.assertTrue({"adult_zip", "house_smelly_trash", "house_toilets_flushed"} <= final_ids)
+        self.assertTrue({"adult_zip", "house_smelly_trash", "house_toilets_flushed",
+                         "house_overnight_shower", "house_nest_cameras"} <= final_ids)
         packed = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan",
                   "phase": "pack", "seq": 1, "ready": {"charger": True},
                   "checked": {"charger": "pass"}, "packed": {"charger": True},
@@ -807,7 +813,8 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(code, 409, blocked)
         self.assertIn("closer to the actual leave-home time", blocked["error"])
 
-        departure(now + 1800)
+        too_early["finals"].update({"house_overnight_shower": "pass", "house_nest_cameras": "pass"})
+        departure(now + 30)
         too_early.update(seq=3, phase="complete")
         code, done = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
                                                     "progress": too_early}, self.adult_headers)
