@@ -742,6 +742,31 @@ class PackingRewardGateTests(unittest.TestCase):
                                                   "progress": moved}, self.adult_headers)[1]
         self.assertEqual(invalid["state"]["packing_game"]["progress"]["jordan"]["locations"], {})
 
+    def test_authenticated_adult_item_actions_are_compact_and_durable(self):
+        a = self.app
+        body = {"packer": "jordan", "by": "jordan",
+                "item_action": {"item": "charger", "packed": True, "seq": 20}}
+        self.assertEqual(a.post("/api/packing_update", body)[0], 403)
+        code, packed = a.post("/api/packing_update", body, self.adult_headers)
+        self.assertEqual(code, 200, packed)
+        progress = packed["state"]["packing_game"]["progress"]["jordan"]
+        self.assertTrue(progress["ready"]["charger"])
+        self.assertEqual(progress["checked"]["charger"], "pass")
+        self.assertTrue(progress["packed"]["charger"])
+        self.assertEqual(progress["phase"], "pack")
+
+        code, moved = a.post("/api/packing_update", {
+            "packer": "jordan", "by": "jordan",
+            "item_action": {"item": "charger", "area": "downstairs", "seq": 21}},
+            self.adult_headers)
+        self.assertEqual(code, 200, moved)
+        self.assertEqual(moved["state"]["packing_game"]["progress"]["jordan"]["locations"],
+                         {"charger": "downstairs"})
+        self.assertEqual(a.post("/api/packing_update", {
+            "packer": "jordan", "by": "jordan",
+            "item_action": {"item": "charger", "area": "attic", "seq": 22}},
+            self.adult_headers)[0], 400)
+
     def test_packing_page_offers_floor_passes_without_advancing_items(self):
         html = (REPO / "static" / "packing.html").read_text()
         self.assertIn("Work one floor at a time — upstairs first.", html)
@@ -750,9 +775,11 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIn("q.locations[n.dataset.item]=n.dataset.moveArea", html)
         self.assertIn('class="subgroup"', html)
         self.assertIn("groupDefs[x.group]", html)
-        self.assertIn("rows[id]=JSON.parse(JSON.stringify(r));render();return api", html)
+        self.assertIn("rows[id]=JSON.parse(JSON.stringify(r));render();body.packer=id", html)
         self.assertIn("Number(a.seq||0)>Number(b&&b.seq||0)", html)
         self.assertIn("S=adoptState(r.state)", html)
+        self.assertIn("saveItemAction(id,q,{item:n.dataset.pack,packed:on})", html)
+        self.assertIn("saveItemAction(id,q,{item:n.dataset.item,area:n.dataset.moveArea})", html)
 
     def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
         a = self.app

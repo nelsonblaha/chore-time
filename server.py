@@ -140,6 +140,43 @@ def departure_display(now=None):
         return None
 
 
+def departure_house_tasks(now=None):
+    """Sanitized Travel-owned checklist, with timing recomputed against Chore's clock."""
+    raw_path = HOUSE.get("departure_house_tasks_file")
+    if not raw_path:
+        return None
+    try:
+        value = json.loads(Path(str(raw_path)).expanduser().read_text())
+        now = time.time() if now is None else float(now)
+        updated = float(value.get("updated_at"))
+        leave = float(value.get("leave_home_at"))
+        if (not isinstance(value, dict) or value.get("schema") != 1 or value.get("active") is not True
+                or not now - 2700 <= updated <= now + 300 or not now - 86400 <= leave <= now + 86400):
+            return None
+        tasks = []
+        allowed_tiers = ("last day", "departure day", "last 4 hours", "last hour", "last minute")
+        for raw in (value.get("tasks") or [])[:60]:
+            if not isinstance(raw, dict) or raw.get("tier") not in allowed_tiers:
+                continue
+            item_id = str(raw.get("id") or "")[:80]
+            name = str(raw.get("name") or "")[:160]
+            opens, due = float(raw.get("opens_at")), float(raw.get("due_at"))
+            if not item_id or not name or opens > due or due - opens > 172800:
+                continue
+            done = raw.get("status") == "done" or raw.get("done_at") is not None
+            status = "done" if done else "upcoming" if now < opens else "overdue" if now > due else "open"
+            task = {"id": item_id, "name": name, "tier": raw["tier"], "opens_at": opens,
+                    "due_at": due, "status": status}
+            if raw.get("after"):
+                task["after"] = str(raw["after"])[:80]
+            tasks.append(task)
+        return {"schema": 1, "updated_at": updated, "trip_id": str(value.get("trip_id") or "")[:80],
+                "title": str(value.get("title") or "Before you leave")[:120],
+                "leave_home_at": leave, "tasks": tasks}
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def house_path(p):
     return Path(str(p)).expanduser() if p else None
 
@@ -3292,6 +3329,7 @@ def derive():
             "calendar": schedule.agenda(), "packing_game": packing_,
             "packing_up_next": packing_up_next(packing_, LEAD_ADULT if "LEAD_ADULT" in globals() else None),
             "departure_display": departure_display(),
+            "departure_house_tasks": departure_house_tasks(),
             "papers": papers, "paper_scan_ready": bool((HOUSE.get("paper_scanner") or {}).get("ready")),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
@@ -3366,7 +3404,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "packing_up_next", "departure_display", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
+DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "packing_up_next", "departure_display", "departure_house_tasks", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
              "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",
@@ -4498,9 +4536,45 @@ class H(BaseHTTPRequestHandler):
                 raw_ = b.get("progress") or {}
                 mark_ = b.get("mark")
                 stage_ = b.get("stage")
-                if mark_ is not None and stage_ is not None:
+                item_action_ = b.get("item_action")
+                if sum(x is not None for x in (mark_, stage_, item_action_)) > 1:
                     return self.send(400, {"error": "Choose one packing action at a time."})
-                if mark_ is not None:
+                if item_action_ is not None:
+                    if not adult_ or not isinstance(item_action_, dict):
+                        return self.send(403, {"error": "Only the signed-in packer can change this item."})
+                    item_ = str(item_action_.get("item") or "")
+                    item_ids_ = packing_item_ids(profile_, packer_)
+                    if item_ not in item_ids_:
+                        return self.send(400, {"error": "That packing item is not on this list."})
+                    raw_ = json.loads(json.dumps(old_))
+                    if "area" in item_action_:
+                        area_ = str(item_action_.get("area") or "")
+                        area_ids_ = {str(x.get("id")) for x in (profile_.get("areas") or [])
+                                     if isinstance(x, dict) and x.get("id")}
+                        if area_ not in area_ids_:
+                            return self.send(400, {"error": "That packing area is not available."})
+                        raw_.setdefault("locations", {})[item_] = area_
+                    elif isinstance(item_action_.get("packed"), bool):
+                        packed_ = item_action_["packed"]
+                        for key_ in ("ready", "checked", "packed"):
+                            raw_.setdefault(key_, {})
+                        if packed_:
+                            raw_["ready"][item_] = True
+                            raw_["checked"][item_] = "pass"
+                            raw_["packed"][item_] = True
+                        else:
+                            raw_["ready"].pop(item_, None)
+                            raw_["checked"].pop(item_, None)
+                            raw_["packed"].pop(item_, None)
+                        all_packed_ = all(raw_["packed"].get(x) is True for x in item_ids_)
+                        final_ids_ = {x["id"] for x in (profile_.get("final_checks") or []) if x.get("id")}
+                        finals_pass_ = all((raw_.get("finals") or {}).get(x) == "pass" for x in final_ids_)
+                        raw_["phase"] = "complete" if all_packed_ and finals_pass_ else "pack"
+                    else:
+                        return self.send(400, {"error": "Choose a bag state or packing area."})
+                    raw_["seq"] = max(int(old_.get("seq") or 0) + 1,
+                                      int(item_action_.get("seq") or 0), int(time.time() * 1000))
+                elif mark_ is not None:
                     if not adult_child_ or not isinstance(mark_, dict):
                         return self.send(403, {"error": "Only a signed-in grown-up can inspect packing items."})
                     item_ = str(mark_.get("item") or "")
