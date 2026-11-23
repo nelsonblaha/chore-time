@@ -245,6 +245,13 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("Keep your letter OUT of the envelope", html)
         self.assertIn("Keep the letter out of the envelope until a grown-up approves it", html)
 
+    def test_shared_games_offer_split_players_or_one_player_with_watchers(self):
+        html = (REPO / "static" / "kids.html").read_text()
+        self.assertIn("function gameTogether", html)
+        self.assertIn('start(parts,"player_watch",player)', html)
+        self.assertIn("Two players", html)
+        self.assertIn("watchers", html)
+
     def test_tv_reward_setup_names_the_viewer_choice_before_purchase(self):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Choose TV &amp; viewers", html)
@@ -4353,6 +4360,58 @@ class NoRecordForSomethingElse(Case):
 
 
 class WatchingTogether(Case):
+    @staticmethod
+    def game_config():
+        c = base_config()
+        game = next(r for r in c["rewards"] if r["id"] == "games")
+        game.update(two_player_split=True, watcher_cost=3)
+        return c
+
+    def test_two_players_split_the_game_price_evenly(self):
+        c = self.game_config()
+        a = App(c)
+        self.addCleanup(a.close)
+        for kid in ("ava", "max", "zoe"):
+            a.event(type="adjust", kid=kid, points=5, reason="test")
+        body = {"kid": "ava", "reward": "games", "tv": "livingroom", "with": ["max"],
+                "game_mode": "two_player", "kid_sessions": a.kid_sessions("ava", "max")}
+        code, bought = a.post("/api/spend", body)
+        self.assertEqual(code, 200, bought)
+        self.assertEqual(bought["event"]["cost_by_kid"], {"ava": 5, "max": 5})
+        self.assertEqual((bought["state"]["balance"]["ava"], bought["state"]["balance"]["max"]), (0, 0))
+        body.update({"with": ["max", "zoe"], "kid_sessions": a.kid_sessions("ava", "max", "zoe")})
+        self.assertEqual(a.post("/api/spend", body)[0], 400)
+
+    def test_selected_game_player_pays_ten_and_each_watcher_pays_three(self):
+        c = self.game_config()
+        a = App(c)
+        self.addCleanup(a.close)
+        for kid, points in (("ava", 3), ("max", 10), ("zoe", 3)):
+            a.event(type="adjust", kid=kid, points=points, reason="test")
+        code, bought = a.post("/api/spend", {
+            "kid": "ava", "reward": "games", "tv": "livingroom", "with": ["max", "zoe"],
+            "game_mode": "player_watch", "game_player": "max",
+            "kid_sessions": a.kid_sessions("ava", "max", "zoe")})
+        self.assertEqual(code, 200, bought)
+        self.assertEqual(bought["event"]["cost_by_kid"], {"ava": 3, "max": 10, "zoe": 3})
+        self.assertEqual(tuple(bought["state"]["balance"][k] for k in ("ava", "max", "zoe")), (0, 0, 0))
+
+    def test_joining_a_running_game_as_a_watcher_costs_three_without_repricing_player(self):
+        c = self.game_config()
+        a = App(c)
+        self.addCleanup(a.close)
+        a.event(type="adjust", kid="ava", points=10, reason="test")
+        a.event(type="adjust", kid="max", points=3, reason="test")
+        bought = a.post("/api/spend", {"kid": "ava", "reward": "games", "tv": "livingroom"})[1]["event"]
+        began = time.time() - 60
+        a.event(type="tv_started", ref=bought["id"], tv="livingroom", what="hdmi", at=began)
+        code, joined = a.post("/api/reward_join", {
+            "kid": "max", "session_id": bought["id"], "kid_sessions": a.kid_sessions("ava", "max")})
+        self.assertEqual(code, 200, joined)
+        self.assertEqual((joined["join_cost"], joined["price_source"]), (3, "game_watcher"))
+        self.assertEqual(joined["refunds"], {"ava": 0})
+        self.assertEqual((joined["state"]["balance"]["ava"], joined["state"]["balance"]["max"]), (0, 0))
+
     def test_late_join_price_prefers_movie_progress_then_reward_clock(self):
         reward = next(r for r in base_config()["rewards"] if r["id"] == "movie")
         reward["together_cost"] = {"2": 12}

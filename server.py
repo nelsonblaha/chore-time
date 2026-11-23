@@ -1618,6 +1618,36 @@ def reward_cost(r, watching=1):
     return r["cost"]
 
 
+def shared_reward_costs(reward, participants, mode=None, player=None):
+    """Per-child prices for one shared purchase, including asymmetric game roles."""
+    participants = list(dict.fromkeys(participants or []))
+    if not participants:
+        raise ValueError("Choose at least one participant.")
+    custom_games = (reward.get("id") == "games"
+                    and (reward.get("two_player_split") or reward.get("watcher_cost") is not None))
+    if not custom_games or len(participants) == 1:
+        cost = int(reward_cost(reward, len(participants)))
+        return {kid: cost for kid in participants}
+    if mode == "two_player":
+        if not reward.get("two_player_split") or len(participants) != 2:
+            raise ValueError("A split game needs exactly two players.")
+        total = int(reward["cost"])
+        if total % 2:
+            raise ValueError("This game price cannot be split evenly.")
+        return {kid: total // 2 for kid in participants}
+    if mode == "player_watch":
+        if player not in participants:
+            raise ValueError("Choose which child is playing.")
+        try:
+            watcher_cost = int(reward["watcher_cost"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Watcher pricing is unavailable.") from None
+        if watcher_cost < 0:
+            raise ValueError("Watcher pricing is unavailable.")
+        return {kid: int(reward["cost"]) if kid == player else watcher_cost for kid in participants}
+    raise ValueError("Choose two players or one player with watchers.")
+
+
 def saved_movie_remaining_fraction(playback):
     """Safe public fraction from a private paused-player snapshot, or None."""
     try:
@@ -5288,11 +5318,16 @@ class H(BaseHTTPRequestHandler):
                 return self.send(409, {"error": "Everyone sharing this reward must be at this house."})
             if with_ and st.get("present_kids") and any(wk not in st["present_kids"] for wk in participants_):
                 return self.send(409, {"error": "Everyone sharing this reward must be home."})
-            cost = reward_cost(rewards[b["reward"]], 1 + len(with_))
+            game_mode_ = str(b.get("game_mode") or "") if b["reward"] == "games" and with_ else ""
+            game_player_ = str(b.get("game_player") or "") if game_mode_ == "player_watch" else ""
+            try:
+                costs_ = shared_reward_costs(rewards[b["reward"]], participants_, game_mode_, game_player_)
+            except ValueError as ex:
+                return self.send(400, {"error": str(ex)})
             kname = {k["id"]: k["name"] for k in c["kids"]}
             for wk in [b["kid"]] + with_:
                 who_ = "" if wk == b["kid"] else kname.get(wk, wk) + ": "
-                if st["balance"][wk] < cost:
+                if st["balance"][wk] < costs_[wk]:
                     return self.send(409, {"error": who_ + "not enough points"})
                 ready = st["reward_ready"].get(wk, {}).get(b["reward"], 0)
                 if ready > time.time():
@@ -5318,14 +5353,15 @@ class H(BaseHTTPRequestHandler):
             selected_tv_ = tvx.get("tv") or b.get("tv")
             queued = bool(tvx) and any(u["what"] != "vr" for tv_ in ([selected_tv_] if selected_tv_ in TVS else list(TVS))
                                        for u in active_unlocks().get(tv_, []))
-            grp = {"group": uuid.uuid4().hex[:12], "together": [b["kid"]] + with_} if with_ else {}
-            ev = append({"type": "spend", "kid": b["kid"], "reward": b["reward"], "cost": cost, **tvx, **grp,
+            grp = {"group": uuid.uuid4().hex[:12], "together": participants_,
+                   **({"game_mode": game_mode_, "game_player": game_player_ or None} if game_mode_ else {})} if with_ else {}
+            ev = append({"type": "spend", "kid": b["kid"], "reward": b["reward"], "cost": costs_[b["kid"]], **tvx, **grp,
                          "reward_name": rewards[b["reward"]]["name"],
                          "reward_icon": rewards[b["reward"]]["icon"]})
             for wk in with_:
-                append({"type": "spend", "kid": wk, "reward": b["reward"], "cost": cost, **tvx, **grp, "with_buyer": b["kid"],
+                append({"type": "spend", "kid": wk, "reward": b["reward"], "cost": costs_[wk], **tvx, **grp, "with_buyer": b["kid"],
                         "reward_name": rewards[b["reward"]]["name"], "reward_icon": rewards[b["reward"]]["icon"]})
-            ev = dict(ev, queued=queued)
+            ev = dict(ev, queued=queued, cost_by_kid=costs_)
         elif p == "/api/reward_join":
             joiner_ = b.get("kid")
             if joiner_ not in kids:
@@ -5383,6 +5419,33 @@ class H(BaseHTTPRequestHandler):
                 started_at_ = min(u_.get("start") or u_["ts"] for _, u_ in live_)
                 until_ = min(u_["until"] for _, u_ in live_)
                 tv_ = next(iter(tids_))
+                if reward_id_ == "games" and reward_.get("watcher_cost") is not None:
+                    try:
+                        join_cost_ = int(reward_["watcher_cost"])
+                    except (TypeError, ValueError):
+                        return self.send(409, {"error": "Watcher pricing is unavailable."})
+                    if join_cost_ < 0 or fresh_["balance"].get(joiner_, 0) < join_cost_:
+                        return self.send(409, {"error": "You do not have enough points to watch."})
+                    game_mode_ = next((e_.get("game_mode") for e_ in old_spends_ if e_.get("game_mode")), None)
+                    game_player_ = next((e_.get("game_player") for e_ in old_spends_ if e_.get("game_player")), None)
+                    new_group_ = str(b.get("session_id") or "")
+                    primary_ = current_[0]
+                    ev = append({"type": "spend", "kid": joiner_, "reward": reward_id_, "cost": join_cost_,
+                                 "tv": tv_, "until": until_, "minutes": reward_.get("tv_minutes"),
+                                 "started_at": started_at_, "group": new_group_, "together": participants_,
+                                 "by": "share_join", "with_buyer": primary_, "game_mode": game_mode_,
+                                 "game_player": game_player_, "game_join_role": "watcher",
+                                 "reward_name": reward_["name"], "reward_icon": reward_["icon"]})
+                    costs_now_ = dict(old_costs_, **{joiner_: join_cost_})
+                    after_change()
+                    ilog({"src": "api", "ip": display_ip_, "path": p, "event": ev,
+                          "session": b.get("session_id"), "participants": participants_,
+                          "join_cost": join_cost_, "price_source": "game_watcher"})
+                    return self.send(200, {"ok": True, "event": ev, "state": derive(),
+                                           "refunds": {wk_: 0 for wk_ in current_},
+                                           "join_cost": join_cost_, "cost_by_kid": costs_now_,
+                                           "price_source": "game_watcher", "valid_until": until_,
+                                           "participants": participants_})
                 price_ = reward_join_price(reward_, len(participants_), started_at_, until_, tv_,
                                            str(b.get("session_id") or ""))
                 shared_cost_ = price_["full_cost"]
@@ -6733,6 +6796,7 @@ def _tv_grants(evs, now=None, reward_lifecycle=True):
                     g[tid].append({"id": e["id"], "ts": e["ts"], "until": until, "kinds": sorted(kinds), "kid": e["kid"],
                                    "start": started.get(e["id"]) or e.get("started_at") or e["ts"],
                                    "what": e["reward"], "by": e.get("by") or e["kid"], "armed": armed, "group": e.get("group"), "mins": m,
+                                   "game_mode": e.get("game_mode"), "game_player": e.get("game_player"),
                                    "maxdur": None if e.get("minutes") else maxdur})
         elif e["type"] == "tv_unlock":
             for tid in (list(TVS) if e["tv"] == "*" else [e["tv"]]):
