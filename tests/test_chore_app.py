@@ -3600,6 +3600,44 @@ class SpotifyChoreInterruption(Case):
         self.assertEqual(self.app.get("/api/kid_preview?kid=ava", headers=headers,
                                       source_ip="127.0.0.2")[0], 403)
 
+    def test_proxy_peer_file_hot_reloads_exact_hosts_and_fails_closed(self):
+        self.s.HUBS.clear()
+        self.s.HUBS["den_hub"] = {"ip": "10.88.0.20", "room": "den"}
+        token = self.app.dir / "proxy.token"
+        token.write_text("proxy-secret\n")
+        token.chmod(0o600)
+        peers = self.app.dir / "proxy-peers"
+        peers.write_text("127.0.0.2/32\n")
+        peers.chmod(0o600)
+        self.s.HOUSE["trusted_display_proxy"] = {
+            "token_file": str(token), "peer_cidrs_file": str(peers),
+        }
+        headers = {"X-Chore-Proxy-Token": "proxy-secret", "X-Forwarded-For": "10.88.0.20"}
+
+        self.assertEqual(self.app.get("/api/state", headers=headers,
+                                      source_ip="127.0.0.2")[1]["display"]["id"], "den_hub")
+        peers.write_text("127.0.0.3/32\n")
+        self.assertIsNone(self.app.get("/api/state", headers=headers,
+                                       source_ip="127.0.0.2")[1]["display"])
+        self.assertEqual(self.app.get("/api/state", headers=headers,
+                                      source_ip="127.0.0.3")[1]["display"]["id"], "den_hub")
+
+        peers.write_text("127.0.0.0/8\n")
+        self.assertIsNone(self.app.get("/api/state", headers=headers,
+                                       source_ip="127.0.0.3")[1]["display"])
+        peers.write_text("127.0.0.3/32\n")
+        peers.chmod(0o644)
+        self.assertIsNone(self.app.get("/api/state", headers=headers,
+                                       source_ip="127.0.0.3")[1]["display"])
+
+        peers.unlink()
+        target = self.app.dir / "proxy-peers-target"
+        target.write_text("127.0.0.3/32\n")
+        target.chmod(0o600)
+        peers.symlink_to(target)
+        self.assertIsNone(self.app.get("/api/state", headers=headers,
+                                       source_ip="127.0.0.3")[1]["display"])
+
 
 class PausedTeamJobs(Case):
     """A sent-back team job put off for later, and a teammate's other paused job."""

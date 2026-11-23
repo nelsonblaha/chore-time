@@ -6634,6 +6634,50 @@ def display_for_ip(ip):
     return None
 
 
+def trusted_display_proxy_peers(config):
+    """Return exact proxy-peer networks, including an atomically replaceable file.
+
+    The optional file is reread on every request so an external coordinator can
+    follow a proxy Pod replacement without restarting Chore Time.  It is
+    deliberately a list of exact host CIDRs, not a way to trust a Pod subnet.
+    Any malformed, broad, symlinked, oversized or permissively-mode file fails
+    the whole proxy identity path closed.
+    """
+    entries = list(config.get("peer_cidrs") or [])
+    peer_file = house_path(config.get("peer_cidrs_file"))
+    if peer_file:
+        fd = None
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(peer_file, flags)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 4096:
+                return None
+            with os.fdopen(fd, "r", encoding="utf-8") as stream:
+                fd = None
+                dynamic = stream.read(4097)
+            if len(dynamic) > 4096:
+                return None
+            entries.extend(line.strip() for line in dynamic.splitlines() if line.strip())
+        except OSError:
+            return None
+        finally:
+            if fd is not None:
+                os.close(fd)
+    if not entries or len(entries) > 16:
+        return None
+    networks = []
+    try:
+        for entry in entries:
+            network = ipaddress.ip_network(str(entry), strict=False)
+            if network.prefixlen != network.max_prefixlen:
+                return None
+            networks.append(network)
+    except ValueError:
+        return None
+    return networks
+
+
 def trusted_display_client_ip(peer_ip, headers):
     """Recover only a configured display IP from the dedicated LAN proxy.
 
@@ -6647,12 +6691,12 @@ def trusted_display_client_ip(peer_ip, headers):
         return peer_ip
     config = HOUSE.get("trusted_display_proxy") or {}
     token_path = house_path(config.get("token_file"))
-    networks = config.get("peer_cidrs") or []
+    networks = trusted_display_proxy_peers(config)
     if not token_path or not networks:
         return peer_ip
     try:
         peer = ipaddress.ip_address(peer_ip)
-        if not any(peer in ipaddress.ip_network(str(network), strict=False) for network in networks):
+        if not any(peer in network for network in networks):
             return peer_ip
         if stat.S_IMODE(token_path.stat().st_mode) != 0o600:
             return peer_ip
