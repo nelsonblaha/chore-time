@@ -454,6 +454,9 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn("one tap completes only this stage", packing)
         self.assertIn("function finalWindow(x)", packing)
         self.assertIn("Waiting for Travel's live leave-home time", packing)
+        self.assertIn("--done-bg:#e4f3e7;--done-ink:#173e36", packing)
+        self.assertIn("--done-bg:#193930;--done-ink:#e1f4ec", packing)
+        self.assertIn(".item.done .itemsummary,.item.packed .itemsummary{color:var(--done-ink)}", packing)
 
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
         kids = (REPO / "static" / "kids.html").read_text()
