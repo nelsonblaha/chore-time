@@ -6646,6 +6646,9 @@ def trusted_display_proxy_peers(config):
     entries = list(config.get("peer_cidrs") or [])
     peer_file = house_path(config.get("peer_cidrs_file"))
     if peer_file:
+        # A coordinator-managed file is the complete current set. Combining
+        # it with static peers would retain a retired Pod after rotation.
+        entries = []
         fd = None
         try:
             flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)

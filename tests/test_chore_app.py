@@ -3610,7 +3610,8 @@ class SpotifyChoreInterruption(Case):
         peers.write_text("127.0.0.2/32\n")
         peers.chmod(0o600)
         self.s.HOUSE["trusted_display_proxy"] = {
-            "token_file": str(token), "peer_cidrs_file": str(peers),
+            "token_file": str(token), "peer_cidrs": ["127.0.0.2/32"],
+            "peer_cidrs_file": str(peers),
         }
         headers = {"X-Chore-Proxy-Token": "proxy-secret", "X-Forwarded-For": "10.88.0.20"}
 
