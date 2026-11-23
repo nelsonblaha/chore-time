@@ -135,9 +135,9 @@ function openJobs(S,limit){var busy={};Object.keys(S.active||{}).forEach(functio
 function hhmm(t){var p=String(t).split(":"),h=+p[0];return (h%12||12)+":"+p[1]+(h<12?" AM":" PM")}
 function clockAt(t){return new Date(t*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}
 function departureStation(T,now){var n=T&&T.nearest;if(!n)return "";var arr=+n.arrival_at,dep=+n.departure_at;
-  if(n.at_now)return "at "+n.name+" now";
+  if(n.at_now){var left=Math.ceil((dep-now)/60);return left>0?"at "+n.name+" for "+left+" more "+(left===1?"minute":"minutes"):"at "+n.name+" now"}
   if(now<arr)return n.name+" in "+Math.max(1,Math.ceil((arr-now)/60))+"m";
-  if(now<=dep)return "at "+n.name+" now";
+  if(now<=dep){var left2=Math.max(1,Math.ceil((dep-now)/60));return "at "+n.name+" for "+left2+" more "+(left2===1?"minute":"minutes")}
   return n.name+" "+Math.max(1,Math.round((now-dep)/60))+"m ago"}
 function drawDeparture(T,now){var panel=document.getElementById("jobspanel"),el=document.getElementById("trip");
   if(!T){panel.classList.remove("departure");el.innerHTML="";return false}
