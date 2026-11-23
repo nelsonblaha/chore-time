@@ -6189,8 +6189,11 @@ class H(BaseHTTPRequestHandler):
         elif p == "/api/chores_first":   # grown-ups: no rewards until they turn it off
             if b.get("by") not in insp or b.get("kid") not in kids:
                 return self.send(400, {"error": "grown-ups only, for one kid"})
+            if "clear_room" in b and type(b.get("clear_room")) is not bool:
+                return self.send(400, {"error": "clear room must be true or false"})
             items = [str(x).strip()[:120] for x in (b.get("items") or []) if str(x).strip()][:20]
             ev = append({"type": "chores_first", "kid": b["kid"], "on": bool(b.get("on")), "items": items, "by": b["by"],
+                         **({"chore": None, "name": None} if b.get("clear_room") else {}),
                          **({"done": True} if not b.get("on") and b.get("done") else {})})
         elif p == "/api/music_block":   # HA enforces this only while required-work gates are outstanding
             if b.get("by") not in insp:
@@ -6216,6 +6219,9 @@ class H(BaseHTTPRequestHandler):
             block_kids = list(dict.fromkeys(x for x in requested_kids if x in kids))
             if requested_kids and (b["tidy"] or len(block_kids) != len(set(requested_kids))):
                 return self.send(400, {"error": "blocking kids must be known and the room must be untidy"})
+            if "items" in b and (not block_kids or not isinstance(b.get("items"), list)):
+                return self.send(400, {"error": "room blocking items require selected kids and a list"})
+            block_items = [str(x).strip()[:120] for x in (b.get("items") or []) if str(x).strip()][:20]
             present_ = set(GUARD.get("home_now") or [])
             if any(k not in present_ for k in block_kids):
                 return self.send(409, {"error": "only kids currently home can be given this mandatory room"})
@@ -6233,7 +6239,8 @@ class H(BaseHTTPRequestHandler):
             else:
                 ev = append({"type": "space_tidy", "space": space["id"], "tidy": b["tidy"], "by": b["by"]})
             for kid_, job_ in assigned.items():
-                ev = append({"type": "chores_first", "kid": kid_, "on": True, "items": ["Tidy " + space["name"]],
+                ev = append({"type": "chores_first", "kid": kid_, "on": True,
+                             "items": block_items or ["Tidy " + space["name"]],
                              "chore": job_, "name": chores[job_].get("name") or space["name"], "by": b["by"]})
         elif p == "/api/mark_clean":
             if b.get("by") not in insp or b.get("chore") not in chores:

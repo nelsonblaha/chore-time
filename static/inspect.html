@@ -286,12 +286,13 @@ function renderNotYet(){if($("nyfb"))return;var r=S.history.find(function(h){ret
   wireList("nyfb");$("nygo").onclick=function(){post("/api/inspect",{ref:r.id,ok:false,feedback:listValue("nyfb")},"Handed back to fix").then(closePM)}}
 function listEd(id,text,ph){return '<textarea id="'+id+'" style="display:none">'+esc(text||"")+'</textarea><div id="'+id+'L" style="margin:4px 0"></div>'+
   '<div class="row"><input id="'+id+'I" placeholder="'+ph+'" style="flex:1;font-size:18px;min-width:0" enterkeyhint="done"><button class="ok" id="'+id+'A" style="font-size:18px">＋ Add</button></div>'}
-function wireList(id){var ta=$(id),inp=$(id+"I");if(!ta||!inp)return;var items=(ta.value||"").split("\n").map(function(t){return t.trim()}).filter(Boolean);
+function wireList(id,opts){var ta=$(id),inp=$(id+"I");if(!ta||!inp)return;opts=opts||{};var items=(ta.value||"").split("\n").map(function(t){return t.trim()}).filter(Boolean);
   function sync(){ta.value=items.concat(inp.value.trim()?[inp.value.trim()]:[]).join("\n");if(ta.oninput)ta.oninput.call(ta)}
   function draw(){var L=$(id+"L");L.innerHTML=items.length?items.map(function(t,i){return '<div class="row" style="padding:6px 8px;margin:3px 0;background:rgba(127,127,127,.12);border-radius:8px"><span style="flex:1;font-size:18px">'+(i+1)+'. '+esc(t)+'</span><button data-i="'+i+'" title="Remove">✕</button></div>'}).join(""):'<div class="mute">Nothing added yet. Type one thing, tap ＋ Add, then the next.</div>';
-    L.querySelectorAll("button[data-i]").forEach(function(b){b.onclick=function(){items.splice(+b.dataset.i,1);draw();sync()}})}
-  function add(){var t=inp.value.trim();if(!t){inp.focus();return}items.push(t);inp.value="";draw();sync();inp.focus()}
-  $(id+"A").onclick=add;inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();add()}};inp.oninput=sync;draw()}
+    L.querySelectorAll("button[data-i]").forEach(function(b){b.onclick=function(){var old=items.splice(+b.dataset.i,1)[0];if(opts.onremove)opts.onremove(old);draw();sync()}})}
+  function add(value){var t=String(value==null?inp.value:value).trim();if(!t){inp.focus();return}if(items.indexOf(t)<0)items.push(t);inp.value="";draw();sync();if(opts.onadd)opts.onadd(t);inp.focus()}
+  function remove(value){var i=items.indexOf(value);if(i<0)return;var old=items.splice(i,1)[0];if(opts.onremove)opts.onremove(old);draw();sync()}
+  $(id+"A").onclick=function(){add()};inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();add()}};inp.oninput=sync;draw();var ctl={add:add,remove:remove,items:function(){return items.slice()}};ta._listCtl=ctl;return ctl}
 function listValue(id){var ta=$(id),inp=$(id+"I"),all=((ta&&ta.value)||"").split("\n").map(function(t){return t.trim()}).filter(Boolean),draft=inp&&inp.value.trim();
   if(draft)all.push(draft);return all.filter(function(t,i){return all.indexOf(t)===i}).join("\n")}
 function ptsSlider(id,v,base,mx){v=v==null?0:v;mx=mx||Math.max(10,(base||0)*3,v);
@@ -419,14 +420,21 @@ function renderActJob(){var a=ACTJOB.kid?(S.active||{})[ACTJOB.kid]:null,r=ACTJO
   $("pmbody").innerHTML=h+'</div>';
   if($("abandon"))$("abandon").onclick=function(){if(confirm("Stop "+(a.title||c.name)+" for "+team.map(function(m){return kidOf(m).name}).join(" + ")+"? No stars."))
     post("/api/abandon",{kid:ACTJOB.kid},"Stopped: abandoned").then(closePM)}}
-var CFK=null;   // "chores first": what this kid must clean up before rewards; they do it as a job and you inspect it
+var CFK=null,CFSPACE=null,CFSPACE0=null;   // "chores first": what this kid must clean up before rewards; they do it as a job and you inspect it
 function renderCfEdit(){var k=kidOf(CFK),F=(S.chores_first||{})[CFK]||{};if($("cfl"))return;   // keep what the parent is typing
-  $("pmbody").innerHTML='<h2 class="h2b">🧹 '+esc(k.name)+': tidy up first</h2><div class="mute">Rewards stay blocked until '+esc(k.name)+' does “Tidy up first!” and it passes your inspection (watch too).</div>'+
-    '<label class="mute" style="margin-top:8px;display:block">What to tidy up (they see this list)</label>'+listEd("cfl",(F.on?F.items||[]:[]).join("\n"),"e.g. Legos off the living room floor")+
+  var spaces=Object.keys(S.tidy_spaces||{}).map(function(id){return S.tidy_spaces[id]}).filter(function(x){return (x.chores||[]).length}).sort(function(a,b){return a.name.localeCompare(b.name)}),current=spaces.find(function(x){return F.chore&&(x.chores||[]).indexOf(F.chore)>=0});CFSPACE=CFSPACE0=current&&current.id||null;
+  $("pmbody").innerHTML='<h2 class="h2b">🧹 '+esc(k.name)+': tidy up first</h2><div class="mute">Rewards stay blocked until '+esc(k.name)+' finishes this work and it passes your inspection (watch too).</div>'+
+    '<label class="mute" style="margin-top:8px;display:block">What to tidy up (they see this list)</label>'+listEd("cfl",(F.on?F.items||[]:[]).join("\n"),"Add a reason or search rooms")+
+    '<div id="cfroomsel" class="mute" style="margin-top:7px"></div><div id="cfroomresults" style="margin-top:5px"></div>'+
     '<button class="ok tvgo" id="cfgo">'+(F.on?'Save the list':'Block rewards until it\'s done')+'</button>';
-  wireList("cfl");
+  var ctl=wireList("cfl",{onremove:function(t){var sp=spaces.find(function(x){return x.id===CFSPACE});if(sp&&t==="Tidy "+sp.name)CFSPACE=null;drawRooms()}}),inp=$("cflI"),baseInput=inp.oninput;
+  function drawRooms(){var q=inp.value.trim().toLowerCase(),sel=spaces.find(function(x){return x.id===CFSPACE});$("cfroomsel").innerHTML=sel?'Room-backed chore: <b>'+esc(sel.name)+'</b> · saving marks it untidy. Remove “Tidy '+esc(sel.name)+'” above to use only free text.':'Type a room name to make the block a real room chore and mark that room untidy.';
+    var matches=q?spaces.filter(function(x){return x.name.toLowerCase().indexOf(q)>=0||x.id.replace(/_/g," ").indexOf(q)>=0}).slice(0,8):[];$("cfroomresults").innerHTML=matches.map(function(x){return '<button type="button" data-cfroom="'+esc(x.id)+'" style="display:block;width:100%;text-align:left;margin:4px 0;padding:9px 11px">🏠 <b>'+esc(x.name)+'</b> <span class="mute">· '+esc(x.floor||"")+' · currently '+esc(x.state||"unknown")+'</span></button>'}).join("");
+    $("cfroomresults").querySelectorAll("[data-cfroom]").forEach(function(b){b.onclick=function(){var next=spaces.find(function(x){return x.id===b.dataset.cfroom}),old=spaces.find(function(x){return x.id===CFSPACE});if(old&&old.id!==next.id)ctl.remove("Tidy "+old.name);CFSPACE=next.id;ctl.add("Tidy "+next.name);drawRooms()}})}
+  inp.oninput=function(e){baseInput.call(inp,e);drawRooms()};drawRooms();
   $("cfgo").onclick=function(){var its=$("cfl").value.split("\n").map(function(t){return t.trim()}).filter(Boolean);
-    post("/api/chores_first",{kid:CFK,on:true,items:its},F.on?"List saved":"Chores first: "+k.name+"'s rewards are blocked").then(closePM)}}
+    var req=CFSPACE&&CFSPACE!==CFSPACE0?post("/api/space_tidy",{space:CFSPACE,tidy:false,block_kids:[CFK],items:its},"Living space marked untidy and assigned"):
+      post("/api/chores_first",{kid:CFK,on:true,items:its,clear_room:!!(CFSPACE0&&!CFSPACE)},F.on?"List saved":"Chores first: "+k.name+"'s rewards are blocked");req.then(closePM)}}
 // "Reject with penalty" only shows when it fits: this kid's last 2 inspections in a row (past 12 h) were rejected or
 // worth 0, or 3+ of theirs are waiting at once (fake chores piling up)
 function hmA(v){var p=String(v||"08:00").split(":"),h=+p[0];return (h%12||12)+":"+p[1]+(h<12?" AM":" PM")}

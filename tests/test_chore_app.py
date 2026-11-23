@@ -240,6 +240,13 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('if(packWasOpen&&PACK)packRender()', kids)
         self.assertIn('q.push("v="+Date.now())', inspect)
 
+    def test_mandatory_editor_searches_rooms_and_uses_room_backed_api(self):
+        inspect = (REPO / "static" / "inspect.html").read_text()
+        self.assertIn('id="cfroomresults"', inspect)
+        self.assertIn("Object.keys(S.tidy_spaces||{})", inspect)
+        self.assertIn('post("/api/space_tidy",{space:CFSPACE,tidy:false,block_kids:[CFK],items:its}', inspect)
+        self.assertIn("clear_room:!!(CFSPACE0&&!CFSPACE)", inspect)
+
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Keep your letter OUT of the envelope", html)
@@ -3950,14 +3957,15 @@ class ChoresFirst(Case):
         a.s.GUARD["home_now"] = {"ava", "max"}
         a.s.HOUSE["tidy_spaces"] = [{"id": "kitchen", "name": "Kitchen", "chores": ["kitchen"]}]
         code, r = a.post("/api/space_tidy", {"space": "kitchen", "tidy": False,
-                                              "block_kids": ["ava", "max"], "by": "jordan"})
+                                              "block_kids": ["ava", "max"],
+                                              "items": ["Tidy Kitchen", "Clear the counters"], "by": "jordan"})
         self.assertEqual(code, 200, r)
         st = r["state"]
         self.assertEqual(st["present_kids"], ["ava", "max"])
         for kid in ("ava", "max"):
             self.assertEqual(st["chores_first"][kid]["chore"], "kitchen")
             self.assertEqual(st["chores_first"][kid]["name"], "Kitchen")
-            self.assertEqual(st["chores_first"][kid]["items"], ["Tidy Kitchen"])
+            self.assertEqual(st["chores_first"][kid]["items"], ["Tidy Kitchen", "Clear the counters"])
         self.assertEqual(a.post("/api/start", {"kid": "max", "chore": "family_room"})[0], 409)
         self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 200)
         rep = a.post("/api/report", {"kid": "ava", "chore": "kitchen", "feeling": "ok"})[1]["event"]
@@ -4021,6 +4029,22 @@ class ChoresFirst(Case):
         # blocking again later starts fresh (the old pass doesn't count)
         a.post("/api/chores_first", {"kid": "ava", "on": True, "by": "jordan", "items": ["Dishes"]})
         self.assertTrue(a.state()["chores_first"]["ava"]["on"])
+
+    def test_parent_can_remove_a_room_assignment_and_keep_a_free_text_block(self):
+        a = App(base_config())
+        a.event(type="chores_first", kid="ava", on=True, items=["Tidy Kitchen"],
+                chore="kitchen", name="Kitchen", by="jordan")
+        code, reply = a.post("/api/chores_first", {"kid": "ava", "on": True,
+                                                   "items": ["Put away shoes"], "clear_room": True,
+                                                   "by": "jordan"})
+        self.assertEqual(code, 200, reply)
+        gate = reply["state"]["chores_first"]["ava"]
+        self.assertEqual(gate["items"], ["Put away shoes"])
+        self.assertIsNone(gate["chore"])
+        self.assertIsNone(gate["name"])
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "kitchen"})[0], 409)
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "cleanup_ava"})[0], 200)
+        a.close()
 
     def test_parent_can_record_already_finished_mandatory_work(self):
         self.s.GUARD["home_now"] = {"ava"}
