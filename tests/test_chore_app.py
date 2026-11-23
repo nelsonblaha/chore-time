@@ -468,7 +468,9 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn('data-move-item="', packing)
         self.assertIn('action:"move_item"', packing)
         self.assertIn("Moved without changing progress", packing)
-        self.assertIn('<details class="category" open>', packing)
+        self.assertIn('data-section="', packing)
+        self.assertIn("function rememberSections()", packing)
+        self.assertIn('localStorage.setItem("packing-sections"', packing)
         self.assertIn('localStorage.setItem("packing-selected",id)', packing)
 
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
@@ -791,9 +793,9 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIn("S=adoptState(r.state)", html)
         self.assertIn("saveItemAction(id,q,{item:n.dataset.pack,packed:on})", html)
         self.assertIn("saveItemAction(id,q,{item:n.dataset.item,area:n.dataset.moveArea})", html)
-        self.assertIn("function departureSections()", html)
+        self.assertIn("function departureSections(id)", html)
         self.assertIn('class="category departure"', html)
-        self.assertIn('h+=departureSections()', html)
+        self.assertIn('h+=departureSections(id)', html)
         self.assertIn('data-departure-task=', html)
         self.assertIn('api("/api/departure_task"', html)
 
