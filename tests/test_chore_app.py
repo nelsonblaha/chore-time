@@ -485,9 +485,10 @@ class DepartureDisplayTests(unittest.TestCase):
         self.path.write_text(json.dumps(value))
 
     def test_fresh_travel_snapshot_is_published_for_the_tv(self):
-        self.write()
+        self.write(travelers=["ben", "ava", "BEN", "bad person", ""])
         out = self.app.s.departure_display(now=10000)
         self.assertEqual(out["mode"], "train")
+        self.assertEqual(out["travelers"], ["ben", "ava"])
         self.assertEqual(out["nearest"], {"name": "West Station", "arrival_at": 10600.0,
                                           "departure_at": 10660.0, "at_now": False})
         self.assertEqual(out["pull_in_at"], 11700.0)
@@ -506,6 +507,12 @@ class DepartureDisplayTests(unittest.TestCase):
         out = self.app.s.departure_display(now=10000)
         self.assertIsNotNone(out)
         self.assertNotIn("map_route", out)
+
+    def test_missing_or_invalid_travelers_does_not_guess_who_is_boarding(self):
+        self.write(travelers="ben")
+        self.assertNotIn("travelers", self.app.s.departure_display(now=10000))
+        self.write(travelers=["bad person", "!"])
+        self.assertNotIn("travelers", self.app.s.departure_display(now=10000))
 
     def test_stale_inactive_or_invalid_snapshot_fails_closed(self):
         self.write(updated_at=7000)

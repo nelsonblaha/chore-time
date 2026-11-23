@@ -89,6 +89,15 @@ def departure_display(now=None):
         out = {"schema": 1, "updated_at": updated, "trip_id": str(value.get("trip_id") or "")[:80],
                "mode": mode, "title": str(value.get("title") or ("Train day" if mode == "train" else "Flight day"))[:100],
                "wake_at": wake, "board_at": board, "board_label": str(value.get("board_label") or "Board")[:80]}
+        travelers = value.get("travelers")
+        if isinstance(travelers, list):
+            clean_travelers = []
+            for traveler in travelers[:12]:
+                traveler = str(traveler).strip().lower()
+                if re.fullmatch(r"[a-z0-9_-]{1,40}", traveler) and traveler not in clean_travelers:
+                    clean_travelers.append(traveler)
+            if clean_travelers:
+                out["travelers"] = clean_travelers
         if mode == "train" and value.get("pull_in_at") is not None and value.get("leave_home_at") is not None:
             pull_in = float(value["pull_in_at"])
             leave_home = float(value["leave_home_at"])
