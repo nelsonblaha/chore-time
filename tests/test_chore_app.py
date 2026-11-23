@@ -1947,6 +1947,57 @@ class SonyInputs(Case):
         self.assertFalse(self.s.external_display_active(self.t,players,'x'))
 
 
+class TrainAmbientHandoff(Case):
+    def setUp(self):
+        super().setUp()
+        self.t = self.s.TVS["livingroom"]
+        self.t["room"] = "family_room"
+        self.now = time.time()
+        self.attrs = {"room": "family_room", "dashboard": "downstairs-faults",
+                      "view": "train-family-room", "receiver_app": self.s.HA_CAST_APP_ID,
+                      "observed_at": self.now - 1, "valid_until": self.now + 24}
+
+    def lease(self, state="rotate-family_room", **patch):
+        self.app.set(self.s.TRAIN_AMBIENT_ENTITY, state, **{**self.attrs, **patch})
+        return self.s.train_ambient_lease(self.t, "x", self.now)
+
+    def test_short_exact_room_lease_is_required(self):
+        self.assertTrue(self.lease()["allowed"])
+        self.assertTrue(self.lease("map-family_room")["allowed"])
+        for field, value in (("room", "kitchen"), ("dashboard", "upstairs-faults"),
+                             ("view", "train-kitchen"), ("receiver_app", self.s.DASHCAST_APP_ID),
+                             ("valid_until", self.now + 60), ("valid_until", self.now - 1)):
+            with self.subTest(field=field, value=value):
+                self.assertFalse(self.lease(**{field: value})["allowed"])
+        self.assertFalse(self.lease("shared-family_room")["allowed"])
+
+    def test_only_the_proven_ordinary_chore_page_is_stopped(self):
+        self.app.set(self.t["television"], "on", source="CAST")
+        self.app.set(self.t["remote"], "on", current_activity="com.google.android.apps.mediashell")
+        for player in self.t["players"]:
+            self.app.set(player, "idle", app_name="DashCast", app_id=self.s.DASHCAST_APP_ID)
+        self.s.GUARD["last_cast"][self.t["ip"]] = self.now
+        self.s.GUARD["seen"][self.t["ip"]] = (self.now, "http://candidate/tv?paused_reward=1&v=1")
+        self.assertFalse(self.s.yield_chore_screen_to_train(self.t, "x", self.now))
+        self.s.GUARD["seen"][self.t["ip"]] = (self.now, "http://candidate/tv?v=1")
+        started = []
+        old_thread = self.s.threading.Thread
+
+        class FakeThread:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def start(self):
+                started.append(self.kwargs["name"])
+
+        self.s.threading.Thread = FakeThread
+        try:
+            self.assertTrue(self.s.yield_chore_screen_to_train(self.t, "x", self.now))
+        finally:
+            self.s.threading.Thread = old_thread
+        self.assertEqual(started, ["train-ambient-yield"])
+
+
 class AdultRoomPresence(Case):
     """An adult face in this room may exempt this TV, but no looser household signal may."""
 
@@ -4429,6 +4480,8 @@ class GrownUpStartsVR(Case):
         published = json.loads("".join(x["payload"] for x in parts))
         self.assertIn(ask["nonce"], {q["nonce"] for q in published["assist_requests"]})
         self.assertIn("room_choices", published)
+        self.assertIn("packing_up_next", published)
+        self.assertIn("departure_display", published)
         self.assertEqual(a.post("/api/assist_answer", {"nonce": ask["nonce"], "by": "jordan", "ok": True})[0], 200)
         # A reload/retry returns the unused yes instead of buzzing the grown-up again.
         self.assertEqual(a.post("/api/reward_consent_request", {"kid": "ava", "reward": "vr"})[1]["nonce"], ask["nonce"])

@@ -3452,7 +3452,9 @@ def push_state_sensor(state=None, last_result=None):
              "music_block": state.get("music_block"),
              "spotify_volume_cap": state.get("spotify_volume_cap", 100),
              "spotify_exempt_rooms": state.get("spotify_exempt_rooms", []),
-             "calendar": state.get("calendar"), "packing_game": state.get("packing_game"), "papers": state.get("papers"),
+             "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
+             "packing_up_next": state.get("packing_up_next"), "departure_display": state.get("departure_display"),
+             "papers": state.get("papers"),
              "paper_scan_ready": state.get("paper_scan_ready"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),
              "assist_requests": state.get("assist_requests"), "envelope": state.get("envelope"),
@@ -6694,6 +6696,8 @@ UNLOCKS = {  # reward id -> (minutes, what it allows, longest single playback al
 SONY_IDLE = {"com.google.android.apps.tv.dreamx", "com.google.android.apps.tv.launcherx",
              "com.android.systemui"}   # the input picker/overlay: a kid got locked out switching to the console's HDMI
 DASHCAST_APP_ID = "84912283"
+HA_CAST_APP_ID = "A078F6B0"
+TRAIN_AMBIENT_ENTITY = "sensor.train_ambient_display"
 GUARD = {"last_cast": {}, "status": {}, "grace": {}, "seen": {}}
 GRACE_FALLBACK_MIN = 30   # "finish your episode" when the TV can't tell us how much is left
 GRACE_EXTRA_S = 300   # cut off at the predicted end of the show + 5 min
@@ -7004,6 +7008,36 @@ def external_display_active(t, players, tok):
     return any(p.get("attributes",{}).get("app_id")==t["external_display_app_id"] for p in players)
 
 
+def train_ambient_lease(t, tok, now=None):
+    """Validate HA's short, room-specific request to replace only our idle /tv page."""
+    room = t.get("room")
+    view = {"family_room": "train-family-room", "kitchen": "train-kitchen"}.get(room)
+    if not view:
+        return {"allowed": False, "reason": "room"}
+    raw = ha_get(TRAIN_AMBIENT_ENTITY, tok) or {}
+    attrs = raw.get("attributes") or {}
+    expected_states = {"rotate-" + room, "map-" + room}
+    checks = (
+        (raw.get("state") in expected_states, "state"),
+        (attrs.get("room") == room, "room"),
+        (attrs.get("dashboard") == "downstairs-faults", "dashboard"),
+        (attrs.get("view") == view, "view"),
+        (attrs.get("receiver_app") == HA_CAST_APP_ID, "receiver"),
+    )
+    failed = next((reason for ok, reason in checks if not ok), None)
+    if failed:
+        return {"allowed": False, "reason": failed}
+    try:
+        current = time.time() if now is None else float(now)
+        observed, valid = float(attrs["observed_at"]), float(attrs["valid_until"])
+    except (KeyError, TypeError, ValueError):
+        return {"allowed": False, "reason": "time"}
+    if not observed <= current < valid <= observed + 30.001:
+        return {"allowed": False, "reason": "stale"}
+    return {"allowed": True, "reason": "fresh_train_ambient", "valid_until": valid,
+            "state": raw.get("state"), "view": view}
+
+
 def tv_status(t, tok):
     """-> (what, longest_duration_s): what in off|idle|lock|stream|hdmi"""
     players = [ha_get(p, tok) for p in t["players"]]
@@ -7179,6 +7213,25 @@ def yield_chore_screen(t, tok, now):
                                        "delay_secs": 1}, tok):
         GUARD["ambient_release"][ip] = now
         ilog({"src": "tv", "action": "yield_chore_screen", "room": t.get("room")})
+
+
+def yield_chore_screen_to_train(t, tok, now):
+    """Stop only Chore's proven ordinary /tv DashCast so HA can take its fresh lease."""
+    ip = t["ip"]
+    seen, referer = GUARD["seen"].get(ip, (0, ""))
+    parsed = urllib.parse.urlsplit(referer)
+    query = urllib.parse.parse_qs(parsed.query)
+    if (not 0 <= now-seen < 15 or parsed.path != "/tv"
+            or any(key != "v" for key in query)
+            or now - GUARD.setdefault("ambient_release", {}).get(ip, 0) < 30
+            or tv_status(t, tok)[0] != "lock"):
+        return False
+    GUARD["ambient_release"][ip] = now
+    ilog({"src": "tv", "action": "yield_chore_screen_to_train", "room": t.get("room")})
+    threading.Thread(target=lambda: subprocess.run([CATT, "-d", ip, "stop"], timeout=30,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                     name="train-ambient-yield", daemon=True).start()
+    return True
 
 
 def tv_reward_lifecycle(evs):
@@ -7497,6 +7550,15 @@ def watch_tvs():
                     continue   # HA paused Spotify; do not cast, lock, announce, or change volume over its explanation
                 what, dur = tv_status(t, tok)
                 adult_presence = tv_adult_presence(t, tok)
+                ambient = train_ambient_lease(t, tok)
+                if (ambient["allowed"] and not dress_on and not unl.get(tid)
+                        and not GUARD.setdefault("grace", {}).get(tid)
+                        and not GUARD.setdefault("finish", {}).get(tid)):
+                    GUARD["status"][tid] = {"what": what, "allowed": True, "duration": dur,
+                                            "ambient_reason": ambient["reason"], "ambient": ambient}
+                    if what == "lock":
+                        yield_chore_screen_to_train(t, tok, time.time())
+                    continue
                 allowed = False
                 if dress_on:   # no TV time for anyone until they're dressed: straight to the clothes screen
                     unl = {}
