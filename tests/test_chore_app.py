@@ -1815,6 +1815,23 @@ class AdultRoomPresence(Case):
         self.app.set("sensor.living_room_adult_presence", state, **{**self.attrs, **patch})
         return self.s.tv_adult_presence(self.t, "x", self.now)
 
+    def test_named_adult_ambient_screen_respects_cooccupants_freshness_and_manual_selection(self):
+        self.t.update(kind="sony", room="den", external_display_entity="sensor.den_panel")
+        validity = dict(schema_version=1, observed_at=self.now-1, valid_until=self.now+50)
+        row = dict(state="occupied", people=["Jordan"], valid_until=self.now+50)
+        self.app.set("sensor.room_retained_occupancy", "ok", rooms={"den":row}, roster_complete=True, **validity)
+        adult = dict(person_key="jordan", display_name="Jordan", possible_rooms=["den"], confirmed=True, located=True)
+        child = dict(person_key="ava", possible_rooms=["bedroom"], located=True)
+        for rooms, eligible in [(["bedroom"],True), (["bedroom","den"],False), (["den"],False)]:
+            self.app.set("sensor.occupant_tracks","2",people=[adult,dict(child,possible_rooms=rooms)],**validity)
+            self.assertEqual(self.s.adult_idle_screen(self.t,"x",self.now),eligible)
+        self.app.set("sensor.occupant_tracks","2",people=[adult,child],**validity)
+        self.app.set("sensor.den_panel","active",lease_until=self.now+45)
+        self.assertFalse(self.s.adult_idle_screen(self.t,"x",self.now))
+        self.app.set("sensor.den_panel","idle")
+        self.assertFalse(self.s.adult_idle_screen(self.t,"x",self.now+60))
+        self.assertFalse(self.s.tv_adult_presence(self.t,"x",self.now)["allowed"])
+
     def test_fresh_purpose_limited_room_identity_allows_the_tv(self):
         self.assertTrue(self.result()["allowed"])
 

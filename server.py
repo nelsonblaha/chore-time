@@ -6936,6 +6936,61 @@ def tv_adult_presence(t, tok, now=None):
             "observed_at": observed}
 
 
+def adult_idle_screen(t, tok, now=None):
+    """Use ordinary ambient content when only a named adult is placed at this TV."""
+    room = t.get("room")
+    adults = (t.get("adult_presence") or {}).get("people") or []
+    if not room or not adults or t.get("kind") != "sony":
+        return False
+    current = time.time() if now is None else now
+
+    def fresh(attrs):
+        seen, until = attrs.get("observed_at"), attrs.get("valid_until")
+        return (attrs.get("schema_version") == 1 and type(seen) in (int, float)
+                and type(until) in (int, float) and seen <= current < until <= seen + 120)
+
+    panel = t.get("external_display_entity")
+    if panel:
+        selection = ha_get(panel, tok)
+        if (selection.get("state") in ("active", "loading", "restoring")
+                and current < ((selection.get("attributes") or {}).get("lease_until") or 0)):
+            return False
+    occupancy = ha_get("sensor.room_retained_occupancy", tok)
+    attrs = occupancy.get("attributes") or {}
+    visit = (attrs.get("rooms") or {}).get(room) or {}
+    if (occupancy.get("state") != "ok" or not fresh(attrs) or not attrs.get("roster_complete")
+            or visit.get("state") not in ("occupied", "still") or visit.get("anonymous_group")
+            or visit.get("state") == "still" and visit.get("display_state") not in ("remains", "roster_placed")
+            or (visit.get("occupancy_bounds") or {}).get("minimum", 0) > 1
+            or not current < (visit.get("valid_until") or 0) or len(visit.get("people") or []) != 1):
+        return False
+    tracks = ha_get("sensor.occupant_tracks", tok).get("attributes") or {}
+    if not fresh(tracks):
+        return False
+    here = [p for p in tracks.get("people", []) if room in (p.get("possible_rooms") or [])]
+    return (len(here) == 1 and here[0].get("person_key") in adults
+            and here[0].get("confirmed") is True and here[0].get("located") is True
+            and here[0].get("possible_rooms") == [room]
+            and here[0].get("display_name") == visit["people"][0])
+
+
+def yield_chore_screen(t, tok, now):
+    # Only leave our own polling /tv on the foreground receiver. Other DashCast
+    # pages, native playback and explicit floorplan panel leases have their own owners.
+    ip = t["ip"]
+    seen, referer = GUARD["seen"].get(ip, (0, ""))
+    if (not 0 <= now-seen < 15 or urllib.parse.urlsplit(referer).path != "/tv"
+            or now - GUARD.setdefault("ambient_release", {}).get(ip, 0) < 30
+            or app_of(t, tok) != "com.google.android.apps.mediashell"):
+        return
+    if tv_status(t, tok)[0] != "lock":
+        return
+    if ha_call("remote.send_command", {"entity_id": t["remote"], "command": ["HOME", "BACK", "BACK"],
+                                       "delay_secs": 1}, tok):
+        GUARD["ambient_release"][ip] = now
+        ilog({"src": "tv", "action": "yield_chore_screen", "room": t.get("room")})
+
+
 def tv_reward_lifecycle(evs):
     """Newest durable pause/resume transition for each purchased reward session."""
     state = {}
@@ -7331,6 +7386,12 @@ def watch_tvs():
                     GUARD.setdefault("fails", {})[tid] = 0
                 prev_what = (GUARD.setdefault("prev", {})).get(tid)
                 GUARD["prev"][tid] = what
+                if what in ("lock", "idle") and not unl.get(tid) and adult_idle_screen(t, tok):
+                    GUARD["status"][tid]["ambient_reason"] = "adult_in_room"
+                    GUARD.setdefault("lock_since", {}).pop(tid, None)
+                    if what == "lock":
+                        yield_chore_screen(t, tok, time.time())
+                    continue
                 if (t["kind"] == "sony" and what == "idle" and prev_what == "lock" and not allowed
                         and not (GUARD.get("mode") or {}).get("chill") and not GUARD.setdefault("standby", {}).get(tid)
                         and app_of(t, tok) == "com.google.android.apps.tv.launcherx"):
