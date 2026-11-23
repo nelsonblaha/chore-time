@@ -247,6 +247,15 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('post("/api/space_tidy",{space:CFSPACE,tidy:false,block_kids:[CFK],items:its}', inspect)
         self.assertIn("clear_room:!!(CFSPACE0&&!CFSPACE)", inspect)
 
+    def test_tv_departure_timeline_replaces_half_the_jobs_grid(self):
+        tv = (REPO / "static" / "tvlock.html").read_text()
+        self.assertIn('id="trip"', tv)
+        self.assertIn("drawDeparture(S.departure_display", tv)
+        self.assertIn("J=openJobs(S,hasTrip?3:6)", tv)
+        self.assertIn('return "at "+n.name+" now"', tv)
+        self.assertIn('n.name+" in "+', tv)
+        self.assertIn('n.name+" "+Math.max(1,Math.round((now-dep)/60))+"m ago"', tv)
+
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
         self.assertIn("Keep your letter OUT of the envelope", html)
@@ -438,6 +447,40 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn("S.paused_all||[]", grown)
         self.assertIn("held until completed or explicitly ended", grown)
         self.assertNotIn("Keep 7 more days", grown)
+
+
+class DepartureDisplayTests(unittest.TestCase):
+    def setUp(self):
+        self.app = App()
+        self.addCleanup(self.app.close)
+        self.path = self.app.dir / "departure.json"
+        self.app.s.HOUSE["departure_display_file"] = str(self.path)
+
+    def write(self, **changes):
+        value = {"schema": 1, "active": True, "updated_at": 9990, "trip_id": "trip-1", "mode": "train",
+                 "title": "Train to River City", "wake_at": 9000, "board_at": 12000,
+                 "board_label": "Board downtown", "nearest": {"name": "West Station",
+                 "arrival_at": 10600, "departure_at": 10660}}
+        value.update(changes)
+        self.path.write_text(json.dumps(value))
+
+    def test_fresh_travel_snapshot_is_published_for_the_tv(self):
+        self.write()
+        out = self.app.s.departure_display(now=10000)
+        self.assertEqual(out["mode"], "train")
+        self.assertEqual(out["nearest"], {"name": "West Station", "arrival_at": 10600.0,
+                                          "departure_at": 10660.0, "at_now": False})
+
+    def test_stale_inactive_or_invalid_snapshot_fails_closed(self):
+        self.write(updated_at=7000)
+        self.assertIsNone(self.app.s.departure_display(now=10000))
+        self.write(active=False)
+        self.assertIsNone(self.app.s.departure_display(now=10000))
+        self.write(wake_at=13000)
+        self.assertIsNone(self.app.s.departure_display(now=10000))
+
+    def test_trip_details_are_not_added_to_public_demo_state(self):
+        self.assertNotIn("departure_display", self.app.s.demo_attrs({"departure_display": {"title": "Private trip"}}))
 
 
 class PackingRewardGateTests(unittest.TestCase):

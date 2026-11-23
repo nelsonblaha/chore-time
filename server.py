@@ -62,6 +62,45 @@ def packing_config():
     return packing_public(value) if isinstance(value, dict) else value
 
 
+def departure_display(now=None):
+    """Fresh, Travel-owned departure-day snapshot for the household TV page.
+
+    Travel owns whether this is active and refreshes it with the trip watcher.
+    Chore only validates and renders it; a stale or malformed snapshot disappears.
+    """
+    raw_path = HOUSE.get("departure_display_file")
+    if not raw_path:
+        return None
+    try:
+        value = json.loads(Path(str(raw_path)).expanduser().read_text())
+        now = time.time() if now is None else float(now)
+        if not isinstance(value, dict) or value.get("schema") != 1 or value.get("active") is not True:
+            return None
+        updated = float(value.get("updated_at"))
+        wake = float(value.get("wake_at"))
+        board = float(value.get("board_at"))
+        if not now - 2700 <= updated <= now + 300 or not wake < board or board - wake > 86400:
+            return None
+        if board < now - 300 or wake > now + 6 * 3600:
+            return None
+        mode = str(value.get("mode") or "")
+        if mode not in ("train", "flight"):
+            return None
+        out = {"schema": 1, "updated_at": updated, "trip_id": str(value.get("trip_id") or "")[:80],
+               "mode": mode, "title": str(value.get("title") or ("Train day" if mode == "train" else "Flight day"))[:100],
+               "wake_at": wake, "board_at": board, "board_label": str(value.get("board_label") or "Board")[:80]}
+        near = value.get("nearest")
+        if mode == "train" and isinstance(near, dict) and str(near.get("name") or "").strip():
+            arr = float(near.get("arrival_at"))
+            dep = float(near.get("departure_at"))
+            if arr <= dep and board - 86400 <= arr <= board + 86400:
+                out["nearest"] = {"name": str(near["name"]).strip()[:80], "arrival_at": arr,
+                                  "departure_at": dep, "at_now": near.get("at_now") is True}
+        return out
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def house_path(p):
     return Path(str(p)).expanduser() if p else None
 
@@ -3090,6 +3129,7 @@ def derive():
             "hub_placement_review": hub_placement_review_state(),
             "shower": shower, "evening_routine": evening_routine,
             "calendar": schedule.agenda(), "packing_game": packing_config(),
+            "departure_display": departure_display(),
             "papers": papers, "paper_scan_ready": bool((HOUSE.get("paper_scanner") or {}).get("ready")),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
                                                GUARD.get("home_arrivals") or load_home_arrivals()),
@@ -3164,7 +3204,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
+DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "departure_display", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
              "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",

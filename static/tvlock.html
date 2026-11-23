@@ -11,6 +11,11 @@ img.e{width:1em;height:1em;vertical-align:-.12em}
 .jobs{flex:3}.news{flex:2;overflow:hidden}
 .hdr{font-size:3.4vh;font-weight:900;opacity:.85;margin-bottom:1.4vh;letter-spacing:.02em}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);grid-auto-rows:1fr;gap:1.4vh 1vw;flex:1;min-height:0}
+.trip{display:none;min-height:0;background:linear-gradient(135deg,rgba(57,164,255,.24),rgba(255,255,255,.06));border-radius:2.4vh;padding:1.1vh 1.2vw;box-sizing:border-box}
+.jobs.departure .trip{display:flex;flex:1 1 0;flex-direction:column;justify-content:center}.jobs.departure .grid{flex:1 1 0;grid-template-rows:1fr;grid-auto-rows:0;overflow:hidden;margin-top:1.2vh}
+.triph{display:flex;align-items:center;gap:1vw;font-size:2.8vh;font-weight:900}.triph .mode{font-size:4.6vh}.triph .board{margin-left:auto;font-size:2.3vh;opacity:.8}
+.track{height:2.4vh;background:rgba(255,255,255,.22);border-radius:2vh;margin:1.2vh .4vw .5vh;position:relative}.track .fill{position:absolute;inset:0 auto 0 0;background:#56c7ff;border-radius:2vh}.track .vehicle{position:absolute;top:50%;font-size:4vh;transform:translate(-50%,-52%);filter:drop-shadow(0 .3vh .2vh #0008)}
+.tracklabels{display:flex;justify-content:space-between;font-size:1.9vh;font-weight:800;opacity:.75}.trainwhere{text-align:center;font-size:3vh;font-weight:900;line-height:1;margin-top:.5vh;color:#ffe082}
 .job{background:rgba(255,255,255,.1);border-radius:2.4vh;padding:1.2vh 1vw;display:flex;flex-direction:column;justify-content:space-between;min-width:0;position:relative;overflow:hidden}
 .job.hot{background:linear-gradient(135deg,rgba(255,140,0,.35),rgba(255,255,255,.08))}
 .job .ji{font-size:6vh;line-height:1}.job .jn{font-size:2.9vh;font-weight:900;line-height:1.15;margin-top:.6vh;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -74,7 +79,7 @@ h1{font-size:5.5vh;margin:0}
 <div id="dress"></div>
 <div class="wrap">
   <div class="top">
-    <section class="jobs"><div class="hdr" id="jobshd"></div><div class="grid" id="jobs"></div></section>
+    <section class="jobs" id="jobspanel"><div class="hdr" id="jobshd"></div><div class="trip" id="trip"></div><div class="grid" id="jobs"></div></section>
     <section class="news"><div class="hdr"><span id="newsic"></span> News</div><div id="newslist"></div></section>
   </div>
   <div class="kids" id="kids"></div>
@@ -112,14 +117,27 @@ function newsFeed(S){var out=[],KN=function(k){return (S.config.kids.find(functi
 function ago(S,t){var m=Math.max(0,Math.round((S.now-t)/60));return m<1?"just now":m<60?m+" min ago":m<1440?Math.round(m/60)+" h ago":Math.round(m/1440)+" d ago"}
 /* --- jobs open now, at the house the TVs are in: best paying first --- */
 function tvHouse(S,c){var H=S.households||[];if(!H.length)return true;var hh=c.household||H[0].id;return hh==="any"||hh===H[0].id}
-function openJobs(S){var busy={};Object.keys(S.active||{}).forEach(function(k){busy[S.active[k].chore]=1});var nk=S.config.kids.length;
+function openJobs(S,limit){var busy={};Object.keys(S.active||{}).forEach(function(k){busy[S.active[k].chore]=1});var nk=S.config.kids.length;
   return S.config.chores.filter(function(c){var b=S.board[c.id]||{};
     if(c.hidden||c.closed||c.id==="other"||c.slot||!tvHouse(S,c)||b.clean_until)return false;
     if(c.shared)return (b.done_today||[]).length<nk;
     return !busy[c.id]&&!(b.pending_by||[]).length}).map(function(c){var b=S.board[c.id]||{};return {c:c,b:b,p:b.price!=null?b.price:c.points}})
     .sort(function(x,y){var h=function(z){return z.c.id.indexOf("help_")===0?1:0};   // a robot to rescue first
-      return h(y)-h(x)||(y.b.bonus&&y.p>y.b.base?1:0)-(x.b.bonus&&x.p>x.b.base?1:0)||(y.p||0)-(x.p||0)}).slice(0,6)}
+      return h(y)-h(x)||(y.b.bonus&&y.p>y.b.base?1:0)-(x.b.bonus&&x.p>x.b.base?1:0)||(y.p||0)-(x.p||0)}).slice(0,limit||6)}
 function hhmm(t){var p=String(t).split(":"),h=+p[0];return (h%12||12)+":"+p[1]+(h<12?" AM":" PM")}
+function clockAt(t){return new Date(t*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}
+function departureStation(T,now){var n=T&&T.nearest;if(!n)return "";var arr=+n.arrival_at,dep=+n.departure_at;
+  if(n.at_now)return "at "+n.name+" now";
+  if(now<arr)return n.name+" in "+Math.max(1,Math.ceil((arr-now)/60))+"m";
+  if(now<=dep)return "at "+n.name+" now";
+  return n.name+" "+Math.max(1,Math.round((now-dep)/60))+"m ago"}
+function drawDeparture(T,now){var panel=document.getElementById("jobspanel"),el=document.getElementById("trip");
+  if(!T){panel.classList.remove("departure");el.innerHTML="";return false}
+  var span=Math.max(60,T.board_at-T.wake_at),pct=Math.max(0,Math.min(100,100*(now-T.wake_at)/span)),ico=T.mode==="flight"?"2708":"1f682",where=departureStation(T,now);
+  el.innerHTML='<div class="triph"><span class="mode">'+E(ico)+'</span><span>'+T.title+'</span><span class="board">'+T.board_label+' '+clockAt(T.board_at)+'</span></div>'+
+    '<div class="track"><div class="fill" style="width:'+pct.toFixed(1)+'%"></div><span class="vehicle" style="left:'+pct.toFixed(1)+'%">'+E(ico)+'</span></div>'+
+    '<div class="tracklabels"><span>Up '+clockAt(T.wake_at)+'</span><span>Board '+clockAt(T.board_at)+'</span></div>'+(where?'<div class="trainwhere">'+where+'</div>':'');
+  panel.classList.add("departure");return true}
 var NEWSI=0,NEWS=[],SNOW=0;
 function drawNews(){var el=document.getElementById("newslist");if(!NEWS.length){el.innerHTML='<div class="none">Do a job to make the news!</div>';return}
   var n=Math.min(3,NEWS.length),h="";for(var i=0;i<n;i++){var x=NEWS[(NEWSI+i)%NEWS.length];
@@ -173,7 +191,7 @@ function load(){fetch("/api/state").then(function(r){return r.json()}).then(func
        b>=gc?'<div class="next buy">'+E("2705")+' Enough for '+E(G.icon)+'! Buy it on the Hub</div>':'<div class="next go">'+E("1f9f9")+' '+(gc-b)+' more '+E("2b50")+' to '+E(G.icon)+(p?' &middot; '+E("1f50d")+' +'+p+' waiting':'')+'</div>'))+
       (ac?'<div class="doing">'+E("23f1")+' Doing: '+E(ac.icon)+' '+ac.name+'</div>':'')+'</div>'});
   document.getElementById("kids").innerHTML=h;
-  var CMx=S.chore_mode||{},J=openJobs(S);
+  var CMx=S.chore_mode||{},hasTrip=drawDeparture(S.departure_display,Date.now()/1000),J=openJobs(S,hasTrip?3:6);
   document.getElementById("jobshd").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time":E("2b50")+" Jobs open now";
   document.getElementById("jobs").innerHTML=J.length?J.map(function(x){var c=x.c,b=x.b,hot=b.bonus&&x.p>b.base,t=[];
       if(hot)t.push(E("1f525")+" extra untidy +"+(x.p-b.base));
