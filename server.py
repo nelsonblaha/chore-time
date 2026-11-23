@@ -103,14 +103,15 @@ def departure_display(now=None):
             leave_home = float(value["leave_home_at"])
             # Travel's walking milestone is 30 minutes on foot plus a 15-minute
             # station buffer, counted back from pull-in (never train departure).
-            # Some Amtrak feeds expose only the scheduled departure as "pull in".
-            # Travel's already-computed leave time still identifies the true
-            # milestone; recover the implied pull-in instead of dropping the walker.
-            if abs(pull_in - board) <= 60 and 2700 < board - leave_home <= 5400:
-                pull_in = leave_home + 2700
-            if wake <= leave_home < pull_in <= board and abs((pull_in - leave_home) - 2700) <= 60:
+            # A Travel-owned note may add a named en-route stop before that walk.
+            leave_note = str(value.get("leave_home_note") or "").strip()[:100]
+            standard_walk = abs((pull_in - leave_home) - 2700) <= 60
+            noted_stop = bool(leave_note) and 2700 <= pull_in - leave_home <= 7200
+            if wake <= leave_home < pull_in <= board and (standard_walk or noted_stop):
                 out["pull_in_at"] = pull_in
                 out["leave_home_at"] = leave_home
+                if leave_note:
+                    out["leave_home_note"] = leave_note
         route = value.get("map_route")
         if mode == "train" and "leave_home_at" in out and isinstance(route, dict):
             def map_point(point):

@@ -515,11 +515,12 @@ class DepartureDisplayTests(unittest.TestCase):
         self.assertNotIn("pull_in_at", out)
         self.assertNotIn("leave_home_at", out)
 
-    def test_departure_only_feed_recovers_pull_in_from_travels_leave_time(self):
-        self.write(pull_in_at=12000, leave_home_at=9000)
+    def test_named_stop_can_move_leave_home_earlier_without_losing_the_walker(self):
+        self.write(pull_in_at=12000, leave_home_at=9000, leave_home_note="Snack stop on the way")
         out = self.app.s.departure_display(now=10000)
         self.assertEqual(out["leave_home_at"], 9000)
-        self.assertEqual(out["pull_in_at"], 11700)
+        self.assertEqual(out["pull_in_at"], 12000)
+        self.assertEqual(out["leave_home_note"], "Snack stop on the way")
         self.assertIn("map_route", out)
 
     def test_bad_optional_map_does_not_hide_the_departure_timeline(self):
