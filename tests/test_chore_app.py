@@ -261,6 +261,9 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn("T.board_label+' '+clockAt(T.board_at)", tv)
         self.assertIn('id="trainmap"', tv)
         self.assertIn('Math.floor(now/60)%2===1', tv)
+        self.assertIn('fixed==="train"', tv)
+        self.assertIn('fixed==="chores"', tv)
+        self.assertIn('queryValue("embed")==="1"', tv)
         self.assertIn('stroke="#38a8ff"', tv)
         self.assertIn('stroke="#aeb5c4"', tv)
         self.assertIn('h+":"+("0"+m).slice(-2)+":"+("0"+s).slice(-2)', tv)
@@ -694,6 +697,36 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertTrue(done["state"]["packing_game"]["progress"]["jordan"]["complete"])
         self.assertNotIn("jordan", done["state"]["balance"])
         self.assertFalse([e for e in a.s.read_events() if e.get("kid") == "jordan"])
+
+    def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
+        a = self.app
+        a.s.LEAD_ADULT = "jordan"
+        upcoming = a.state()["packing_up_next"]
+        self.assertTrue(upcoming["active"])
+        self.assertEqual(upcoming["packer"], "jordan")
+        self.assertEqual([x["name"] for x in upcoming["items"]], ["Charger"])
+        self.assertEqual(upcoming["items"][0]["pile"], "Packing")
+
+        row = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan", "phase": "final",
+               "seq": 2, "ready": {"charger": True}, "checked": {"charger": "pass"},
+               "packed": {"charger": True}, "finals": {}}
+        (a.dir / "packing_progress.json").write_text(json.dumps({
+            "version": "trip-test-v1", "kids": {"jordan": row}
+        }))
+        checks = a.state()["packing_up_next"]
+        self.assertEqual([(x["name"], x["kind"]) for x in checks["items"]], [("Bag zipped", "check")])
+
+        row.update(phase="complete", finals={"adult_zip": "pass"})
+        (a.dir / "packing_progress.json").write_text(json.dumps({
+            "version": "trip-test-v1", "kids": {"jordan": row}
+        }))
+        self.assertIsNone(a.state()["packing_up_next"])
+        a.s.HOUSE["packing_game"]["activated"] = False
+        self.assertIsNone(a.state()["packing_up_next"])
+
+    def test_packing_up_next_is_not_added_to_public_demo_state(self):
+        projected = {"active": True, "items": [{"name": "Private thing"}]}
+        self.assertNotIn("packing_up_next", self.app.s.demo_attrs({"packing_up_next": projected}))
 
     def test_departure_house_checks_are_injected_and_cannot_be_marked_before_their_window(self):
         a = self.app

@@ -505,6 +505,44 @@ def packing_public(game):
     return public
 
 
+def packing_up_next(game, packer, limit=6):
+    """Small read-only projection for ambient dashboards.
+
+    An active, unfinished grown-up list temporarily replaces ordinary house jobs
+    on Faults displays.  Keep the projection deliberately narrow so those
+    displays do not have to understand or mutate the packing workflow.
+    """
+    if not isinstance(game, dict) or not game.get("activated") or not packer:
+        return None
+    profile = packing_profile(game, packer)
+    if not profile:
+        return None
+    progress = (game.get("progress") or {}).get(packer) or {}
+    if progress.get("complete") or packing_complete(game, packer, progress):
+        return None
+    packed = progress.get("packed") or {}
+    items = []
+    for pile in profile.get("piles") or []:
+        for item in pile.get("items") or []:
+            if (not item.get("id") or (item.get("only") and packer not in item["only"])
+                    or packed.get(item["id"]) is True):
+                continue
+            items.append({"id": item["id"], "name": str(item.get("name") or "Packing item")[:120],
+                          "icon": str(item.get("icon") or pile.get("icon") or "1f4e6")[:40],
+                          "pile_id": pile.get("id"), "pile": str(pile.get("title") or "Packing")[:80],
+                          "kind": "item"})
+    if not items:
+        finals = progress.get("finals") or {}
+        for check in profile.get("final_checks") or []:
+            if check.get("id") and finals.get(check["id"]) != "pass":
+                items.append({"id": check["id"], "name": str(check.get("name") or "Final check")[:120],
+                              "icon": str(check.get("icon") or "2705")[:40],
+                              "pile_id": "final", "pile": "Final checks", "kind": "check"})
+    return {"active": True, "packer": packer, "profile": profile.get("id"),
+            "title": str(profile.get("name") or game.get("title") or "Packing")[:120],
+            "phase": str(progress.get("phase") or "layout"), "items": items[:max(1, min(int(limit), 12))]}
+
+
 def packing_final_check_available(check, state, now=None):
     """Whether a time-sensitive house check is inside its window before leaving home."""
     try:
@@ -3168,6 +3206,7 @@ def derive():
     pin_epoch = hashlib.sha256("|".join(k["id"] + ":" + str(k.get("pin_hash") or "") for k in c["kids"]).encode()).hexdigest()[:12]
     projects_ = stepped_jobs.derive(c["chores"], evs)
     project_contexts_ = {ch_["id"]: stepped_context(ch_, evs) for ch_ in c["chores"] if stepped_jobs.definition(ch_)}
+    packing_ = packing_config()
     return {"version": ver, "ver_tv": ver_tv, "sound_effects": sound_enabled(),
             "pin_epoch": pin_epoch,
             "lead_adult": LEAD_ADULT if "LEAD_ADULT" in globals() else None, "kid_open": kid_open, "whatsnew": news[-1] if news else None, "whatsnew_all": news[-8:],
@@ -3190,7 +3229,8 @@ def derive():
             "adult_busy_until": adult_busy_until(evs), "adult_busy": adult_busy_state(evs),
             "hub_placement_review": hub_placement_review_state(),
             "shower": shower, "evening_routine": evening_routine,
-            "calendar": schedule.agenda(), "packing_game": packing_config(),
+            "calendar": schedule.agenda(), "packing_game": packing_,
+            "packing_up_next": packing_up_next(packing_, LEAD_ADULT if "LEAD_ADULT" in globals() else None),
             "departure_display": departure_display(),
             "papers": papers, "paper_scan_ready": bool((HOUSE.get("paper_scanner") or {}).get("ready")),
             "music_block": music_block_state(evs, chores_first, must_first, present, reports,
@@ -3266,7 +3306,7 @@ def room_log(state):
     return res
 
 
-DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "departure_display", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
+DEMO_DROP = ("households", "kid_where", "present_kids", "envelope", "kid_notes", "requests", "calendar", "packing_game", "packing_up_next", "departure_display", "music_block", "spotify_exempt_rooms", "reward_block", "room_choices", "hub_placement_review",
              "projects", "project_contexts", "paused_all",
              "adult_first", "assist_requests", "adult_busy", "adult_busy_until", "shower", "last_result", "inspect_photos", "inspect_media")
 DEMO_FREE_TEXT = ("note", "note_by", "rest_note", "feedback", "leftover_note", "ask", "reason", "label", "present",

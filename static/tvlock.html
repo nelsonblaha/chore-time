@@ -96,7 +96,9 @@ body.mapface #trainmap{display:grid}body.mapface .wrap,body.mapface .foot{displa
 <script>
 
 var _q=[],_sess=Math.random().toString(36).slice(2,8);
-function L(ev,data){var o={ev:ev,page:location.pathname,sess:_sess,t:Date.now()/1000};if(typeof kid!=="undefined"&&kid)o.kid=kid;if(data)for(var k in data)o[k]=data[k];_q.push(o);if(_q.length>=20)flushL()}
+function queryValue(name){var m=(location.search||"").match(new RegExp("(?:^|[?&])"+name+"=([^&]*)"));return m?decodeURIComponent(m[1]):null}
+function readOnlyRender(){return queryValue("embed")==="1"}
+function L(ev,data){if(readOnlyRender())return;var o={ev:ev,page:location.pathname,sess:_sess,t:Date.now()/1000};if(typeof kid!=="undefined"&&kid)o.kid=kid;if(data)for(var k in data)o[k]=data[k];_q.push(o);if(_q.length>=20)flushL()}
 function flushL(){if(!_q.length)return;var b=JSON.stringify(_q);_q=[];try{fetch("/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:b,keepalive:true})}catch(e){}}
 setInterval(flushL,3000);addEventListener("pagehide",flushL);
 addEventListener("error",function(e){L("js_error",{msg:String(e.message),line:e.lineno})});
@@ -166,6 +168,7 @@ function drawTrainMap(T){if(!T||!T.map_route||!USMAP)return;var r=T.map_route;se
     '<circle cx="'+hm[0]+'" cy="'+hm[1]+'" r="16" fill="#ffe082" stroke="#0a1230" stroke-width="4"/><text x="'+hm[0]+'" y="'+(hm[1]+9)+'" text-anchor="middle" font-size="28">🏠</text><text x="'+hm[0]+'" y="'+(hm[1]+38)+'" text-anchor="middle" fill="#fff" font-size="22" font-weight="900">'+mapText(r.home.label)+'</text>'+
     '<circle cx="'+tr[0]+'" cy="'+tr[1]+'" r="19" fill="#fff" stroke="#38a8ff" stroke-width="5"/><text x="'+tr[0]+'" y="'+(tr[1]+10)+'" text-anchor="middle" font-size="32">🚂</text>'}
 function tickTrainMap(){var T=MAPTRIP,now=Date.now()/1000,active=!!(T&&T.mode==="train"&&T.map_route&&T.leave_home_at&&now<T.board_at),face=active&&Math.floor(now/60)%2===1;
+  var fixed=queryValue("face");if(active&&fixed==="train")face=true;else if(fixed==="chores")face=false;
   document.body.classList.toggle("mapface",face);if(!active)return;var left=Math.max(0,Math.round(T.leave_home_at-now)),h=Math.floor(left/3600),m=Math.floor(left%3600/60),s=left%60;
   document.getElementById("countdown").textContent=left?h+":"+("0"+m).slice(-2)+":"+("0"+s).slice(-2):"LEAVE NOW";document.getElementById("leavetime").textContent="Walk out at "+clockAt(T.leave_home_at);if(face)drawTrainMap(T)}
 fetch("/us-map.json").then(function(r){return r.json()}).then(function(x){USMAP=x;tickTrainMap()}).catch(function(){USMAP=null});setInterval(tickTrainMap,1000);
