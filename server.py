@@ -6099,6 +6099,7 @@ class H(BaseHTTPRequestHandler):
         elif p in ("/api/start", "/api/stop"):
             if b.get("kid") not in kids or (p == "/api/start" and b.get("chore") not in chores):
                 return self.send(400, {"error": "unknown kid/chore"})
+            withdraw_pending_ = []
             if p == "/api/start" and any(project_.get("active_session") and
                     b["kid"] in (project_["active_session"].get("team") or []) for project_ in st.get("projects") or []):
                 return self.send(409, {"error": "End your ongoing project session before starting another chore."})
@@ -6111,10 +6112,7 @@ class H(BaseHTTPRequestHandler):
                     resumable_ = b["kid"] in (st["board"].get(b["chore"]) or {}).get("resume_pending_by", [])
                     if not resumable_:
                         return self.send(409, {"error": "already waiting for inspection"})
-                    for report_ in pending_:
-                        append({"type": "withdraw", "ref": report_["id"], "by": "kid:" + b["kid"],
-                                "why": "resumed work after stopping"})
-                    st = derive()
+                    withdraw_pending_ = pending_
             if p == "/api/start" and (st["active"].get(b["kid"]) or {}).get("chore") == b["chore"]:
                 return self.send(200, {"ok": True, "already": True, "state": st})   # a second tap keeps the clock running
             if p == "/api/start" and chores[b["chore"]].get("each_daily") and \
@@ -6130,6 +6128,9 @@ class H(BaseHTTPRequestHandler):
                         [k for k, z in st["paused"].items() if z["chore"] == b["chore"] and b["kid"] not in z["team"]]
                 if busy_:
                     return self.send(409, {"error": "%s is doing it" % busy_[0]})
+            for report_ in withdraw_pending_:   # only after every start gate passes: rejection must keep the turn-in
+                append({"type": "withdraw", "ref": report_["id"], "by": "kid:" + b["kid"],
+                        "why": "resumed work after stopping"})
             ev = append({"type": p.rsplit("/", 1)[1], "kid": b["kid"], "chore": b.get("chore"),
                          **({"notimer": True} if p == "/api/start" and
                             not kid_uses_timer(c, b["kid"], b["chore"]) else {})})

@@ -1133,6 +1133,19 @@ class SharedVsExclusive(Case):
         code, waiting = self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})
         self.assertEqual((code, waiting.get("error")), (409, "already waiting for inspection"))
 
+    def test_a_rejected_resume_does_not_withdraw_the_stale_turn_in(self):
+        self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})
+        report_id = self.app.post("/api/report", {"kid": "max", "chore": "kitchen"})[1]["event"]["id"]
+        self.s.append({"type": "start", "kid": "max", "chore": "kitchen"})
+        self.s.append({"type": "stop", "kid": "max", "chore": None})
+        self.s.append({"type": "start", "kid": "ava", "chore": "kitchen"})
+
+        code, busy = self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})
+        self.assertEqual(code, 409, busy)
+        self.assertIn("max", self.app.state()["board"]["kitchen"]["pending_by"])
+        self.assertFalse(any(e["type"] == "withdraw" and e.get("ref") == report_id
+                             for e in self.s.read_events()))
+
     def test_paused_organizing_does_not_block_another_kid(self):
         # Jordan: "Ava organizing ... aren't exclusive and don't need releasing for someone else"
         self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "organize"})[0], 200)
