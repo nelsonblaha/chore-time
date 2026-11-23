@@ -75,9 +75,16 @@ h1{font-size:5.5vh;margin:0}
 #rewardpause.on{display:flex}#rewardpause .box{max-width:85vw}#rewardpause .ico{font-size:15vh}
 #rewardpause h1{font-size:8vh;line-height:1.05;margin:2vh 0}#rewardpause .msg{font-size:5vh;font-weight:800;line-height:1.25}
 #rewardpause .left{font-size:4vh;margin-top:3vh;opacity:.85}
+#trainmap{display:none;position:fixed;inset:0;z-index:20;padding:2.2vh 2vw;box-sizing:border-box;background:radial-gradient(circle at 35% 40%,#253d78,#090d29 75%);grid-template-rows:auto 1fr;gap:1.5vh}
+body.mapface #trainmap{display:grid}body.mapface .wrap,body.mapface .foot{display:none}
+.maphead{display:flex;justify-content:space-between;align-items:center;font-size:4.2vh;font-weight:900}.maphead .where{font-size:3vh;color:#ffe082}
+.mapbody{display:flex;min-height:0;gap:2vw}.usmap{flex:1;min-width:0;width:100%;height:100%;filter:drop-shadow(0 .7vh 1vh #0008)}
+.countbox{width:29vw;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;background:rgba(255,255,255,.08);border-radius:3vh;padding:2vh 1vw;box-sizing:border-box}
+.countlabel{font-size:3.4vh;font-weight:900}.countdown{font-size:7.2vh;font-weight:1000;line-height:1.05;margin:2vh 0;color:#fff}.leavetime{font-size:3.5vh;font-weight:900;color:#ffe082}.maplegend{display:flex;gap:1.5vw;font-size:2.4vh;font-weight:800;margin-top:3vh}.maplegend i{display:inline-block;width:2vw;height:.8vh;border-radius:1vh;margin-right:.4vw}.maplegend .done{background:#38a8ff}.maplegend .ahead{background:#9ca5b8}
 </style></head><body>
 <div id="rewardpause"></div>
 <div id="dress"></div>
+<div id="trainmap"><div class="maphead"><span id="maptitle"></span><span class="where" id="mapwhere"></span></div><div class="mapbody"><svg class="usmap" id="mapsvg" viewBox="0 0 1000 520" aria-label="Train route across the United States"></svg><div class="countbox"><div class="countlabel">Leave the house in</div><div class="countdown" id="countdown"></div><div class="leavetime" id="leavetime"></div><div class="maplegend"><span><i class="done"></i>Traveled</span><span><i class="ahead"></i>Ahead</span></div></div></div></div>
 <div class="wrap">
   <div class="top">
     <section class="jobs" id="jobspanel"><div class="hdr" id="jobshd"></div><div class="trip" id="trip"></div><div class="grid" id="jobs"></div></section>
@@ -140,6 +147,24 @@ function drawDeparture(T,now){var panel=document.getElementById("jobspanel"),el=
     '<div class="track"><div class="fill" style="width:'+pct.toFixed(1)+'%"></div>'+walk+'<span class="vehicle" style="left:'+pct.toFixed(1)+'%">'+E(ico)+'</span></div>'+
     '<div class="tracklabels"><span>Up '+clockAt(T.wake_at)+'</span><span>'+T.board_label+' '+clockAt(T.board_at)+'</span></div>'+(where?'<div class="trainwhere">'+where+'</div>':'');
   panel.classList.add("departure");return true}
+var USMAP=null,USPATH="",MAPTRIP=null;
+function mapPoint(p){return [45+(p.lon+125)/59*880,35+(50-p.lat)/26*435]}
+function mapRing(r){return r.map(function(p,i){var q=mapPoint({lon:p[0],lat:p[1]});return (i?"L":"M")+q[0].toFixed(1)+" "+q[1].toFixed(1)}).join("")+"Z"}
+function mapGeom(g){if(!g)return "";if(g.type==="Polygon")return g.coordinates.map(mapRing).join("");return (g.coordinates||[]).map(function(p){return p.map(mapRing).join("")}).join("")}
+function mapLine(a){return (a||[]).map(function(p,i){var q=mapPoint(p);return (i?"L":"M")+q[0].toFixed(1)+" "+q[1].toFixed(1)}).join("")}
+function mapText(s){return String(s||"").replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
+function buildUS(){if(!USMAP||USPATH)return;USPATH=(USMAP.features||[]).map(function(f){return '<path d="'+mapGeom(f.geometry)+'" fill="#16254a" stroke="#63749a" stroke-width="1" vector-effect="non-scaling-stroke"/>'}).join("")}
+function drawTrainMap(T){if(!T||!T.map_route||!USMAP)return;buildUS();var r=T.map_route,tr=mapPoint(r.train),hm=mapPoint(r.home);
+  document.getElementById("maptitle").textContent=T.title||"Train day";document.getElementById("mapwhere").textContent=departureStation(T,Date.now()/1000);
+  document.getElementById("mapsvg").innerHTML=USPATH+
+    '<path d="'+mapLine(r.remaining)+'" fill="none" stroke="#aeb5c4" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>'+
+    '<path d="'+mapLine(r.traveled)+'" fill="none" stroke="#38a8ff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>'+
+    '<circle cx="'+hm[0]+'" cy="'+hm[1]+'" r="16" fill="#ffe082" stroke="#0a1230" stroke-width="4"/><text x="'+hm[0]+'" y="'+(hm[1]+9)+'" text-anchor="middle" font-size="28">🏠</text><text x="'+hm[0]+'" y="'+(hm[1]+38)+'" text-anchor="middle" fill="#fff" font-size="22" font-weight="900">'+mapText(r.home.label)+'</text>'+
+    '<circle cx="'+tr[0]+'" cy="'+tr[1]+'" r="19" fill="#fff" stroke="#38a8ff" stroke-width="5"/><text x="'+tr[0]+'" y="'+(tr[1]+10)+'" text-anchor="middle" font-size="32">🚂</text>'}
+function tickTrainMap(){var T=MAPTRIP,now=Date.now()/1000,active=!!(T&&T.mode==="train"&&T.map_route&&T.leave_home_at&&now<T.board_at),face=active&&Math.floor(now/60)%2===1;
+  document.body.classList.toggle("mapface",face);if(!active)return;var left=Math.max(0,Math.round(T.leave_home_at-now)),h=Math.floor(left/3600),m=Math.floor(left%3600/60),s=left%60;
+  document.getElementById("countdown").textContent=left?h+":"+("0"+m).slice(-2)+":"+("0"+s).slice(-2):"LEAVE NOW";document.getElementById("leavetime").textContent="Walk out at "+clockAt(T.leave_home_at);if(face)drawTrainMap(T)}
+fetch("/us-map.json").then(function(r){return r.json()}).then(function(x){USMAP=x;tickTrainMap()}).catch(function(){USMAP=null});setInterval(tickTrainMap,1000);
 var NEWSI=0,NEWS=[],SNOW=0;
 function drawNews(){var el=document.getElementById("newslist");if(!NEWS.length){el.innerHTML='<div class="none">Do a job to make the news!</div>';return}
   var n=Math.min(3,NEWS.length),h="";for(var i=0;i<n;i++){var x=NEWS[(NEWSI+i)%NEWS.length];
@@ -193,7 +218,7 @@ function load(){fetch("/api/state").then(function(r){return r.json()}).then(func
        b>=gc?'<div class="next buy">'+E("2705")+' Enough for '+E(G.icon)+'! Buy it on the Hub</div>':'<div class="next go">'+E("1f9f9")+' '+(gc-b)+' more '+E("2b50")+' to '+E(G.icon)+(p?' &middot; '+E("1f50d")+' +'+p+' waiting':'')+'</div>'))+
       (ac?'<div class="doing">'+E("23f1")+' Doing: '+E(ac.icon)+' '+ac.name+'</div>':'')+'</div>'});
   document.getElementById("kids").innerHTML=h;
-  var CMx=S.chore_mode||{},hasTrip=drawDeparture(S.departure_display,Date.now()/1000),J=openJobs(S,hasTrip?3:6);
+  MAPTRIP=S.departure_display;tickTrainMap();var CMx=S.chore_mode||{},hasTrip=drawDeparture(S.departure_display,Date.now()/1000),J=openJobs(S,hasTrip?3:6);
   document.getElementById("jobshd").innerHTML=CMx.chill?E("1f60c")+" Great work! Chill time":E("2b50")+" Jobs open now";
   document.getElementById("jobs").innerHTML=J.length?J.map(function(x){var c=x.c,b=x.b,hot=b.bonus&&x.p>b.base,t=[];
       if(hot)t.push(E("1f525")+" extra untidy +"+(x.p-b.base));

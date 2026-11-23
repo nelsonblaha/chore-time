@@ -97,6 +97,28 @@ def departure_display(now=None):
             if wake <= leave_home < pull_in <= board and abs((pull_in - leave_home) - 2700) <= 60:
                 out["pull_in_at"] = pull_in
                 out["leave_home_at"] = leave_home
+        route = value.get("map_route")
+        if mode == "train" and "leave_home_at" in out and isinstance(route, dict):
+            def map_point(point):
+                if not isinstance(point, dict):
+                    return None
+                try:
+                    lat, lon = float(point.get("lat")), float(point.get("lon"))
+                except (TypeError, ValueError):
+                    return None
+                return {"lat": lat, "lon": lon} if 15 <= lat <= 60 and -130 <= lon <= -60 else None
+
+            def map_line(points):
+                if not isinstance(points, list) or not 2 <= len(points) <= 300:
+                    return None
+                clean = [map_point(point) for point in points]
+                return clean if all(clean) else None
+
+            traveled, remaining = map_line(route.get("traveled")), map_line(route.get("remaining"))
+            train, home = map_point(route.get("train")), map_point(route.get("home"))
+            if traveled and remaining and train and home:
+                out["map_route"] = {"traveled": traveled, "remaining": remaining, "train": train,
+                                    "home": dict(home, label=str((route.get("home") or {}).get("label") or "Home")[:40])}
         near = value.get("nearest")
         if mode == "train" and isinstance(near, dict) and str(near.get("name") or "").strip():
             arr = float(near.get("arrival_at"))
@@ -4110,6 +4132,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, (HERE / "static/kids.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/tv":
             return self.send(200, (HERE / "static/tvlock.html").read_bytes(), "text/html; charset=utf-8")
+        if p == "/us-map.json":
+            return self.send(200, (HERE / "static/us48.json").read_bytes(), "application/json")
         if p == "/music-block":   # silent Cast/Nest explanation when required chores pause Spotify
             return self.send(200, (HERE / "static/music-block.html").read_bytes(), "text/html; charset=utf-8")
         if p == "/now":   # grown-up "right now" board (e.g. a kitchen Hub Max)

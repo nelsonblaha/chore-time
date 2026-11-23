@@ -1,0 +1,7 @@
+Source: United States Census Bureau TIGERweb, State_County MapServer layer 0 (States)
+Retrieved: 2026-11-23
+Endpoint: https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query
+Selection: the contiguous states and District of Columbia; Alaska, Hawaii, territories, and possessions excluded
+Projection: EPSG:4326
+Simplification: maxAllowableOffset=0.05, geometryPrecision=3
+Stored fields: two-letter state abbreviation and boundary geometry only

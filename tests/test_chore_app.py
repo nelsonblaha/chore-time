@@ -258,6 +258,12 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('class="leave"', tv)
         self.assertIn('E("1f6b6")', tv)
         self.assertIn("T.board_label+' '+clockAt(T.board_at)", tv)
+        self.assertIn('id="trainmap"', tv)
+        self.assertIn('Math.floor(now/60)%2===1', tv)
+        self.assertIn('stroke="#38a8ff"', tv)
+        self.assertIn('stroke="#aeb5c4"', tv)
+        self.assertIn('h+":"+("0"+m).slice(-2)+":"+("0"+s).slice(-2)', tv)
+        self.assertTrue((REPO / "static" / "us48.json").is_file())
 
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
@@ -463,6 +469,10 @@ class DepartureDisplayTests(unittest.TestCase):
         value = {"schema": 1, "active": True, "updated_at": 9990, "trip_id": "trip-1", "mode": "train",
                  "title": "Train to River City", "wake_at": 9000, "board_at": 12000,
                  "pull_in_at": 11700, "leave_home_at": 9000,
+                 "map_route": {"traveled": [{"lat": 34, "lon": -118}, {"lat": 33, "lon": -112}],
+                               "remaining": [{"lat": 33, "lon": -112}, {"lat": 31, "lon": -106}],
+                               "train": {"lat": 33, "lon": -112},
+                               "home": {"lat": 31.75, "lon": -106.5, "label": "Home station"}},
                  "board_label": "Board downtown", "nearest": {"name": "West Station",
                  "arrival_at": 10600, "departure_at": 10660}}
         value.update(changes)
@@ -476,12 +486,20 @@ class DepartureDisplayTests(unittest.TestCase):
                                           "departure_at": 10660.0, "at_now": False})
         self.assertEqual(out["pull_in_at"], 11700.0)
         self.assertEqual(out["leave_home_at"], 9000.0)
+        self.assertEqual(out["map_route"]["home"], {"lat": 31.75, "lon": -106.5,
+                                                      "label": "Home station"})
 
     def test_walking_milestone_must_be_45_minutes_before_pull_in_not_departure(self):
         self.write(pull_in_at=11500, leave_home_at=9000)
         out = self.app.s.departure_display(now=10000)
         self.assertNotIn("pull_in_at", out)
         self.assertNotIn("leave_home_at", out)
+
+    def test_bad_optional_map_does_not_hide_the_departure_timeline(self):
+        self.write(map_route={"traveled": [{"lat": 34, "lon": -118}]})
+        out = self.app.s.departure_display(now=10000)
+        self.assertIsNotNone(out)
+        self.assertNotIn("map_route", out)
 
     def test_stale_inactive_or_invalid_snapshot_fails_closed(self):
         self.write(updated_at=7000)
