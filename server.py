@@ -4169,17 +4169,41 @@ class H(BaseHTTPRequestHandler):
                         raw_["phase"] = "layout"
                     raw_["seq"] = max(int(old_.get("seq") or 0) + 1, int(time.time() * 1000))
                 elif stage_ is not None:
-                    if not adult_child_ or stage_ not in ("layout", "inspect", "pack"):
+                    if not adult_child_ or stage_ not in ("layout", "inspect", "pack", "complete_stage"):
                         return self.send(403, {"error": "Only a signed-in grown-up can change inspection stages."})
                     item_ids_ = packing_item_ids(profile_, packer_)
-                    if stage_ == "inspect" and not all((old_.get("ready") or {}).get(x) is True
-                                                       for x in item_ids_):
-                        return self.send(409, {"error": "Every item must be laid out before inspection."})
-                    if stage_ == "pack" and not all((old_.get("checked") or {}).get(x) == "pass"
-                                                    for x in item_ids_):
-                        return self.send(409, {"error": "Inspect every item before packing begins."})
                     raw_ = json.loads(json.dumps(old_))
-                    raw_["phase"] = stage_
+                    if stage_ == "complete_stage":
+                        phase_ = str(old_.get("phase") or "layout")
+                        if phase_ == "layout":
+                            raw_.setdefault("ready", {}).update({x: True for x in item_ids_})
+                            raw_["phase"] = "inspect"
+                        elif phase_ == "inspect":
+                            if not all((old_.get("ready") or {}).get(x) is True for x in item_ids_):
+                                return self.send(409, {"error": "Complete the gathering stage first."})
+                            raw_.setdefault("checked", {}).update({x: "pass" for x in item_ids_})
+                            raw_["phase"] = "pack"
+                        elif phase_ == "pack":
+                            if not all((old_.get("checked") or {}).get(x) == "pass" for x in item_ids_):
+                                return self.send(409, {"error": "Complete the inspection stage first."})
+                            raw_.setdefault("packed", {}).update({x: True for x in item_ids_})
+                            raw_["phase"] = "final"
+                        elif phase_ == "final":
+                            if not all((old_.get("packed") or {}).get(x) is True for x in item_ids_):
+                                return self.send(409, {"error": "Complete the bagging stage first."})
+                            final_ids_ = {x["id"] for x in (profile_.get("final_checks") or []) if x.get("id")}
+                            raw_.setdefault("finals", {}).update({x: "pass" for x in final_ids_})
+                            raw_["phase"] = "complete"
+                        else:
+                            return self.send(409, {"error": "This packing list is already complete."})
+                    else:
+                        if stage_ == "inspect" and not all((old_.get("ready") or {}).get(x) is True
+                                                           for x in item_ids_):
+                            return self.send(409, {"error": "Every item must be laid out before inspection."})
+                        if stage_ == "pack" and not all((old_.get("checked") or {}).get(x) == "pass"
+                                                        for x in item_ids_):
+                            return self.send(409, {"error": "Inspect every item before packing begins."})
+                        raw_["phase"] = stage_
                     raw_["seq"] = max(int(old_.get("seq") or 0) + 1, int(time.time() * 1000))
                 clean_ = sanitize_packing_progress(game_, packer_, raw_)
                 if not clean_:

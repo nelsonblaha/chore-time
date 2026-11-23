@@ -420,6 +420,9 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn('api("/api/packing_admin"', packing)
         self.assertIn('data-present="', packing)
         self.assertIn('data-missing="', packing)
+        self.assertIn('data-complete-stage="1"', packing)
+        self.assertIn('stageProgress(id,"complete_stage")', packing)
+        self.assertIn("one tap completes only this stage", packing)
 
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -646,6 +649,29 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(code, 200, handed_back)
         self.assertEqual(handed_back["state"]["packing_game"]["progress"]["ava"]["checked"]["hair"], "fix")
         self.assertEqual(handed_back["state"]["packing_game"]["progress"]["ava"]["phase"], "layout")
+
+    def test_authenticated_parent_can_complete_exactly_one_packing_stage_per_tap(self):
+        a = self.app
+        body = {"packer": "ava", "by": "jordan", "stage": "complete_stage"}
+        self.assertEqual(a.post("/api/packing_update", body)[0], 403)
+
+        phases = ("inspect", "pack", "final", "complete")
+        balances = (1, 3, 5, 10)
+        for phase, balance in zip(phases, balances):
+            code, result = a.post("/api/packing_update", body, self.adult_headers)
+            self.assertEqual(code, 200, result)
+            progress = result["state"]["packing_game"]["progress"]["ava"]
+            self.assertEqual(progress["phase"], phase)
+            self.assertEqual(result["state"]["balance"]["ava"], balance)
+
+        self.assertTrue(progress["complete"])
+        self.assertEqual(set(progress["ready"]), {"shirt", "hair"})
+        self.assertEqual(set(progress["checked"]), {"shirt", "hair"})
+        self.assertEqual(set(progress["packed"]), {"shirt", "hair"})
+        self.assertEqual(progress["finals"], {"zip": "pass"})
+        code, already = a.post("/api/packing_update", body, self.adult_headers)
+        self.assertEqual(code, 409, already)
+        self.assertIn("already complete", already["error"])
 
     def test_private_packing_editor_preserves_version_and_saved_progress(self):
         a = self.app
