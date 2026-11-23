@@ -751,6 +751,8 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIn('class="subgroup"', html)
         self.assertIn("groupDefs[x.group]", html)
         self.assertIn("rows[id]=JSON.parse(JSON.stringify(r));render();return api", html)
+        self.assertIn("Number(a.seq||0)>Number(b&&b.seq||0)", html)
+        self.assertIn("S=adoptState(r.state)", html)
 
     def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
         a = self.app
