@@ -555,16 +555,28 @@ def packing_up_next(game, packer, limit=6):
     if progress.get("complete") or packing_complete(game, packer, progress):
         return None
     packed = progress.get("packed") or {}
+    locations = progress.get("locations") or {}
+    area_defs = [x for x in (profile.get("areas") or []) if isinstance(x, dict) and x.get("id")]
+    default_area = profile.get("default_area") or (area_defs[0].get("id") if area_defs else None)
     items = []
     for pile in profile.get("piles") or []:
+        groups = {x.get("id"): x for x in (pile.get("groups") or []) if isinstance(x, dict) and x.get("id")}
         for item in pile.get("items") or []:
             if (not item.get("id") or (item.get("only") and packer not in item["only"])
                     or packed.get(item["id"]) is True):
                 continue
+            group = groups.get(item.get("group")) or {}
+            area = locations.get(item["id"]) or item.get("area") or pile.get("area") or default_area
             items.append({"id": item["id"], "name": str(item.get("name") or "Packing item")[:120],
                           "icon": str(item.get("icon") or pile.get("icon") or "1f4e6")[:40],
-                          "pile_id": pile.get("id"), "pile": str(pile.get("title") or "Packing")[:80],
+                          "pile_id": pile.get("id"),
+                          "pile": str(group.get("title") or pile.get("title") or "Packing")[:80],
+                          "container": str(pile.get("title") or "Packing")[:80] if group else None,
+                          "area": area,
                           "kind": "item"})
+    active_area = next((x for x in area_defs if any(i.get("area") == x["id"] for i in items)), None)
+    if active_area:
+        items = [x for x in items if x.get("area") == active_area["id"]]
     if not items:
         finals = progress.get("finals") or {}
         for check in profile.get("final_checks") or []:
@@ -574,7 +586,10 @@ def packing_up_next(game, packer, limit=6):
                               "pile_id": "final", "pile": "Final checks", "kind": "check"})
     return {"active": True, "packer": packer, "profile": profile.get("id"),
             "title": str(profile.get("name") or game.get("title") or "Packing")[:120],
-            "phase": str(progress.get("phase") or "layout"), "items": items[:max(1, min(int(limit), 12))]}
+            "phase": str(progress.get("phase") or "layout"),
+            "area": active_area.get("id") if active_area else None,
+            "area_name": active_area.get("name") if active_area else None,
+            "items": items[:max(1, min(int(limit), 12))]}
 
 
 def packing_final_check_available(check, state, now=None):

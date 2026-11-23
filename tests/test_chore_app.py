@@ -260,9 +260,14 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('E("1f6b6")', tv)
         self.assertIn("T.board_label+' '+clockAt(T.board_at)", tv)
         self.assertIn('id="trainmap"', tv)
-        self.assertIn('Math.floor(now/60)%2===1', tv)
+        self.assertIn('["chores","train","packing"][minute%3]', tv)
         self.assertIn('fixed==="train"', tv)
-        self.assertIn('fixed==="chores"', tv)
+        self.assertIn('fixed==="packing"', tv)
+        self.assertIn('fixed!=="chores"', tv)
+        self.assertIn('id="packingface"', tv)
+        self.assertIn('PACKING_ACTIVE=drawPacking(S)', tv)
+        self.assertIn('function packingPercent(p,id,r)', tv)
+        self.assertIn('function packingNext(p,id,r)', tv)
         self.assertIn('queryValue("embed")==="1"', tv)
         self.assertIn('stroke="#38a8ff"', tv)
         self.assertIn('stroke="#aeb5c4"', tv)
@@ -554,8 +559,10 @@ class PackingRewardGateTests(unittest.TestCase):
                           "areas": [{"id": "upstairs", "name": "Upstairs"},
                                     {"id": "downstairs", "name": "Downstairs"}],
                           "default_area": "upstairs",
-                          "piles": [{"id": "grownup_bag", "items": [
-                              {"id": "charger", "name": "Charger", "area": "upstairs"}]}],
+                          "piles": [{"id": "grownup_bag", "title": "Backpack",
+                                     "groups": [{"id": "cables", "title": "Cable pouch"}], "items": [
+                              {"id": "charger", "name": "Charger", "area": "upstairs",
+                               "group": "cables"}]}],
                           "final_checks": [{"id": "adult_zip", "name": "Bag zipped"}]}]}
 
     @staticmethod
@@ -741,6 +748,9 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIn("Actually downstairs", html)
         self.assertIn("data-move-area", html)
         self.assertIn("q.locations[n.dataset.item]=n.dataset.moveArea", html)
+        self.assertIn('class="subgroup"', html)
+        self.assertIn("groupDefs[x.group]", html)
+        self.assertIn("rows[id]=JSON.parse(JSON.stringify(r));render();return api", html)
 
     def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
         a = self.app
@@ -749,7 +759,9 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertTrue(upcoming["active"])
         self.assertEqual(upcoming["packer"], "jordan")
         self.assertEqual([x["name"] for x in upcoming["items"]], ["Charger"])
-        self.assertEqual(upcoming["items"][0]["pile"], "Packing")
+        self.assertEqual(upcoming["items"][0]["pile"], "Cable pouch")
+        self.assertEqual(upcoming["items"][0]["container"], "Backpack")
+        self.assertEqual(upcoming["area"], "upstairs")
 
         row = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan", "phase": "final",
                "seq": 2, "ready": {"charger": True}, "checked": {"charger": "pass"},
@@ -767,6 +779,28 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIsNone(a.state()["packing_up_next"])
         a.s.HOUSE["packing_game"]["activated"] = False
         self.assertIsNone(a.state()["packing_up_next"])
+
+    def test_packing_up_next_finishes_upstairs_before_showing_deferred_downstairs_items(self):
+        a = self.app
+        a.s.LEAD_ADULT = "jordan"
+        profile = next(x for x in a.s.HOUSE["packing_game"]["profiles"] if x["id"] == "adult")
+        profile["piles"][0]["items"].append({"id": "coat", "name": "Coat", "area": "upstairs"})
+        row = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan", "phase": "pack",
+               "seq": 2, "ready": {}, "checked": {}, "packed": {}, "finals": {},
+               "locations": {"charger": "downstairs"}}
+        (a.dir / "packing_progress.json").write_text(json.dumps({
+            "version": "trip-test-v1", "kids": {"jordan": row}
+        }))
+        upstairs = a.state()["packing_up_next"]
+        self.assertEqual((upstairs["area"], [x["id"] for x in upstairs["items"]]),
+                         ("upstairs", ["coat"]))
+        row.update(seq=3, ready={"coat": True}, checked={"coat": "pass"}, packed={"coat": True})
+        (a.dir / "packing_progress.json").write_text(json.dumps({
+            "version": "trip-test-v1", "kids": {"jordan": row}
+        }))
+        downstairs = a.state()["packing_up_next"]
+        self.assertEqual((downstairs["area"], [x["id"] for x in downstairs["items"]]),
+                         ("downstairs", ["charger"]))
 
     def test_packing_up_next_is_not_added_to_public_demo_state(self):
         projected = {"active": True, "items": [{"name": "Private thing"}]}
