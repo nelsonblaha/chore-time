@@ -2960,8 +2960,18 @@ def derive():
             od, dd = ch["weekly"].get("open_dow", 0), ch["weekly"].get("due_dow", 4)
             if (last_ok >= wk.timestamp() and not reopened) or not (od <= now_.weekday() <= dd):
                 clean_until = nxt
-        pend_by = list(dict.fromkeys(m for r in reports.values() if cid in covers(r) and r["status"] == "pending" and not r.get("partial")
-                                     for m in (r.get("team") or [r["kid"]])))
+        pending_reports = [r for r in reports.values()
+                           if cid in covers(r) and r["status"] == "pending" and not r.get("partial")]
+        pend_by = list(dict.fromkeys(m for r in pending_reports for m in (r.get("team") or [r["kid"]])))
+        # A pre-fix client could start this same job again while its earlier report was still waiting,
+        # then Stop. That left the kid with neither an active job nor a usable tile: the old report won
+        # and the tile only said it had already been turned in. Mark only that provable stale-report
+        # shape as resumable; an ordinary pending inspection must remain waiting.
+        resume_pending_by = list(dict.fromkeys(
+            m for r in pending_reports for m in (r.get("team") or [r["kid"]])
+            if any(e["type"] == "start" and e.get("kid") == m and e.get("chore") == cid
+                   and e["ts"] > r["ts"] for e in evs)
+            and (active.get(m) or {}).get("chore") != cid))
         clean_by = (max(oks, key=lambda r: r["inspected_ts"])["kid"] if oks else None) if last_ok != marked or not marked else None
         note_, note_by = None, None
         for e in evs:
@@ -2972,7 +2982,8 @@ def derive():
                       "part_paid": part_paid, "rest_note": rest_note, "is_rest": is_rest, "note": note_, "note_by": note_by,
                       "tour_seen": max([e["ts"] for e in evs if e["type"] in ("tour_seen", "price", "note", "reopen", "mark_clean") and e.get("chore") == cid] or [0]),
                       "clean_until": clean_until if clean_until > time.time() else 0,
-                      "last_clean": last_ok, "pending_by": pend_by, "opened": reopened}
+                      "last_clean": last_ok, "pending_by": pend_by,
+                      "resume_pending_by": resume_pending_by, "opened": reopened}
     # once per day per kid (e.g. brush teeth): who has already done it today (pending or passed)
     from datetime import datetime as _dt
     midnight = _dt.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -6091,6 +6102,19 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/start" and any(project_.get("active_session") and
                     b["kid"] in (project_["active_session"].get("team") or []) for project_ in st.get("projects") or []):
                 return self.send(409, {"error": "End your ongoing project session before starting another chore."})
+            if p == "/api/start":
+                pending_ = [r for r in st.get("history") or [] if r.get("type") == "report"
+                            and r.get("status") == "pending" and not r.get("partial")
+                            and r.get("chore") == b["chore"]
+                            and b["kid"] in (r.get("team") or [r.get("kid")])]
+                if pending_ and not chores[b["chore"]].get("multi_pending"):
+                    resumable_ = b["kid"] in (st["board"].get(b["chore"]) or {}).get("resume_pending_by", [])
+                    if not resumable_:
+                        return self.send(409, {"error": "already waiting for inspection"})
+                    for report_ in pending_:
+                        append({"type": "withdraw", "ref": report_["id"], "by": "kid:" + b["kid"],
+                                "why": "resumed work after stopping"})
+                    st = derive()
             if p == "/api/start" and (st["active"].get(b["kid"]) or {}).get("chore") == b["chore"]:
                 return self.send(200, {"ok": True, "already": True, "state": st})   # a second tap keeps the clock running
             if p == "/api/start" and chores[b["chore"]].get("each_daily") and \

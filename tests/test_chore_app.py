@@ -1105,6 +1105,34 @@ class HubChildSessions(Case):
 
 # ---------------------------------------------------------------- who may do what
 class SharedVsExclusive(Case):
+    def test_stopped_work_after_a_turn_in_withdraws_the_stale_report_and_resumes(self):
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})[0], 200)
+        code, turned_in = self.app.post("/api/report", {"kid": "max", "chore": "kitchen", "feeling": "fun"})
+        self.assertEqual(code, 200, turned_in)
+        report_id = turned_in["event"]["id"]
+
+        # Reproduce the legacy state: an older client was allowed to work again while that report
+        # still waited, then Stop discarded the active session and exposed the waiting tile again.
+        self.s.append({"type": "start", "kid": "max", "chore": "kitchen"})
+        self.s.append({"type": "stop", "kid": "max", "chore": None})
+        stale = self.app.state()
+        self.assertIn("max", stale["board"]["kitchen"]["pending_by"])
+        self.assertIn("max", stale["board"]["kitchen"]["resume_pending_by"])
+
+        code, resumed = self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})
+        self.assertEqual(code, 200, resumed)
+        self.assertEqual(resumed["state"]["active"]["max"]["chore"], "kitchen")
+        self.assertNotIn("max", resumed["state"]["board"]["kitchen"]["pending_by"])
+        self.assertNotIn(report_id, {r["id"] for r in resumed["state"]["history"]})
+        self.assertTrue(any(e["type"] == "withdraw" and e.get("ref") == report_id
+                            for e in self.s.read_events()))
+
+    def test_an_ordinary_pending_turn_in_cannot_be_restarted(self):
+        self.assertEqual(self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})[0], 200)
+        self.assertEqual(self.app.post("/api/report", {"kid": "max", "chore": "kitchen"})[0], 200)
+        code, waiting = self.app.post("/api/start", {"kid": "max", "chore": "kitchen"})
+        self.assertEqual((code, waiting.get("error")), (409, "already waiting for inspection"))
+
     def test_paused_organizing_does_not_block_another_kid(self):
         # Jordan: "Ava organizing ... aren't exclusive and don't need releasing for someone else"
         self.assertEqual(self.app.post("/api/start", {"kid": "ava", "chore": "organize"})[0], 200)
