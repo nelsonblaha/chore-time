@@ -46,6 +46,7 @@ function fresh(p,id){return{version:S.packing_game.version,profile:p.id,packer:i
 function saveProgress(id,r){r.seq=Math.max(+r.seq+1||1,Date.now());return api("/api/packing_update",{packer:id,by:me,progress:r}).then(done)}
 function markProgress(id,item,value){return api("/api/packing_update",{packer:id,by:me,mark:{item:item,value:value}}).then(done)}
 function stageProgress(id,stage){return api("/api/packing_update",{packer:id,by:me,stage:stage}).then(done)}
+function finalWindow(x){var within=+x.within_leave_s||0;if(!within)return{ok:true,text:x.note||"Final grown-up check"};var leave=S.departure_display&&+S.departure_display.leave_home_at;if(!leave)return{ok:false,text:"Waiting for Travel's live leave-home time. "+(x.note||"")};var at=leave-within,ok=Date.now()/1000>=at,label=new Date(at*1000).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});return{ok:ok,text:(ok?"Available now":"Available at "+label)+" · "+(x.note||"")}}
 function done(r){if(!r||!r.ok){toast((r&&r.error)||"Packing change failed",true);return}if(r.state)S=r.state;toast("Saved");render()}
 function toast(t,bad){var n=$("toast");n.textContent=t;n.className=bad?"error":"";n.style.display="block";setTimeout(function(){n.style.display="none"},2500)}
 function edit(body){body.by=me;return api("/api/packing_admin",body).then(done)}
@@ -77,10 +78,10 @@ function renderPerson(id){var c=S.packing_game,p=profile(id),r=(c.progress||{})[
       }).join("")+'</div></section>'
   });
   if(p.final_checks&&p.final_checks.length){h+='<section class="category finals"><h2>Final checks</h2><div class="items">'+p.final_checks.map(function(x){
-    var pass=r&&(r.finals||{})[x.id]==="pass",open=OPEN_ITEM==="final:"+x.id,controls='';
+    var pass=r&&(r.finals||{})[x.id]==="pass",open=OPEN_ITEM==="final:"+x.id,controls='',gate=finalWindow(x);
     if(canInspect&&r&&r.phase==="final")controls='<button class="primary" data-final-present="'+esc(x.id)+'">✓ Pass</button><button class="danger" data-final-missing="'+esc(x.id)+'">Needs a fix</button>';
-    if(canPack)controls='<button class="primary" data-final="'+esc(x.id)+'">'+(pass?'Undo final check':'Mark checked')+'</button>';
-    return'<div class="item '+(pass?'done packed':'')+'"><button class="itemsummary" data-openitem="final:'+esc(x.id)+'"><span>'+esc(x.name)+'</span><span class="chev">'+(open?'⌃':'›')+'</span></button>'+(open?'<div class="itemdetail"><div class="state">'+esc(x.note||"Final grown-up check")+'</div>'+(controls?'<div class="actions">'+controls+'</div>':'')+'</div>':'')+'</div>'
+    if(canPack)controls='<button class="primary" data-final="'+esc(x.id)+'" '+(!pass&&!gate.ok?'disabled':'')+'>'+(pass?'Undo final check':'Mark checked')+'</button>';
+    return'<div class="item '+(pass?'done packed':'')+'"><button class="itemsummary" data-openitem="final:'+esc(x.id)+'"><span>'+esc(x.name)+'</span><span class="chev">'+(open?'⌃':'›')+'</span></button>'+(open?'<div class="itemdetail"><div class="state">'+esc(gate.text)+'</div>'+(controls?'<div class="actions">'+controls+'</div>':'')+'</div>':'')+'</div>'
   }).join("")+'</div></section>'}
   if(adult)h+='<div class="notice">This grown-up checklist never creates a star balance or awards kid points.</div>';$("main").innerHTML=h;wire(id,p,r)}
 function wire(id,p,r){if($("addcat"))$("addcat").onclick=function(){var title=prompt("Category name");if(title)edit({action:"add_category",profile:p.id,title:title})};

@@ -448,6 +448,8 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn('data-complete-stage="1"', packing)
         self.assertIn('stageProgress(id,"complete_stage")', packing)
         self.assertIn("one tap completes only this stage", packing)
+        self.assertIn("function finalWindow(x)", packing)
+        self.assertIn("Waiting for Travel's live leave-home time", packing)
 
     def test_all_saved_jobs_are_rendered_without_an_expiry_button(self):
         kids = (REPO / "static" / "kids.html").read_text()
@@ -691,6 +693,48 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertTrue(done["state"]["packing_game"]["progress"]["jordan"]["complete"])
         self.assertNotIn("jordan", done["state"]["balance"])
         self.assertFalse([e for e in a.s.read_events() if e.get("kid") == "jordan"])
+
+    def test_departure_house_checks_are_injected_and_cannot_be_marked_before_their_window(self):
+        a = self.app
+        a.s.LEAD_ADULT = "jordan"
+        a.s.HOUSE["packing_game"]["departure_house_checks"] = True
+        snapshot = a.dir / "departure.json"
+        a.s.HOUSE["departure_display_file"] = str(snapshot)
+        now = time.time()
+
+        def departure(leave):
+            snapshot.write_text(json.dumps({
+                "schema": 1, "active": True, "updated_at": now, "trip_id": "trip-test",
+                "mode": "train", "title": "Train day", "wake_at": now - 3600,
+                "leave_home_at": leave, "pull_in_at": leave + 2700,
+                "board_at": leave + 3600, "board_label": "Train leaves",
+            }))
+
+        departure(now + 7200)
+        adult = next(p for p in a.state()["packing_game"]["profiles"] if p["id"] == "adult")
+        final_ids = {x["id"] for x in adult["final_checks"]}
+        self.assertTrue({"adult_zip", "house_smelly_trash", "house_toilets_flushed"} <= final_ids)
+        packed = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan",
+                  "phase": "pack", "seq": 1, "ready": {"charger": True},
+                  "checked": {"charger": "pass"}, "packed": {"charger": True},
+                  "finals": {"adult_zip": "pass", "house_smelly_trash": "pass"}}
+        code, saved = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                     "progress": packed}, self.adult_headers)
+        self.assertEqual(code, 200, saved)
+        too_early = json.loads(json.dumps(packed))
+        too_early.update(seq=2)
+        too_early["finals"]["house_toilets_flushed"] = "pass"
+        code, blocked = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                       "progress": too_early}, self.adult_headers)
+        self.assertEqual(code, 409, blocked)
+        self.assertIn("closer to the actual leave-home time", blocked["error"])
+
+        departure(now + 1800)
+        too_early.update(seq=3, phase="complete")
+        code, done = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                    "progress": too_early}, self.adult_headers)
+        self.assertEqual(code, 200, done)
+        self.assertTrue(done["state"]["packing_game"]["progress"]["jordan"]["complete"])
 
     def test_legacy_physical_progress_uses_its_last_update_as_the_interaction_clock(self):
         row = self.stage(["shirt", "hair"], "inspect", 10)

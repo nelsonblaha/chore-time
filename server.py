@@ -485,8 +485,40 @@ def packing_edit_config(game, body):
 
 def packing_public(game):
     public = json.loads(json.dumps(game))
-    public["progress"] = packing_progress(game)
+    if public.get("departure_house_checks"):
+        lead = globals().get("LEAD_ADULT")
+        profile = packing_profile(public, lead) if lead else None
+        if profile:
+            checks = profile.setdefault("final_checks", [])
+            existing = {x.get("id") for x in checks}
+            for check in (
+                {"id": "house_smelly_trash", "name": "All smelly trash is out",
+                 "icon": "1f5d1", "within_leave_s": 86400,
+                 "note": "Do this within the final 24 hours before actually leaving home."},
+                {"id": "house_toilets_flushed", "name": "Every toilet is checked and flushed",
+                 "icon": "1f6bd", "within_leave_s": 3600,
+                 "note": "Do this within the final hour before leaving home, before any toilet water is shut off."},
+            ):
+                if check["id"] not in existing:
+                    checks.append(check)
+    public["progress"] = packing_progress(public)
     return public
+
+
+def packing_final_check_available(check, state, now=None):
+    """Whether a time-sensitive house check is inside its window before leaving home."""
+    try:
+        within = int(check.get("within_leave_s") or 0)
+    except (TypeError, ValueError):
+        within = 0
+    if within <= 0:
+        return True, None
+    leave = ((state.get("departure_display") or {}).get("leave_home_at")
+             if isinstance(state, dict) else None)
+    if not isinstance(leave, (int, float)):
+        return False, None
+    not_before = float(leave) - min(within, 7 * 86400)
+    return (time.time() if now is None else float(now)) >= not_before, not_before
 
 
 def packing_reward_gate(state, participants):
@@ -4429,6 +4461,15 @@ class H(BaseHTTPRequestHandler):
                     return self.send(400, {"error": "That packing update did not make sense."})
                 if clean_["phase"] == "complete" and not packing_complete(game_, packer_, clean_):
                     return self.send(409, {"error": "Every packed item and final check must pass first."})
+                final_defs_ = {x.get("id"): x for x in (profile_.get("final_checks") or []) if x.get("id")}
+                for final_id_, final_value_ in (clean_.get("finals") or {}).items():
+                    if final_value_ == "pass" and (old_.get("finals") or {}).get(final_id_) != "pass":
+                        available_, not_before_ = packing_final_check_available(final_defs_.get(final_id_, {}), st)
+                        if not available_:
+                            if not_before_ is None:
+                                return self.send(409, {"error": "Wait for Travel's live leave-home time before doing that house check."})
+                            return self.send(409, {"error": "That house check must be done closer to the actual leave-home time.",
+                                                   "available_at": not_before_})
                 child_error_ = child_packing_update_error(game_, packer_, old_, clean_) \
                     if is_child_ and not adult_child_ else None
                 if child_error_:
