@@ -5099,7 +5099,8 @@ class H(BaseHTTPRequestHandler):
             if gate_.get("on") and chore_ != gate_.get("chore") and not (chores.get(chore_) or {}).get("bedtime_ok"):
                 return self.send(409, {"error": "%s first! Other chores come back at %s." % (gate_.get("name") or "Priority chore", gate_.get("until") or "the evening routine")})
             cleanup_gate_ = (st.get("chores_first") or {}).get(kid_) or {}
-            if cleanup_gate_.get("on") and cleanup_gate_.get("chore") and chore_ != cleanup_gate_["chore"] \
+            cleanup_chore_ = cleanup_gate_.get("chore") or ("cleanup_" + str(kid_))
+            if cleanup_gate_.get("on") and chore_ != cleanup_chore_ \
                     and not (chores.get(chore_) or {}).get("bedtime_ok"):
                 return self.send(409, {"error": "%s first! Other chores come back when it passes inspection." %
                                                 (cleanup_gate_.get("name") or "Mandatory room")})

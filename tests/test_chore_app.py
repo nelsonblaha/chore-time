@@ -3997,6 +3997,12 @@ class ChoresFirst(Case):
         self.assertEqual(st["chores_first"]["ava"]["items"], ["Legos off the floor", "Shoes away"])
         self.assertIsNone(job().get("closed"))
         self.assertEqual(st["board"]["cleanup_ava"]["note"], "Legos off the floor\nShoes away")
+        # A free-text chores-first block has no configured room chore. It still permits only the
+        # generated clean-up job (plus bedtime-safe duties), never an unrelated ordinary job.
+        code, blocked = a.post("/api/start", {"kid": "ava", "chore": "kitchen"})
+        self.assertEqual(code, 409, blocked)
+        self.assertNotIn("ava", a.state()["active"])
+        self.assertEqual(a.post("/api/start", {"kid": "ava", "chore": "cleanup_ava"})[0], 200)
         self.assertEqual(a.post("/api/spend", {"kid": "ava", "reward": "show"})[0], 409)
         self.assertEqual(a.post("/api/spend", {"kid": "max", "reward": "show", "with": ["ava"]})[0], 409)   # not by watching along
         # not yet: still blocked, back to the kid
