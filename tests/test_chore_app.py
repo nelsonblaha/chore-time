@@ -255,6 +255,9 @@ class StaticUiRegressions(unittest.TestCase):
         self.assertIn('return "at "+n.name+" now"', tv)
         self.assertIn('n.name+" in "+', tv)
         self.assertIn('n.name+" "+Math.max(1,Math.round((now-dep)/60))+"m ago"', tv)
+        self.assertIn('class="leave"', tv)
+        self.assertIn('E("1f6b6")', tv)
+        self.assertIn("T.board_label+' '+clockAt(T.board_at)", tv)
 
     def test_letter_stays_out_of_the_envelope_until_inspection(self):
         html = (REPO / "static" / "kids.html").read_text()
@@ -459,6 +462,7 @@ class DepartureDisplayTests(unittest.TestCase):
     def write(self, **changes):
         value = {"schema": 1, "active": True, "updated_at": 9990, "trip_id": "trip-1", "mode": "train",
                  "title": "Train to River City", "wake_at": 9000, "board_at": 12000,
+                 "pull_in_at": 11700, "leave_home_at": 9000,
                  "board_label": "Board downtown", "nearest": {"name": "West Station",
                  "arrival_at": 10600, "departure_at": 10660}}
         value.update(changes)
@@ -470,6 +474,14 @@ class DepartureDisplayTests(unittest.TestCase):
         self.assertEqual(out["mode"], "train")
         self.assertEqual(out["nearest"], {"name": "West Station", "arrival_at": 10600.0,
                                           "departure_at": 10660.0, "at_now": False})
+        self.assertEqual(out["pull_in_at"], 11700.0)
+        self.assertEqual(out["leave_home_at"], 9000.0)
+
+    def test_walking_milestone_must_be_45_minutes_before_pull_in_not_departure(self):
+        self.write(pull_in_at=11500, leave_home_at=9000)
+        out = self.app.s.departure_display(now=10000)
+        self.assertNotIn("pull_in_at", out)
+        self.assertNotIn("leave_home_at", out)
 
     def test_stale_inactive_or_invalid_snapshot_fails_closed(self):
         self.write(updated_at=7000)

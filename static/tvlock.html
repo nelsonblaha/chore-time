@@ -14,7 +14,8 @@ img.e{width:1em;height:1em;vertical-align:-.12em}
 .trip{display:none;min-height:0;background:linear-gradient(135deg,rgba(57,164,255,.24),rgba(255,255,255,.06));border-radius:2.4vh;padding:1.1vh 1.2vw;box-sizing:border-box}
 .jobs.departure .trip{display:flex;flex:1 1 0;flex-direction:column;justify-content:center}.jobs.departure .grid{flex:1 1 0;grid-template-rows:1fr;grid-auto-rows:0;overflow:hidden;margin-top:1.2vh}
 .triph{display:flex;align-items:center;gap:1vw;font-size:2.8vh;font-weight:900}.triph .mode{font-size:4.6vh}.triph .board{margin-left:auto;font-size:2.3vh;opacity:.8}
-.track{height:2.4vh;background:rgba(255,255,255,.22);border-radius:2vh;margin:1.2vh .4vw .5vh;position:relative}.track .fill{position:absolute;inset:0 auto 0 0;background:#56c7ff;border-radius:2vh}.track .vehicle{position:absolute;top:50%;font-size:4vh;transform:translate(-50%,-52%);filter:drop-shadow(0 .3vh .2vh #0008)}
+.track{height:2.4vh;background:rgba(255,255,255,.22);border-radius:2vh;margin:1.2vh .4vw 2.1vh;position:relative}.track .fill{position:absolute;inset:0 auto 0 0;background:#56c7ff;border-radius:2vh}.track .vehicle{position:absolute;top:50%;font-size:4vh;transform:translate(-50%,-52%);filter:drop-shadow(0 .3vh .2vh #0008)}
+.track .leave{position:absolute;top:50%;font-size:3.5vh;transform:translate(-50%,-52%);z-index:2;filter:drop-shadow(0 .3vh .2vh #0008)}.track .leave .leavet{position:absolute;top:2.8vh;left:50%;transform:translateX(-50%);font-size:1.7vh;font-weight:900;white-space:nowrap;color:#fff}
 .tracklabels{display:flex;justify-content:space-between;font-size:1.9vh;font-weight:800;opacity:.75}.trainwhere{text-align:center;font-size:3vh;font-weight:900;line-height:1;margin-top:.5vh;color:#ffe082}
 .job{background:rgba(255,255,255,.1);border-radius:2.4vh;padding:1.2vh 1vw;display:flex;flex-direction:column;justify-content:space-between;min-width:0;position:relative;overflow:hidden}
 .job.hot{background:linear-gradient(135deg,rgba(255,140,0,.35),rgba(255,255,255,.08))}
@@ -133,10 +134,11 @@ function departureStation(T,now){var n=T&&T.nearest;if(!n)return "";var arr=+n.a
   return n.name+" "+Math.max(1,Math.round((now-dep)/60))+"m ago"}
 function drawDeparture(T,now){var panel=document.getElementById("jobspanel"),el=document.getElementById("trip");
   if(!T){panel.classList.remove("departure");el.innerHTML="";return false}
-  var span=Math.max(60,T.board_at-T.wake_at),pct=Math.max(0,Math.min(100,100*(now-T.wake_at)/span)),ico=T.mode==="flight"?"2708":"1f682",where=departureStation(T,now);
+  var span=Math.max(60,T.board_at-T.wake_at),pct=Math.max(0,Math.min(100,100*(now-T.wake_at)/span)),ico=T.mode==="flight"?"2708":"1f682",where=departureStation(T,now),walk="";
+  if(T.mode==="train"&&T.leave_home_at>=T.wake_at&&T.leave_home_at<=T.board_at){var lp=Math.max(0,Math.min(100,100*(T.leave_home_at-T.wake_at)/span));walk='<span class="leave" style="left:'+lp.toFixed(1)+'%">'+E("1f6b6")+'<span class="leavet">Leave '+clockAt(T.leave_home_at)+'</span></span>'}
   el.innerHTML='<div class="triph"><span class="mode">'+E(ico)+'</span><span>'+T.title+'</span><span class="board">'+T.board_label+' '+clockAt(T.board_at)+'</span></div>'+
-    '<div class="track"><div class="fill" style="width:'+pct.toFixed(1)+'%"></div><span class="vehicle" style="left:'+pct.toFixed(1)+'%">'+E(ico)+'</span></div>'+
-    '<div class="tracklabels"><span>Up '+clockAt(T.wake_at)+'</span><span>Board '+clockAt(T.board_at)+'</span></div>'+(where?'<div class="trainwhere">'+where+'</div>':'');
+    '<div class="track"><div class="fill" style="width:'+pct.toFixed(1)+'%"></div>'+walk+'<span class="vehicle" style="left:'+pct.toFixed(1)+'%">'+E(ico)+'</span></div>'+
+    '<div class="tracklabels"><span>Up '+clockAt(T.wake_at)+'</span><span>'+T.board_label+' '+clockAt(T.board_at)+'</span></div>'+(where?'<div class="trainwhere">'+where+'</div>':'');
   panel.classList.add("departure");return true}
 var NEWSI=0,NEWS=[],SNOW=0;
 function drawNews(){var el=document.getElementById("newslist");if(!NEWS.length){el.innerHTML='<div class="none">Do a job to make the news!</div>';return}

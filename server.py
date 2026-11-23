@@ -89,6 +89,14 @@ def departure_display(now=None):
         out = {"schema": 1, "updated_at": updated, "trip_id": str(value.get("trip_id") or "")[:80],
                "mode": mode, "title": str(value.get("title") or ("Train day" if mode == "train" else "Flight day"))[:100],
                "wake_at": wake, "board_at": board, "board_label": str(value.get("board_label") or "Board")[:80]}
+        if mode == "train" and value.get("pull_in_at") is not None and value.get("leave_home_at") is not None:
+            pull_in = float(value["pull_in_at"])
+            leave_home = float(value["leave_home_at"])
+            # Travel's walking milestone is 30 minutes on foot plus a 15-minute
+            # station buffer, counted back from pull-in (never train departure).
+            if wake <= leave_home < pull_in <= board and abs((pull_in - leave_home) - 2700) <= 60:
+                out["pull_in_at"] = pull_in
+                out["leave_home_at"] = leave_home
         near = value.get("nearest")
         if mode == "train" and isinstance(near, dict) and str(near.get("name") or "").strip():
             arr = float(near.get("arrival_at"))
