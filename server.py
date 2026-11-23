@@ -285,6 +285,10 @@ def sanitize_packing_progress(game, packer, raw):
                                    if str(k) in allowed and v is True}
     checks = lambda name, allowed: {str(k): str(v) for k, v in (raw.get(name) or {}).items()
                                     if str(k) in allowed and v in ("pass", "fix")}
+    area_ids = {str(x.get("id")) for x in (profile.get("areas") or [])
+                if isinstance(x, dict) and x.get("id")}
+    locations = {str(k): str(v) for k, v in (raw.get("locations") or {}).items()
+                 if str(k) in item_ids and str(v) in area_ids}
     phase = str(raw.get("phase") or "layout")
     if phase not in ("layout", "inspect", "pack", "final", "complete"):
         phase = "layout"
@@ -295,7 +299,8 @@ def sanitize_packing_progress(game, packer, raw):
     return {"version": str(game.get("version") or ""), "profile": profile.get("id"), "packer": packer,
             "seq": seq,
             "phase": phase, "ready": bools("ready", item_ids), "checked": checks("checked", item_ids),
-            "packed": bools("packed", item_ids), "finals": checks("finals", final_ids)}
+            "packed": bools("packed", item_ids), "finals": checks("finals", final_ids),
+            "locations": locations}
 
 
 def packing_complete(game, packer, progress):
@@ -406,6 +411,8 @@ def child_packing_update_error(game, packer, old, new):
     old = old or {}
     if new.get("checked") != (old.get("checked") or {}) or new.get("finals") != (old.get("finals") or {}):
         return "Grown-up inspection happens in the parent Chores page."
+    if new.get("locations") != (old.get("locations") or {}):
+        return "A grown-up controls the packing-area passes."
     if new.get("phase") == "complete":
         return "The grown-up must finish the final packing check."
     old_phase = old.get("phase") or "layout"

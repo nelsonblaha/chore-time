@@ -546,8 +546,11 @@ class PackingRewardGateTests(unittest.TestCase):
                               {"id": "hair", "name": "Hair things", "only": ["ava"]}]}],
                           "final_checks": [{"id": "zip", "name": "Bag zipped"}]},
                          {"id": "adult", "packers": ["jordan"], "points": 0,
+                          "areas": [{"id": "upstairs", "name": "Upstairs"},
+                                    {"id": "downstairs", "name": "Downstairs"}],
+                          "default_area": "upstairs",
                           "piles": [{"id": "grownup_bag", "items": [
-                              {"id": "charger", "name": "Charger"}]}],
+                              {"id": "charger", "name": "Charger", "area": "upstairs"}]}],
                           "final_checks": [{"id": "adult_zip", "name": "Bag zipped"}]}]}
 
     @staticmethod
@@ -707,6 +710,32 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertTrue(done["state"]["packing_game"]["progress"]["jordan"]["complete"])
         self.assertNotIn("jordan", done["state"]["balance"])
         self.assertFalse([e for e in a.s.read_events() if e.get("kid") == "jordan"])
+
+    def test_authenticated_adult_can_save_an_item_for_a_later_packing_area(self):
+        a = self.app
+        moved = {"version": "trip-test-v1", "profile": "adult", "packer": "jordan",
+                 "phase": "layout", "seq": 1, "ready": {}, "checked": {}, "packed": {},
+                 "finals": {}, "locations": {"charger": "downstairs", "unknown": "downstairs"}}
+        code, saved = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                      "progress": moved}, self.adult_headers)
+        self.assertEqual(code, 200, saved)
+        progress = saved["state"]["packing_game"]["progress"]["jordan"]
+        self.assertEqual(progress["locations"], {"charger": "downstairs"})
+        self.assertEqual(progress["packed"], {})
+        self.assertIsNone(progress["interacted_at"])
+
+        moved["seq"] = 2
+        moved["locations"] = {"charger": "attic"}
+        invalid = a.post("/api/packing_update", {"packer": "jordan", "by": "jordan",
+                                                  "progress": moved}, self.adult_headers)[1]
+        self.assertEqual(invalid["state"]["packing_game"]["progress"]["jordan"]["locations"], {})
+
+    def test_packing_page_offers_floor_passes_without_advancing_items(self):
+        html = (REPO / "static" / "packing.html").read_text()
+        self.assertIn("Work one floor at a time — upstairs first.", html)
+        self.assertIn("Actually downstairs", html)
+        self.assertIn("data-move-area", html)
+        self.assertIn("q.locations[n.dataset.item]=n.dataset.moveArea", html)
 
     def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
         a = self.app
