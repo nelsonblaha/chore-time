@@ -791,6 +791,8 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIn("function departureSections()", html)
         self.assertIn('class="category departure"', html)
         self.assertIn('h+=departureSections()', html)
+        self.assertIn('data-departure-task=', html)
+        self.assertIn('api("/api/departure_task"', html)
 
     def test_travel_owned_departure_tasks_are_sanitized_and_retimed(self):
         a = self.app
@@ -812,6 +814,17 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual([x["status"] for x in tasks["tasks"]],
                          ["done", "overdue", "open", "upcoming"])
         self.assertNotIn("departure_house_tasks", a.s.demo_attrs({"departure_house_tasks": tasks}))
+        clock = time.time()
+        path.write_text(json.dumps({
+            "schema": 1, "active": True, "updated_at": clock, "leave_home_at": clock + 3600,
+            "tasks": [{"id": "now", "name": "Open task", "tier": "last hour",
+                       "opens_at": clock - 60, "due_at": clock + 300, "status": "open"}]}))
+        a.s.HOUSE["departure_house_tasks_command"] = ["/bin/true"]
+        body = {"by": "jordan", "item": "now", "done": True}
+        self.assertEqual(a.post("/api/departure_task", body)[0], 403)
+        self.assertEqual(a.post("/api/departure_task", body, self.adult_headers)[0], 200)
+        self.assertEqual(a.post("/api/departure_task", dict(body, item="unknown"),
+                                self.adult_headers)[0], 400)
 
     def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
         a = self.app

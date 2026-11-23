@@ -14,7 +14,7 @@ import json
 from tidy_spaces import space_states
 import stepped_jobs
 import ipaddress
-import math, random, os, re, stat, threading, time, uuid, urllib.request, urllib.parse, urllib.error
+import math, random, os, re, stat, subprocess, threading, time, uuid, urllib.request, urllib.parse, urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -4521,6 +4521,27 @@ class H(BaseHTTPRequestHandler):
             acting = [b.get("kid")] + list(b.get("with") or []) + list(b.get("team") or [])
             if any(k and k not in allowed_kids for k in acting):
                 return self.send(403, {"error": "not your kid"})
+        if p == "/api/departure_task":
+            if not verified_ha_adult(self.headers, b.get("by")):
+                return self.send(403, {"error": "Use the signed-in grown-up Chore dashboard."})
+            tasks_ = departure_house_tasks() or {}
+            item_ = str(b.get("item") or "")
+            known_ = {x["id"] for x in (tasks_.get("tasks") or [])}
+            if item_ not in known_ or not isinstance(b.get("done"), bool):
+                return self.send(400, {"error": "That departure task is not active."})
+            command_ = HOUSE.get("departure_house_tasks_command")
+            if (not isinstance(command_, list) or not command_ or
+                    not all(isinstance(x, str) and x and (i or os.path.isabs(x))
+                            for i, x in enumerate(command_))):
+                return self.send(409, {"error": "Travel's departure checklist is read-only right now."})
+            try:
+                subprocess.run([*command_, "house-done" if b["done"] else "house-undo", item_],
+                               check=True, capture_output=True, text=True, timeout=15)
+            except (OSError, subprocess.SubprocessError) as ex:
+                print("departure task update failed", type(ex).__name__, flush=True)
+                return self.send(502, {"error": "Travel could not update that departure task."})
+            after_change()
+            return self.send(200, {"ok": True, "state": derive()})
         if p == "/api/packing_update":
             packer_ = b.get("packer") or b.get("kid")
             game_ = packing_config() or {}
