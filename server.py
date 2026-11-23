@@ -34,6 +34,8 @@ def _load_house():
 
 
 HOUSE = _load_house()
+from failover import Authority, FencedError  # noqa: E402
+AUTHORITY = Authority(HOUSE.get("failover"), DATA)
 import envelopes  # noqa: E402
 import vacuum_help  # noqa: E402
 envelopes.configure(HOUSE.get("envelopes"), str(DATA / "envelopes_printed.json"))
@@ -115,6 +117,7 @@ PEER_LOCK = threading.Lock()
 INSPECTION_SEEN_LOCK = threading.Lock()
 HUB_CHILD_LOCK = threading.Lock()
 SERVER_STARTED_AT = time.time()
+APP_REVISION = str(os.environ.get("CHORE_REVISION") or "unknown")
 
 
 def ilog(rec):
@@ -138,6 +141,7 @@ SUN = HA.get("sun", "sun.sun")
 CONFIG = DATA / "chores.json"
 DATA.mkdir(parents=True, exist_ok=True)
 if not CONFIG.exists():
+    AUTHORITY.require_mutation()
     CONFIG.write_text(SEED.read_text())
 
 
@@ -165,6 +169,7 @@ HUB_PLACEMENT = load_private_json(HUB_PLACEMENT_FILE, {"trusted": False, "pendin
 
 
 def save_private_json(path, value):
+    AUTHORITY.require_mutation()
     tmp = path.with_suffix(".tmp")
     with open(tmp, "w", opener=lambda name, flags: os.open(name, flags, 0o600)) as output:
         output.write(json.dumps(value, indent=2))
@@ -481,6 +486,7 @@ def save_hub_placement():
 
 
 def save_paper_scans():
+    AUTHORITY.require_mutation()
     tmp = PAPER_SCAN_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(PAPER_SCANS))
     tmp.replace(PAPER_SCAN_FILE)
@@ -800,6 +806,7 @@ def is_system(cid):
 
 
 def save_cfg(c):
+    AUTHORITY.require_mutation()
     tmp = CONFIG.with_suffix(".tmp")
     with open(tmp, "w", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
         output.write(json.dumps(c, indent=2))
@@ -818,20 +825,114 @@ def read_events():
     return out
 
 
+def core_state_checkpoint():
+    """Payload-free identity for the quiesced state that every writer must share."""
+    allow_absent_ledger = (not AUTHORITY.enabled or
+                           AUTHORITY.config.get("allow_absent_empty_ledger") is True)
+    with LOCK:
+        rows = {}
+        for name, path in (("ledger", LEDGER), ("chores", CONFIG), ("house", HOUSE_FILE)):
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                allowed = name == "ledger" and allow_absent_ledger
+                rows[name] = {"present": False, "read_ok": allowed,
+                              "absence_allowed": allowed,
+                              "absence_policy": "explicit_empty_ledger" if allowed else None,
+                              "error": None if allowed else "missing"}
+                if allowed:
+                    rows[name].update(sha256=hashlib.sha256(b"").hexdigest(), bytes=0,
+                                      event_count=0, tail_complete=None)
+                continue
+            except OSError as ex:
+                rows[name] = {"present": None, "read_ok": False, "absence_allowed": False,
+                              "absence_policy": None,
+                              "error": "stat_%s" % (getattr(ex, "errno", None) or "failed")}
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
+                              "absence_policy": None, "error": "not_regular"}
+                continue
+            try:
+                # O_NOFOLLOW keeps a path-swap from turning the checked regular file into a
+                # symlink, and O_NONBLOCK prevents a swapped FIFO/device from stalling health
+                # while the writer lock is held. fstat verifies the object actually opened.
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) \
+                    | getattr(os, "O_NONBLOCK", 0)
+                descriptor = os.open(path, flags)
+                with os.fdopen(descriptor, "rb") as source:
+                    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                        rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
+                                      "absence_policy": None, "error": "not_regular"}
+                        continue
+                    raw = source.read()
+            except OSError as ex:
+                rows[name] = {"present": True, "read_ok": False, "absence_allowed": False,
+                              "absence_policy": None,
+                              "error": "read_%s" % (getattr(ex, "errno", None) or "failed")}
+                continue
+            rows[name] = {"present": True, "read_ok": True, "absence_allowed": False,
+                          "absence_policy": None, "error": None,
+                          "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+            if name == "ledger":
+                rows[name]["event_count"] = sum(1 for line in raw.splitlines() if line.strip())
+                rows[name]["tail_complete"] = not raw or raw.endswith(b"\n")
+        ready = all(rows[name].get("read_ok") for name in ("ledger", "chores", "house")) \
+            and rows["ledger"].get("tail_complete") is not False
+        joined = "\n".join("%s:%s:%s" % (name, int(bool(rows[name].get("present"))),
+                                            rows[name].get("sha256"))
+                           for name in ("ledger", "chores", "house")).encode() if ready else None
+    return {"contract": "chore-core-checkpoint-v2", "app_revision": APP_REVISION,
+            "ready": ready, "core_sha256": hashlib.sha256(joined).hexdigest() if joined else None,
+            **rows}
+
+
+def _write_event_locked(ev):
+    """Append one already-built event while LOCK is held."""
+    authority = AUTHORITY.require_mutation()
+    if AUTHORITY.enabled and ev.get("_fence_epoch") != authority["epoch"]:
+        raise FencedError(AUTHORITY.status())
+    # Guard: never glue onto a line without a trailing newline. A malformed
+    # final JSON record still fails read_events and must be reconciled; this
+    # only repairs the safe case where a complete final record lacks LF.
+    if LEDGER.exists() and LEDGER.stat().st_size:
+        with open(LEDGER, "rb") as f:
+            f.seek(-1, 2)
+            if f.read(1) != b"\n":
+                with open(LEDGER, "a") as g:
+                    g.write("\n")
+                    if AUTHORITY.enabled:
+                        g.flush()
+                        os.fsync(g.fileno())
+    with open(LEDGER, "a") as f:
+        f.write(json.dumps(ev) + "\n")
+        if AUTHORITY.enabled:
+            f.flush()
+            os.fsync(f.fileno())
+
+
 def append(ev):
-    ev = {"id": uuid.uuid4().hex[:12], "ts": time.time(), **ev}
     DATA.mkdir(parents=True, exist_ok=True)
     with LOCK:
-        # guard: never glue onto a line without a trailing newline
-        if LEDGER.exists() and LEDGER.stat().st_size:
-            with open(LEDGER, "rb") as f:
-                f.seek(-1, 2)
-                if f.read(1) != b"\n":
-                    with open(LEDGER, "a") as g:
-                        g.write("\n")
-        with open(LEDGER, "a") as f:
-            f.write(json.dumps(ev) + "\n")
+        ev = {"id": uuid.uuid4().hex[:12], "ts": time.time(), **ev, **AUTHORITY.event_fields()}
+        _write_event_locked(ev)
     return ev
+
+
+def append_once(ev, request_id, created_fields=None):
+    """Durably append an idempotent operation, or return its existing event."""
+    digest = hashlib.sha256(json.dumps(ev, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    with LOCK:
+        old = next((row for row in read_events() if row.get("_idempotency_key") == request_id), None)
+        if old:
+            if old.get("_request_digest") != digest:
+                raise KeyError("transaction_id was already used with a different payload")
+            return old, False
+        row = {"id": uuid.uuid4().hex[:12], "ts": time.time(), **ev, **(created_fields or {}),
+               "_idempotency_key": request_id, "_request_digest": digest,
+               **AUTHORITY.event_fields()}
+        _write_event_locked(row)
+        return row, True
 
 
 def record_vacuum_ready(floor, request_id, map_rooms, observed_at):
@@ -3006,6 +3107,10 @@ def push_ha(state):
     if not HA_URL:   # no Home Assistant configured
         return None
     try:
+        AUTHORITY.require_effect()
+    except FencedError:
+        return None
+    try:
         tok = ha_token()
     except OSError:
         return
@@ -4015,6 +4120,8 @@ class H(BaseHTTPRequestHandler):
                     r_["used"] = True
                     st["adult_go"] = r_["who"]
             return self.send(200, st)
+        if p == "/api/failover/status":
+            return self.send(200, AUTHORITY.public_status())
         if p == "/api/house_jobs":   # the grown-ups' house jobs (Grocy), ranked for one screen or overall
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             disp = (q.get("display") or [(HOUSE.get("house_tasks") or {}).get("board_display", "")])[0]
@@ -4033,7 +4140,10 @@ class H(BaseHTTPRequestHandler):
                                                                                   if x["camera"] == c_ and x["label"] == lab)
                                                                            for lab in ("tidy", "untidy")} for c_ in e_.cfg["cameras"]}})
         if p == "/health":
-            return self.send(200, {"ok": True})
+            checkpoint_ = core_state_checkpoint()
+            return self.send(200 if checkpoint_["ready"] else 503,
+                             {"ok": checkpoint_["ready"], "failover": AUTHORITY.public_status(),
+                              "checkpoint": checkpoint_})
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -4045,6 +4155,43 @@ class H(BaseHTTPRequestHandler):
             b = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self.send(400, {"error": "bad json"})
+        if self.path == "/api/failover/probe":
+            if not AUTHORITY.check_probe_token(self.headers.get("X-Chore-Failover-Probe")):
+                return self.send(403, {"error": "forbidden"})
+            try:
+                request_ = AUTHORITY.validate_probe(b)
+                if not any(k.get("id") == "failover_test" for k in cfg()["kids"]):
+                    raise ValueError("synthetic failover_test profile is absent")
+                before_ = derive()["balance"].get("failover_test", 0)
+                event_, created_ = append_once({"type": "adjust", "kid": "failover_test",
+                                                "points": request_["points"],
+                                                "reason": "isolated failover replay probe",
+                                                "by": "failover_probe"},
+                                               request_["transaction_id"],
+                                               {"_probe_before_balance": before_})
+                after_ = derive()["balance"].get("failover_test", 0)
+                receipt = {"transaction_id": request_["transaction_id"],
+                           "event_id": event_["id"], "created": created_,
+                           "before_balance": event_.get("_probe_before_balance", 0),
+                           "balance": after_, "node_id": event_.get("_fence_node"),
+                           "epoch": event_.get("_fence_epoch")}
+            except FencedError as ex:
+                return self.send(503, {"error": "Chore Time is temporarily read-only during failover.",
+                                       "failover": ex.status})
+            except KeyError as ex:
+                return self.send(409, {"error": str(ex.args[0])})
+            except ValueError as ex:
+                return self.send(400, {"error": str(ex)})
+            return self.send(200, {"ok": True, "receipt": receipt,
+                                   "effects_suppressed": AUTHORITY.rehearsal})
+        if AUTHORITY.enabled and AUTHORITY.rehearsal:
+            return self.send(503, {"error": "Failover rehearsal accepts only the synthetic probe profile.",
+                                   "failover": AUTHORITY.status()})
+        try:
+            AUTHORITY.require_mutation()
+        except FencedError as ex:
+            return self.send(503, {"error": "Chore Time is temporarily read-only during failover.",
+                                   "failover": ex.status})
         if self.path == "/api/hub_heartbeat":
             display_ = display_for_ip(display_ip_)
             if not display_ or display_.get("kind") != "hub" or display_.get("id") not in HUBS:
@@ -6146,6 +6293,11 @@ HUB_VOLUME = int(os.environ.get("CHORE_HUB_VOLUME", (HOUSE.get("casting") or {})
 
 
 def cast(ip, path):
+    try:
+        AUTHORITY.require_effect()
+    except FencedError as ex:
+        print("cast suppressed by failover fence:", ex, flush=True)
+        return False
     # a fresh query string forces DashCast to reload instead of keeping the old page
     url = SELF_URL + path + ("&" if "?" in path else "?") + "v=%d" % time.time()
     print("cast", ip, url, flush=True)
@@ -6591,6 +6743,10 @@ def active_spotify_interruption(room):
 def ha_post_state(ent, state, attrs, tok):
     if not HA_URL:   # no Home Assistant configured
         return None
+    try:
+        AUTHORITY.require_effect()
+    except FencedError:
+        return None
     body = json.dumps({"state": state, "attributes": attrs}, ensure_ascii=False,
                       separators=(",", ":")).encode()
     req = urllib.request.Request(f"{HA_URL}/api/states/{ent}", data=body,
@@ -6601,6 +6757,10 @@ def ha_post_state(ent, state, attrs, tok):
 def ha_fire_event(event, data, tok):
     """Publish a bounded observation for HA consumers; failure must never delay or reject the kid's login."""
     if not HA_URL:
+        return None
+    try:
+        AUTHORITY.require_effect()
+    except FencedError:
         return None
     req = urllib.request.Request(f"{HA_URL}/api/events/{event}", data=json.dumps(data).encode(),
                                  headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
@@ -6615,6 +6775,10 @@ def ha_fire_event(event, data, tok):
 
 def ha_call(svc, data, tok):
     if not HA_URL:   # no Home Assistant configured
+        return None
+    try:
+        AUTHORITY.require_effect()
+    except FencedError:
         return None
     dom, name = svc.split(".")
     req = urllib.request.Request(f"{HA_URL}/api/services/{dom}/{name}", data=json.dumps(data).encode(),
@@ -7598,6 +7762,7 @@ GROCY_START = float(GROCY.get("ledger_seeded_before", 0))   # ledger events befo
 
 
 def gcall(method, path, body=None):
+    AUTHORITY.require_effect()
     key = GROCY_KEY_FILE.read_text().strip()
     req = urllib.request.Request(GROCY_API + path, data=json.dumps(body).encode() if body is not None else None, method=method,
                                  headers={"GROCY-API-KEY": key, "Content-Type": "application/json", "Accept": "application/json"})
@@ -8079,6 +8244,22 @@ def start_modules():
     def go(name, fn, *args):
         threading.Thread(target=fn, args=args, daemon=True, name=name).start()
         on.append(name)
+    if AUTHORITY.enabled:
+        status = AUTHORITY.status()
+        if AUTHORITY.rehearsal:
+            return ["failover-rehearsal"]
+        if not status["writable"]:
+            return ["failover-standby"]
+
+        def watch_authority():
+            # Stop already-running workers promptly when a partition lets the
+            # coordinator lease expire. A service restart comes up read-only.
+            while True:
+                if not AUTHORITY.status()["writable"]:
+                    print("Failover authority lost; exiting before further household effects.", flush=True)
+                    os._exit(75)
+                time.sleep(.1)
+        go("failover-authority", watch_authority)
     if (HOUSE.get("envelopes") or {}).get("desktop_summary_after"):
         def watch_envelope_summary():
             while True:
