@@ -465,6 +465,9 @@ same(rewardPauseFor(noDisplay,"?paused_reward=1"),null,"no unidentified fallback
         self.assertIn("function relayParts(v,n)", packing)
         self.assertIn('data-pack="', packing)
         self.assertIn("'✓ In bag'", packing)
+        self.assertIn('data-move-item="', packing)
+        self.assertIn('action:"move_item"', packing)
+        self.assertIn("Moved without changing progress", packing)
         self.assertIn('<details class="category" open>', packing)
         self.assertIn('localStorage.setItem("packing-selected",id)', packing)
 
@@ -1007,6 +1010,41 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertEqual(saved["profiles"][1]["piles"][-1]["title"], "Day bag")
         self.assertEqual(json.loads((a.dir / "packing_progress.json").read_text()), progress)
         self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+
+    def test_parent_can_move_packing_item_into_nested_destination_without_changing_progress(self):
+        a = self.app
+        game = json.loads(json.dumps(a.s.HOUSE["packing_game"]))
+        profile = game["profiles"][0]
+        profile["piles"].append({"id": "duffel", "title": "Big duffel", "groups": [
+            {"id": "swim_bag", "title": "Swim bag"}
+        ], "items": []})
+        private = a.dir / "packing_game.json"
+        private.write_text(json.dumps(game))
+        os.chmod(private, 0o600)
+        a.s.HOUSE["packing_game_file"] = str(private)
+        progress = {"version": "trip-test-v1", "kids": {"ava": self.stage(["shirt"], "pack", 42)}}
+        progress["kids"]["ava"]["locations"] = {"shirt": "downstairs"}
+        (a.dir / "packing_progress.json").write_text(json.dumps(progress))
+
+        code, result = a.post("/api/packing_admin", {
+            "by": "jordan", "action": "move_item", "profile": "kid", "pile": "bag",
+            "item": "shirt", "to_pile": "duffel", "to_group": "swim_bag"
+        }, self.adult_headers)
+        self.assertEqual(code, 200, result)
+        saved = json.loads(private.read_text())
+        source = next(x for x in saved["profiles"][0]["piles"] if x["id"] == "bag")
+        destination = next(x for x in saved["profiles"][0]["piles"] if x["id"] == "duffel")
+        self.assertNotIn("shirt", {x["id"] for x in source["items"]})
+        moved = next(x for x in destination["items"] if x["id"] == "shirt")
+        self.assertEqual(moved["group"], "swim_bag")
+        self.assertEqual(json.loads((a.dir / "packing_progress.json").read_text()), progress)
+
+        code, result = a.post("/api/packing_admin", {
+            "by": "jordan", "action": "move_item", "profile": "kid", "pile": "duffel",
+            "item": "shirt", "to_pile": "duffel", "to_group": "missing"
+        }, self.adult_headers)
+        self.assertEqual(code, 400, result)
+        self.assertIn("unknown destination group", result["error"])
 
     def test_forgotten_item_can_be_added_for_one_child_and_returns_only_that_child_to_gathering(self):
         a = self.app

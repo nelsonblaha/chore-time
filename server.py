@@ -536,6 +536,23 @@ def packing_edit_config(game, body):
                      "icon": text_value("icon", item.get("icon") or pile.get("icon") or "1f4e6", 40),
                      "note": text_value("note", item.get("note") or "", 240)})
         return
+    if action == "move_item":
+        destination = next((x for x in piles if x.get("id") == body.get("to_pile")), None)
+        if not destination:
+            raise ValueError("unknown destination category")
+        group_id = str(body.get("to_group") or "").strip()
+        if group_id and not any(str(x.get("id") or "") == group_id
+                                for x in (destination.get("groups") or []) if isinstance(x, dict)):
+            raise ValueError("unknown destination group")
+        if destination is pile and str(item.get("group") or "") == group_id:
+            return
+        items.remove(item)
+        if group_id:
+            item["group"] = group_id
+        else:
+            item.pop("group", None)
+        destination.setdefault("items", []).append(item)
+        return
     if action == "remove_item":
         items.remove(item)
         return
