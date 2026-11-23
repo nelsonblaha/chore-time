@@ -103,6 +103,11 @@ def departure_display(now=None):
             leave_home = float(value["leave_home_at"])
             # Travel's walking milestone is 30 minutes on foot plus a 15-minute
             # station buffer, counted back from pull-in (never train departure).
+            # Some Amtrak feeds expose only the scheduled departure as "pull in".
+            # Travel's already-computed leave time still identifies the true
+            # milestone; recover the implied pull-in instead of dropping the walker.
+            if abs(pull_in - board) <= 60 and 2700 < board - leave_home <= 5400:
+                pull_in = leave_home + 2700
             if wake <= leave_home < pull_in <= board and abs((pull_in - leave_home) - 2700) <= 60:
                 out["pull_in_at"] = pull_in
                 out["leave_home_at"] = leave_home
@@ -3543,6 +3548,7 @@ def push_state_sensor(state=None, last_result=None):
              "spotify_exempt_rooms": state.get("spotify_exempt_rooms", []),
              "calendar": state.get("calendar"), "packing_game": state.get("packing_game"),
              "packing_up_next": state.get("packing_up_next"), "departure_display": state.get("departure_display"),
+             "departure_house_tasks": state.get("departure_house_tasks"),
              "papers": state.get("papers"),
              "paper_scan_ready": state.get("paper_scan_ready"),
              "kid_notes": state.get("kid_notes"), "requests": state.get("requests"),

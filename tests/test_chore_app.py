@@ -515,6 +515,13 @@ class DepartureDisplayTests(unittest.TestCase):
         self.assertNotIn("pull_in_at", out)
         self.assertNotIn("leave_home_at", out)
 
+    def test_departure_only_feed_recovers_pull_in_from_travels_leave_time(self):
+        self.write(pull_in_at=12000, leave_home_at=9000)
+        out = self.app.s.departure_display(now=10000)
+        self.assertEqual(out["leave_home_at"], 9000)
+        self.assertEqual(out["pull_in_at"], 11700)
+        self.assertIn("map_route", out)
+
     def test_bad_optional_map_does_not_hide_the_departure_timeline(self):
         self.write(map_route={"traveled": [{"lat": 34, "lon": -118}]})
         out = self.app.s.departure_display(now=10000)
@@ -780,6 +787,30 @@ class PackingRewardGateTests(unittest.TestCase):
         self.assertIn("S=adoptState(r.state)", html)
         self.assertIn("saveItemAction(id,q,{item:n.dataset.pack,packed:on})", html)
         self.assertIn("saveItemAction(id,q,{item:n.dataset.item,area:n.dataset.moveArea})", html)
+        self.assertIn("function departureSections()", html)
+        self.assertIn('class="category departure"', html)
+        self.assertIn('h+=departureSections()', html)
+
+    def test_travel_owned_departure_tasks_are_sanitized_and_retimed(self):
+        a = self.app
+        path = a.dir / "departure-house-tasks.json"
+        a.s.HOUSE["departure_house_tasks_file"] = str(path)
+        path.write_text(json.dumps({
+            "schema": 1, "active": True, "updated_at": 1000, "leave_home_at": 2000,
+            "trip_id": "trip", "title": "Before leaving", "tasks": [
+                {"id": "done", "name": "Already done", "tier": "last day",
+                 "opens_at": 100, "due_at": 500, "status": "done", "done_at": 400},
+                {"id": "late", "name": "Late task", "tier": "last hour",
+                 "opens_at": 700, "due_at": 900, "status": "open"},
+                {"id": "now", "name": "Open task", "tier": "last hour",
+                 "opens_at": 900, "due_at": 1100, "status": "upcoming"},
+                {"id": "soon", "name": "Later task", "tier": "last minute",
+                 "opens_at": 1050, "due_at": 1200, "status": "open"}]}
+        ))
+        tasks = a.s.departure_house_tasks(now=1000)
+        self.assertEqual([x["status"] for x in tasks["tasks"]],
+                         ["done", "overdue", "open", "upcoming"])
+        self.assertNotIn("departure_house_tasks", a.s.demo_attrs({"departure_house_tasks": tasks}))
 
     def test_active_adult_packing_projects_next_items_for_ambient_displays(self):
         a = self.app
