@@ -1819,10 +1819,10 @@ class AdultRoomPresence(Case):
         self.t.update(kind="sony", room="den", external_display_entity="sensor.den_panel")
         validity = dict(schema_version=1, observed_at=self.now-1, valid_until=self.now+50)
         row = dict(state="occupied", people=["Jordan"], valid_until=self.now+50)
-        self.app.set("sensor.room_retained_occupancy", "ok", rooms={"den":row}, roster_complete=True, **validity)
+        self.app.set("sensor.room_retained_occupancy", "ok", rooms={"den":row}, expected=2, people_min=2, people_max=2, roster_complete=True, **validity)
         adult = dict(person_key="jordan", display_name="Jordan", possible_rooms=["den"], confirmed=True, located=True)
         child = dict(person_key="ava", possible_rooms=["bedroom"], located=True)
-        for rooms, eligible in [(["bedroom"],True), (["bedroom","den"],False), (["den"],False)]:
+        for rooms, eligible in [(["bedroom"],True), (["bedroom","den"],False), (["den"],False), ([],False)]:
             self.app.set("sensor.occupant_tracks","2",people=[adult,dict(child,possible_rooms=rooms)],**validity)
             self.assertEqual(self.s.adult_idle_screen(self.t,"x",self.now),eligible)
         self.app.set("sensor.occupant_tracks","2",people=[adult,child],**validity)

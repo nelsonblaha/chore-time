@@ -6841,6 +6841,8 @@ def tv_status(t, tok):
         return "external_display",None
     if t["kind"] == "sony":   # the TV's own input wins over a lock page still loaded on its Chromecast
         act0 = (ha_get(t["remote"], tok).get("attributes") or {}).get("current_activity") or ""
+        if act0 == "com.google.android.apps.tv.dreamx" and ha_get(t["remote"], tok).get("state") == "on":
+            return "idle", None
         if any(x in act0.lower() for x in ("tvinput", "tv.input", ".inputs", "dtv")) and \
                 ha_get(t["television"], tok).get("state") not in ("off", "standby"):
             return "hdmi", max([p["attributes"].get("media_duration") or 0 for p in players] or [0]) or None
@@ -6967,7 +6969,25 @@ def adult_idle_screen(t, tok, now=None):
     tracks = ha_get("sensor.occupant_tracks", tok).get("attributes") or {}
     if not fresh(tracks):
         return False
-    here = [p for p in tracks.get("people", []) if room in (p.get("possible_rooms") or [])]
+    people = tracks.get("people") or []
+    if (len(people) != attrs.get("expected") or attrs.get("unexplained", 0)
+            or attrs.get("people_min") != len(people) or attrs.get("people_max") != len(people)):
+        return False
+    here = [p for p in people if room in (p.get("possible_rooms") or [])]
+    unplaced = [p for p in people if not p.get("possible_rooms") or not p.get("located")]
+    if unplaced:
+        # The tracker can retain a named bedroom group across a restart even
+        # when its interchangeable tracks temporarily have no individual room.
+        groups = [v for k,v in attrs["rooms"].items() if k != room and v.get("group_members")
+                  and v.get("display_state") in ("remains", "roster_placed")
+                  and current < (v.get("valid_until") or 0)]
+        if len(groups) != 1:
+            return False
+        members = set(groups[0]["group_members"])
+        if (len(unplaced) != len(members) or len(people) != len(unplaced) + 1
+                or any(p.get("possible_rooms") or p.get("display_name") and p["display_name"] not in members
+                       for p in unplaced) or visit["people"][0] in members):
+            return False
     return (len(here) == 1 and here[0].get("person_key") in adults
             and here[0].get("confirmed") is True and here[0].get("located") is True
             and here[0].get("possible_rooms") == [room]
