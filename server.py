@@ -2042,14 +2042,25 @@ def peer_reset_display(ip):
     return display if display and display.get("kind") == "hub" and display.get("id") in allowed else None
 
 
-def issue_kid_session(kid, ip, now=None):
+def issue_kid_session(kid, ip, now=None, *, pin_observation=None):
     now = time.time() if now is None else float(now)
     token = uuid.uuid4().hex
-    sessions = GUARD.setdefault("kid_sessions", {})
-    for old_token, row in list(sessions.items()):
-        if float(row.get("until") or 0) <= now:
-            sessions.pop(old_token, None)
-    sessions[token] = {"kid": kid, "ip": ip, "until": now + 600}
+    with HUB_CHILD_LOCK:
+        sessions = GUARD.setdefault("kid_sessions", {})
+        for old_token, row in list(sessions.items()):
+            if float(row.get("until") or 0) <= now:
+                sessions.pop(old_token, None)
+            elif row.get("ip") == ip:
+                # Other features can share credentials, but only the newest local unlock can witness touches.
+                row.pop("touch_pin", None)
+        display = display_for_ip(ip)
+        if display and display["kind"] == "hub":
+            prior_row = (GUARD.get("hub_child_sessions") or {}).get(display["id"])
+            if prior_row:
+                prior_row.pop("interaction", None)
+        session = sessions[token] = {"kid": kid, "ip": ip, "until": now + 600}
+        if pin_observation and pin_observation["source"] == "verified_kid_pin" and pin_observation["display_kind"] == "hub":
+            session["touch_pin"] = (pin_observation["observed_at"], pin_observation["valid_until"])
     return token
 
 
@@ -2062,6 +2073,8 @@ def valid_kid_session(token, kid, ip, now=None):
 HUB_CHILD_REFRESH_S = 30
 HUB_CHILD_OFFLINE_S = 10
 HUB_CHILD_VALID_S = 75
+HUB_TOUCH_FRESH_S = 5
+HUB_TOUCH_INTERVAL_S = 2
 
 
 def observe_hub_child(ip, kid=None, token=None, now=None):
@@ -2071,19 +2084,24 @@ def observe_hub_child(ip, kid=None, token=None, now=None):
     if not display or display.get("kind") != "hub" or display.get("id") not in HUBS:
         return None
     known = {row["id"] for row in cfg()["kids"]}
-    accepted = kid if isinstance(kid, str) and kid in known and valid_kid_session(token, kid, ip, now) else None
-    if accepted:
-        # A foreground heartbeat keeps the already authenticated display-bound credential alive.
-        (GUARD.get("kid_sessions") or {})[str(token)]["until"] = now + 600
     with HUB_CHILD_LOCK:
+        accepted = kid if isinstance(kid, str) and kid in known and valid_kid_session(token, kid, ip, now) else None
+        credentials = GUARD.get("kid_sessions") or {}
+        if accepted:
+            credentials[token]["until"] = now + 600
         sessions = GUARD.setdefault("hub_child_sessions", {})
         old = sessions.get(display["id"]) or {}
-        changed = not old or old.get("kid") != accepted
+        current_token = token if accepted else None
+        interrupted = old.get("kid") and now - (old.get("last_seen") or 0) > HUB_CHILD_OFFLINE_S
+        changed = not old or old.get("_token") != current_token or old.get("kid") != accepted or interrupted
         row = dict(old)
-        row.update(kid=accepted,
-                   since=(old.get("since") if accepted and old.get("kid") == accepted else
-                          (now if accepted else None)),
-                   last_seen=now)
+        if changed:
+            row.pop("interaction", None)
+            prior = credentials.get(old.get("_token"))
+            if prior:
+                prior.pop("touch_pin", None)
+        row.update(kid=accepted, _token=current_token,
+                   since=((now if changed else old.get("since")) if accepted else None), last_seen=now)
         sessions[display["id"]] = row
         refresh = now - float(GUARD.get("hub_child_last_refresh") or 0) >= HUB_CHILD_REFRESH_S
         publish = changed or refresh
@@ -2099,6 +2117,27 @@ def observe_hub_child(ip, kid=None, token=None, now=None):
     return {"display_id": display["id"], "kid": accepted, "publish": publish}
 
 
+def observe_hub_touch(ip, kid, token, now=None):
+    """One local gesture on an already displayed PIN session. A heartbeat never calls this."""
+    display = display_for_ip(ip)
+    if not display or display["kind"] != "hub" or display["id"] not in HUBS or not isinstance(token, str):
+        return None
+    now = time.time() if now is None else now
+    with HUB_CHILD_LOCK:
+        row = (GUARD.get("hub_child_sessions") or {}).get(display["id"]) or {}
+        session = (GUARD.get("kid_sessions") or {}).get(token) or {}
+        pin = session.get("touch_pin")
+        if (not pin or not valid_kid_session(token, kid, ip, now) or row.get("_token") != token
+                or row.get("kid") != kid or not 0 <= now - row["last_seen"] <= HUB_CHILD_OFFLINE_S
+                or not pin[0] <= now < min(pin[1], pin[0] + 900)):
+            return None
+        if now - (row.get("interaction") or {}).get("observed_at", 0) < HUB_TOUCH_INTERVAL_S:
+            return False
+        row["interaction"] = {"basis": "verified_session_touch", "observed_at": now,
+                              "valid_until": min(now + HUB_TOUCH_FRESH_S, pin[1], pin[0] + 900)}
+        return True
+
+
 def expire_hub_child_sessions(now=None):
     """Clear a foreground name promptly when its physical Hub stops heartbeating."""
     now = time.time() if now is None else float(now)
@@ -2107,6 +2146,10 @@ def expire_hub_child_sessions(now=None):
         for row in (GUARD.get("hub_child_sessions") or {}).values():
             seen = float(row.get("last_seen") or row.get("last_observed") or 0)
             if row.get("kid") and now - seen > HUB_CHILD_OFFLINE_S:
+                prior = (GUARD.get("kid_sessions") or {}).get(row.pop("_token", None))
+                if prior:
+                    prior.pop("touch_pin", None)
+                row.pop("interaction", None)
                 row.update(kid=None, since=None, published_at=now)
                 changed = True
         if changed:
@@ -2134,6 +2177,9 @@ def hub_child_sessions_manifest(now=None):
                      "since": row.get("since") if kid else None,
                      "last_observed": observed or None,
                      "valid_until": (float(row.get("valid_until") or 0) or None)}
+        interaction = row.get("interaction")
+        if kid and interaction and interaction["observed_at"] <= now < interaction["valid_until"]:
+            out[room]["interaction"] = dict(interaction)
     return out
 
 
@@ -3349,15 +3395,23 @@ def queue_hub_child_state_push():
     """Coalesce the two Hubs' fast observations into one background HA manifest update."""
     with HUB_CHILD_LOCK:
         if GUARD.get("hub_child_push_pending"):
+            GUARD["hub_child_push_again"] = True
             return
         GUARD["hub_child_push_pending"] = True
 
     def run():
-        try:
-            push_state_sensor()
-        finally:
+        while True:
+            try:
+                push_state_sensor()
+            except Exception:
+                with HUB_CHILD_LOCK:
+                    GUARD["hub_child_push_pending"] = False
+                    GUARD.pop("hub_child_push_again", None)
+                raise
             with HUB_CHILD_LOCK:
-                GUARD["hub_child_push_pending"] = False
+                if not GUARD.pop("hub_child_push_again", False):
+                    GUARD["hub_child_push_pending"] = False
+                    return
     threading.Thread(target=run, name="hub-child-publish", daemon=True).start()
 
 
@@ -4192,6 +4246,15 @@ class H(BaseHTTPRequestHandler):
         except FencedError as ex:
             return self.send(503, {"error": "Chore Time is temporarily read-only during failover.",
                                    "failover": ex.status})
+        if self.path == "/api/hub_touch":
+            if self.headers.get("X-HA-User") or not isinstance(b, dict) or set(b) != {"kid", "kid_session"}:
+                return self.send(403, {"error": "physical Hub session required"})
+            accepted_ = observe_hub_touch(display_ip_, b["kid"], b["kid_session"])
+            if accepted_ is None:
+                return self.send(403, {"error": "physical Hub session required"})
+            if accepted_:
+                queue_hub_child_state_push()
+            return self.send(200, {"ok": True})
         if self.path == "/api/hub_heartbeat":
             display_ = display_for_ip(display_ip_)
             if not display_ or display_.get("kind") != "hub" or display_.get("id") not in HUBS:
@@ -4839,7 +4902,7 @@ class H(BaseHTTPRequestHandler):
             GUARD["kid_pin_failures"].pop(ip_, None)
             ilog({"src": "kid_pin", "kid": kid_["id"], "ip": ip_, "ok": True})
             evidence_ = record_kid_display_presence(c, kid_["id"], ip_, verified=True)
-            session_ = issue_kid_session(kid_["id"], ip_)
+            session_ = issue_kid_session(kid_["id"], ip_, pin_observation=evidence_)
             if evidence_:
                 after_change()
             return self.send(200, {"ok": True, "kid_session": session_, "state": state_for_display(ip_)})

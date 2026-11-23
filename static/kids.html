@@ -383,6 +383,15 @@ var HA_MODE=location.pathname.indexOf("/local/")===0,PACK_TEST=HA_MODE&&/[?&]pac
     LOCK_KID=LOCKED?(location.search.match(/[?&]kid=([a-z]+)/)||[])[1]:null;
 var KID_TOKEN={};
 function hubHeartbeat(){if(HA_MODE||SANDBOX!=null||!S||!S.display||S.display.kind!=="hub")return;var active=kid&&KID_TOKEN[kid];api("/api/hub_heartbeat",active?{kid:kid,kid_session:active}:{kid:null}).catch(function(){})}
+var lastHubTouch=0;
+function physicalHubTouch(event){
+  if(!event.isTrusted||event.pointerType!=="touch"||!event.isPrimary||event.button!==0||
+     document.visibilityState!=="visible"||HA_MODE||SANDBOX!=null||!S||!S.display||S.display.kind!=="hub"||
+     !kid||!KID_TOKEN[kid]||Date.now()-lastHubTouch<2000)return;
+  lastHubTouch=Date.now();
+  api("/api/hub_touch",{kid:kid,kid_session:KID_TOKEN[kid]}).catch(function(){});
+}
+document.addEventListener("pointerdown",physicalHubTouch,{capture:true,passive:true});
 function leaveHubForeground(next){kid=null;if(HA_MODE||SANDBOX!=null){next();return}api("/api/hub_heartbeat",{kid:null}).then(next).catch(next)}
 if(!HA_MODE)setInterval(hubHeartbeat,2000);
 function packingTestState(a){if(!PACK_TEST||!a.packing_game)return a;var id="packing_test",now=Date.now()/1000;

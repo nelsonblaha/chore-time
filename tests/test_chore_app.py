@@ -910,6 +910,64 @@ class HubChildSessions(Case):
         self.assertFalse(self.s.expire_hub_child_sessions(start + 11))
         self.assertTrue(self.s.expire_hub_child_sessions(start + 19))
 
+    def test_touch_is_scoped_to_last_verified_physical_foreground_and_the_pin_deadline(self):
+        conf = json.loads((self.app.dir / "chores.json").read_text())
+        conf["households"] = [{"id": "home"}]
+        (self.app.dir / "chores.json").write_text(json.dumps(conf))
+        self.s.HUBS["room_hub"]["household"] = "home"
+
+        def local(path, body):
+            return self.app.post_from(self.HUB_ONE, "/api/" + path, body)
+
+        def unlock():
+            reply = local("kid_unlock", {"kid": "ava", "pin": "1234"})[1]
+            return {"kid": "ava", "kid_session": reply["kid_session"]}
+
+        def manifest():
+            return self.s.hub_child_sessions_manifest()["great_room"]
+
+        first = unlock()
+        self.assertEqual(local("hub_touch", first)[0], 403)
+        local("hub_heartbeat", first)
+        self.assertNotIn("interaction", manifest())
+        self.assertEqual(self.app.post("/api/hub_touch", first)[0], 403)
+        self.assertEqual(self.app.post_from(self.HUB_TWO, "/api/hub_touch", first)[0], 403)
+        self.assertEqual(local("hub_touch", dict(first, observed_at=time.time()))[0], 403)
+        self.assertEqual(local("hub_touch", first)[0], 200)
+        gesture = manifest()["interaction"]
+        self.assertEqual(set(gesture), {"basis", "observed_at", "valid_until"})
+        self.assertNotIn("pin", json.dumps(manifest()))
+        for _ in range(2):
+            local("hub_heartbeat", first)
+            local("hub_touch", first)
+        self.assertEqual(gesture, manifest()["interaction"])
+        self.assertNotIn(first["kid_session"], json.dumps(manifest()))
+        self.assertNotIn("interaction", self.s.hub_child_sessions_manifest(gesture["valid_until"])["great_room"])
+        fresh = unlock()
+        self.assertNotIn("interaction", manifest())
+        local("hub_heartbeat", first)
+        self.assertEqual(local("hub_touch", first)[0], 403)
+        local("hub_heartbeat", fresh)
+        self.assertEqual(local("hub_touch", fresh)[0], 200)
+        local("hub_heartbeat", {"kid": None})
+        local("hub_heartbeat", fresh)
+        self.assertEqual(local("hub_touch", fresh)[0], 403)
+        profile = local("kid_unlock", {"kid": "max"})[1]["kid_session"]
+        body = {"kid": "max", "kid_session": profile}
+        local("hub_heartbeat", body)
+        self.assertEqual(local("hub_touch", body)[0], 403)
+        fresh = unlock()
+        local("hub_heartbeat", fresh)
+        future = time.time() + self.s.HUB_CHILD_OFFLINE_S + 1
+        self.s.observe_hub_child(self.HUB_ONE, "ava", fresh["kid_session"], future)
+        self.assertIsNone(self.s.observe_hub_touch(self.HUB_ONE, "ava", fresh["kid_session"], future))
+        fresh = unlock()
+        local("hub_heartbeat", fresh)
+        pin = self.s.GUARD["kid_sessions"][fresh["kid_session"]]["touch_pin"]
+        for at in range(1, 902, 2):
+            self.s.observe_hub_child(self.HUB_ONE, "ava", fresh["kid_session"], pin[0] + at)
+        self.assertIsNone(self.s.observe_hub_touch(self.HUB_ONE, "ava", fresh["kid_session"], pin[0] + 901))
+
     def test_manifest_only_refresh_does_not_rewrite_chunk_parts(self):
         sent, old_post = [], self.s.ha_post_state
         self.s.ha_post_state = lambda entity, value, attrs, tok: sent.append((entity, attrs))
