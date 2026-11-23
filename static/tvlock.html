@@ -147,14 +147,18 @@ function drawDeparture(T,now){var panel=document.getElementById("jobspanel"),el=
     '<div class="track"><div class="fill" style="width:'+pct.toFixed(1)+'%"></div>'+walk+'<span class="vehicle" style="left:'+pct.toFixed(1)+'%">'+E(ico)+'</span></div>'+
     '<div class="tracklabels"><span>Up '+clockAt(T.wake_at)+'</span><span>'+T.board_label+' '+clockAt(T.board_at)+'</span></div>'+(where?'<div class="trainwhere">'+where+'</div>':'');
   panel.classList.add("departure");return true}
-var USMAP=null,USPATH="",MAPTRIP=null;
-function mapPoint(p){return [45+(p.lon+125)/59*880,35+(50-p.lat)/26*435]}
+var USMAP=null,USPATH="",USKEY="",MAPTRIP=null,MAPBOUNDS={minLon:-125,maxLon:-66,minLat:24,maxLat:50};
+function setMapBounds(r){var a=(r.traveled||[]).concat(r.remaining||[],[r.train,r.home]).filter(Boolean),lo=a.map(function(p){return p.lon}),la=a.map(function(p){return p.lat}),minLon=Math.min.apply(null,lo)-1.5,maxLon=Math.max.apply(null,lo)+1.5,minLat=Math.min.apply(null,la)-1.5,maxLat=Math.max.apply(null,la)+1.5,ratio=2.05,dx=maxLon-minLon,dy=maxLat-minLat;
+  if(dx/dy>ratio){var add=(dx/ratio-dy)/2;minLat-=add;maxLat+=add}else{var add2=(dy*ratio-dx)/2;minLon-=add2;maxLon+=add2}MAPBOUNDS={minLon:minLon,maxLon:maxLon,minLat:minLat,maxLat:maxLat}}
+function mapPoint(p){var b=MAPBOUNDS;return [45+(p.lon-b.minLon)/(b.maxLon-b.minLon)*880,35+(b.maxLat-p.lat)/(b.maxLat-b.minLat)*435]}
 function mapRing(r){return r.map(function(p,i){var q=mapPoint({lon:p[0],lat:p[1]});return (i?"L":"M")+q[0].toFixed(1)+" "+q[1].toFixed(1)}).join("")+"Z"}
 function mapGeom(g){if(!g)return "";if(g.type==="Polygon")return g.coordinates.map(mapRing).join("");return (g.coordinates||[]).map(function(p){return p.map(mapRing).join("")}).join("")}
 function mapLine(a){return (a||[]).map(function(p,i){var q=mapPoint(p);return (i?"L":"M")+q[0].toFixed(1)+" "+q[1].toFixed(1)}).join("")}
 function mapText(s){return String(s||"").replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
-function buildUS(){if(!USMAP||USPATH)return;USPATH=(USMAP.features||[]).map(function(f){return '<path d="'+mapGeom(f.geometry)+'" fill="#16254a" stroke="#63749a" stroke-width="1" vector-effect="non-scaling-stroke"/>'}).join("")}
-function drawTrainMap(T){if(!T||!T.map_route||!USMAP)return;buildUS();var r=T.map_route,tr=mapPoint(r.train),hm=mapPoint(r.home);
+function geomPoints(x,out){if(typeof x[0]==="number"){out.push(x);return out}(x||[]).forEach(function(y){geomPoints(y,out)});return out}
+function buildUS(){if(!USMAP)return;var b=MAPBOUNDS,key=[b.minLon,b.maxLon,b.minLat,b.maxLat].map(function(x){return x.toFixed(3)}).join(":");if(USPATH&&key===USKEY)return;USKEY=key;USPATH=(USMAP.features||[]).map(function(f){var pts=geomPoints(f.geometry.coordinates,[]),lo=pts.map(function(p){return p[0]}),la=pts.map(function(p){return p[1]}),c={lon:(Math.min.apply(null,lo)+Math.max.apply(null,lo))/2,lat:(Math.min.apply(null,la)+Math.max.apply(null,la))/2},q=mapPoint(c),inside=c.lon>b.minLon&&c.lon<b.maxLon&&c.lat>b.minLat&&c.lat<b.maxLat;
+    return '<path d="'+mapGeom(f.geometry)+'" fill="#16254a" stroke="#63749a" stroke-width="1" vector-effect="non-scaling-stroke"/>'+(inside?'<text x="'+q[0].toFixed(1)+'" y="'+q[1].toFixed(1)+'" text-anchor="middle" fill="#bac6e4" opacity=".72" font-size="20" font-weight="800">'+mapText(f.properties.name)+'</text>':'')}).join("")}
+function drawTrainMap(T){if(!T||!T.map_route||!USMAP)return;var r=T.map_route;setMapBounds(r);buildUS();var tr=mapPoint(r.train),hm=mapPoint(r.home);
   document.getElementById("maptitle").textContent=T.title||"Train day";document.getElementById("mapwhere").textContent=departureStation(T,Date.now()/1000);
   document.getElementById("mapsvg").innerHTML=USPATH+
     '<path d="'+mapLine(r.remaining)+'" fill="none" stroke="#aeb5c4" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>'+
